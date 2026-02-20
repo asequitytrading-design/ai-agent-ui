@@ -8,9 +8,9 @@ Project context for Claude Code. Read this before making any changes.
 
 A fullstack agentic chat application:
 - **Frontend**: Next.js 16 + React 19 + TypeScript + Tailwind CSS 4
-- **Backend**: Python FastAPI + LangChain + Claude Sonnet 4.6 (Anthropic)
+- **Backend**: Python FastAPI + LangChain + Groq `openai/gpt-oss-120b` *(temporary — Claude Sonnet 4.6 is the intended LLM once Anthropic API access is fixed)*
 
-The UI is a chat interface. The backend runs an agentic loop — Claude can call tools (currently `get_current_time` and `search_web`) and keeps looping until it has a final answer before responding to the user.
+The UI is a chat interface. The backend runs an agentic loop — the LLM can call tools (`get_current_time`, `search_web`) and keeps looping until it has a final answer before responding to the user.
 
 ---
 
@@ -18,19 +18,28 @@ The UI is a chat interface. The backend runs an agentic loop — Claude can call
 
 ```
 ai-agent-ui/
+├── .gitignore             # Root gitignore (covers both frontend + backend)
+├── CLAUDE.md              # This file — project context for Claude Code
+├── PROGRESS.md            # Session log: what was done, what's pending
 ├── frontend/              # Next.js app
+│   ├── .gitignore         # Next.js-specific ignores (.next/, node_modules/, etc.)
 │   ├── app/
 │   │   ├── page.tsx       # Main chat UI (the only page)
 │   │   ├── layout.tsx     # Root layout
 │   │   └── globals.css    # Tailwind global styles
+│   ├── public/            # Static SVG assets
 │   ├── package.json
+│   ├── package-lock.json
 │   ├── tsconfig.json
-│   └── next.config.ts
+│   ├── next.config.ts
+│   ├── eslint.config.mjs
+│   └── postcss.config.mjs
 │
 └── backend/               # FastAPI server
     ├── main.py            # HTTP server, /chat endpoint
     ├── agent.py           # LangChain agent + tool definitions
-    └── requirements.txt   # (deps may be in a virtualenv: demoenv)
+    ├── requirements.txt   # Frozen pip deps (from demoenv)
+    └── demoenv/           # Python virtualenv — NOT committed (in .gitignore)
 ```
 
 ---
@@ -40,10 +49,10 @@ ai-agent-ui/
 ### Backend
 ```bash
 cd backend
-# Activate virtualenv if present
-source demoenv/bin/activate   # or: source venv/bin/activate
+source demoenv/bin/activate
 
-export ANTHROPIC_API_KEY=sk-ant-...
+export GROQ_API_KEY=...          # current LLM
+export SERPAPI_API_KEY=...       # required for search_web tool
 
 uvicorn main:app --port 8181 --reload
 ```
@@ -56,7 +65,7 @@ npm run dev
 # Runs on http://localhost:3000
 ```
 
-The frontend hardcodes the backend URL as `http://127.0.0.1:8181`.
+The frontend hardcodes the backend URL as `http://127.0.0.1:8181` (move to `.env.local` before deploying).
 
 ---
 
@@ -72,18 +81,24 @@ The frontend hardcodes the backend URL as `http://127.0.0.1:8181`.
 - Response: `{ "response": "assistant text" }`
 
 ### `backend/agent.py`
-- Uses `langchain_anthropic.ChatAnthropic` with `model="claude-sonnet-4-6"`, `temperature=0`
+- **Current LLM**: `langchain_groq.ChatGroq(model="openai/gpt-oss-120b", temperature=0)` *(temporary)*
+- **Intended LLM**: `langchain_anthropic.ChatAnthropic(model="claude-sonnet-4-6", temperature=0)`
 - Tools bound via `llm.bind_tools(tools)`
-- **Agentic loop**: keeps invoking Claude, executes any tool calls, feeds `ToolMessage` results back, repeats until no more tool calls — then returns `response.content`
+- **Agentic loop**: keeps invoking the model, executes all tool calls, feeds `ToolMessage` results back, repeats until no more tool calls — then returns `response.content`
 - History dicts are converted to `HumanMessage` / `AIMessage` objects before the loop
 - Two tools:
   - `get_current_time()` — returns `datetime.datetime.now()`
-  - `search_web(query: str)` — stub, returns dummy string (replace with real search API)
+  - `search_web(query: str)` — calls `SerpAPIWrapper().run(query)` (requires `SERPAPI_API_KEY`)
 
-### Key dependency
-```bash
-pip install langchain-anthropic
+### Switching back to Claude (2-line change in `agent.py`)
+```python
+# Line 1 — change import
+from langchain_anthropic import ChatAnthropic
+
+# Line 29 — change model init
+llm = ChatAnthropic(model="claude-sonnet-4-6", temperature=0)
 ```
+Then update the comment on line 28 and set `ANTHROPIC_API_KEY` instead of `GROQ_API_KEY`.
 
 ---
 
@@ -97,8 +112,8 @@ pip install langchain-anthropic
 
 **UI elements:**
 - Header with "✦ AI Agent / Claude Sonnet 4.6" badge + clear chat button (trash icon, only shown when messages exist)
-- Chat bubbles: indigo for user (right), white card for Claude (left)
-- Avatars: gradient "✦" circle for Claude, "You" circle for user
+- Chat bubbles: indigo for user (right), white card for assistant (left)
+- Avatars: gradient "✦" circle for assistant, "You" circle for user
 - Timestamps below each bubble
 - Three-dot bouncing typing indicator while loading
 - Auto-growing textarea (max 160px), resets after send
@@ -107,16 +122,33 @@ pip install langchain-anthropic
 
 ---
 
-## Migration History
+## Git & GitHub
 
-Originally used `langchain_groq` with `openai/gpt-oss-120b`. Migrated to `langchain_anthropic` / `claude-sonnet-4-6`. The original agent loop was also broken — it called one tool and returned early without feeding the result back to Claude. The loop was fixed as part of this migration.
+- **Remote**: `git@github.com:asequitytrading-design/ai-agent-ui.git`
+- **Branch**: `main`
+
+| Commit | Message |
+|--------|---------|
+| `6604b74` | Initial commit: agentic chat app with Claude Sonnet 4.6 |
+| `ee7967f` | chore: swap LLM back to Groq (openai/gpt-oss-120b) for testing |
+| `ef643f7` | feat: implement search_web tool with SerpAPI (real Google results) |
+
+---
+
+## Decisions Made
+
+- **Virtualenv name is `demoenv`** — the root `.gitignore` covers it with `demoenv/` and `*env/`
+- **`frontend/.git` was removed** — it was a nested git repo causing submodule issues; frontend is now tracked as regular files inside the root repo
+- **SerpAPI chosen over Google Custom Search API** — simpler setup (one API key, no Google Cloud project), free tier is sufficient, already supported by `langchain-community`
+- **`requirements.txt` is now frozen** — populated from `demoenv` with `pip freeze`; update it whenever new packages are installed
 
 ---
 
 ## Known Limitations / TODOs
 
-- `search_web` tool returns dummy data — needs a real search API (e.g. Tavily: `pip install tavily-python`, or SerpAPI)
-- No streaming — the backend waits for the full agent loop to finish before responding; could be improved with SSE/WebSockets
-- No auth, no session persistence — history is kept only in React state (lost on refresh)
-- Backend URL is hardcoded in `page.tsx` as `http://127.0.0.1:8181` — move to `.env.local` if deploying
-- `requirements.txt` is empty; actual deps live in a virtualenv (`demoenv`). Freeze deps with `pip freeze > requirements.txt`
+- **Anthropic API not working** — currently on Groq as a workaround; switch back when resolved (see 2-line change above)
+- **`SERPAPI_API_KEY` must be set** — `search_web` will throw without it; get key at serpapi.com (100 free searches/month)
+- **No streaming** — backend waits for full agentic loop before responding; SSE or WebSockets would improve perceived speed
+- **No session persistence** — history lives only in React state, lost on page refresh
+- **Backend URL hardcoded** — `http://127.0.0.1:8181` in `page.tsx`; move to `frontend/.env.local` before deploying
+- **No error handling on search_web** — SerpAPI calls can fail; should wrap in try/except
