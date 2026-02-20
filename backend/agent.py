@@ -1,6 +1,7 @@
 from langchain_groq import ChatGroq
 from langchain.tools import tool
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+from langchain_community.utilities import SerpAPIWrapper
 import datetime
 
 
@@ -14,8 +15,8 @@ def get_current_time() -> str:
 @tool
 def search_web(query: str) -> str:
     """Searches the web for the given query and returns a summary of results"""
-    # Placeholder — swap in a real search API (e.g. Tavily, SerpAPI) here
-    return f"Search results for '{query}': [Dummy search results here]"
+    search = SerpAPIWrapper()
+    return search.run(query)
 
 
 tools = [get_current_time, search_web]
