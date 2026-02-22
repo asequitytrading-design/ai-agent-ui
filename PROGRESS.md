@@ -1,4 +1,155 @@
-# PROGRESS.md — Session Summary (Feb 21, 2026)
+# PROGRESS.md — Session Log
+
+---
+
+# Session: Feb 22, 2026
+
+## What We Did Today
+
+### 1. OOP Backend Refactor — agents/ and tools/ packages
+
+Deleted `backend/agent.py` and split its responsibilities across a proper package structure:
+
+**`backend/agents/`**
+- `base.py` — `AgentConfig` dataclass + `BaseAgent` ABC; the full agentic loop lives here (`run()` method); subclasses only implement `_build_llm()`
+- `registry.py` — `AgentRegistry` maps `agent_id` strings to `BaseAgent` instances; used by the HTTP layer for routing
+- `general_agent.py` — `GeneralAgent(BaseAgent)` backed by Groq; `create_general_agent(tool_registry)` factory function
+
+**`backend/tools/`**
+- `registry.py` — `ToolRegistry` maps tool name strings to LangChain `BaseTool` instances; provides `register`, `get_tools`, `invoke`, `list_names`
+- `time_tool.py` — `get_current_time` `@tool`
+- `search_tool.py` — `search_web` `@tool` (now wrapped in try/except — see item 3)
+
+### 2. Rewrote backend/main.py with ChatServer class
+
+- All server state (registries, app) encapsulated in `ChatServer`; no more module-level globals
+- `POST /chat` now accepts optional `agent_id` (default `"general"`) and echoes it in the response
+- Added `GET /agents` endpoint — returns list of registered agents with id, name, description
+- Replaced bare `except` returning error strings in `200` body with proper `HTTPException` `404`/`500`
+
+### 3. Fixed search_web error handling (was a listed TODO)
+
+- Wrapped `SerpAPIWrapper().run(query)` in try/except
+- On failure returns `"Search failed: <reason>"` as a `ToolMessage` so the LLM can recover gracefully instead of raising an unhandled exception
+
+### 4. Added backend/config.py
+
+- `Settings(BaseSettings)` with fields: `groq_api_key`, `anthropic_api_key`, `serpapi_api_key`, `log_level`, `log_to_file`
+- Reads from env vars; also reads `backend/.env` if present
+- `get_settings()` cached with `@lru_cache`
+
+### 5. Added backend/logging_config.py
+
+- `setup_logging(level, log_to_file, log_dir)` configures the root logger
+- Always adds a stdout console handler
+- Optionally adds a `TimedRotatingFileHandler` → `backend/logs/agent.log` (daily rotation, 7-day retention)
+- `logs/` added to `.gitignore`
+
+### 6. Added Google-style Sphinx docstrings
+
+- All backend Python files have module-level, class-level, and method-level docstrings
+
+### 7. Python 3.9 annotation compatibility fix
+
+- `X | Y` union syntax (PEP 604, Python 3.10+) replaced with `Optional[X]` from `typing` throughout — `demoenv` runs Python 3.9.13
+
+### 8. Updated CLAUDE.md
+
+- Replaced old flat backend tree with new package layout
+- Rewrote Backend Details section (removed `agent.py`, rewrote `main.py`, added subsections for all new modules)
+- Updated "Switching back to Claude" to reference `agents/general_agent.py` → `_build_llm()`
+- Added 7 new Decisions Made entries
+- Removed fixed TODO (search_web error handling)
+
+### 9. Committed and pushed (commit fa20966)
+
+```
+refactor: OOP backend restructure with agents/, tools/ packages and structured logging
+```
+14 files changed, 1,191 insertions, 127 deletions
+
+---
+
+## Current State of the Codebase
+
+| Component | Status |
+|-----------|--------|
+| FastAPI backend (`main.py`) | ✅ `ChatServer` class — `/chat` + `/agents` endpoints |
+| Agentic loop (`agents/base.py`) | ✅ `BaseAgent.run()` — proper multi-turn tool loop |
+| Agent routing | ✅ `AgentRegistry` — dispatch by `agent_id` |
+| Tool registry | ✅ `ToolRegistry` — decoupled from agent code |
+| LLM | ⚠️ Groq `openai/gpt-oss-120b` (temporary — Claude Sonnet 4.6 intended) |
+| `get_current_time` tool | ✅ Working |
+| `search_web` tool | ✅ SerpAPI with try/except error handling |
+| Structured logging | ✅ Console + rotating file (`logs/agent.log`) |
+| Config / env vars | ✅ Pydantic Settings with `.env` support |
+| Frontend chat UI | ✅ Unchanged — working |
+| Multi-turn history | ✅ Working |
+| Git + GitHub | ✅ Clean — 5 commits pushed |
+
+---
+
+## What's Pending
+
+### High Priority
+- **Fix Anthropic API access** — once resolved, swap back to Claude (2-line change in `agents/general_agent.py` → `_build_llm()`):
+  - Change import to `from langchain_anthropic import ChatAnthropic`
+  - Change return to `return ChatAnthropic(model=self.config.model, temperature=self.config.temperature)`
+  - Update `model` field in `create_general_agent()` to `"claude-sonnet-4-6"`
+  - Set `ANTHROPIC_API_KEY` instead of `GROQ_API_KEY`
+- **Set `SERPAPI_API_KEY`** — sign up at serpapi.com, get key, export before running backend
+
+### Nice to Have
+- **Streaming responses** — backend waits for full agentic loop; SSE or WebSockets would improve perceived speed
+- **Move backend URL to env var** — `http://127.0.0.1:8181` hardcoded in `frontend/app/page.tsx`; move to `.env.local`
+- **Session persistence** — history lost on page refresh (React state only)
+- **Add more agents** — registry supports multiple agents; register additional `BaseAgent` subclasses in `ChatServer._register_agents()`
+- **Add more tools** — register additional `@tool` functions in `ChatServer._register_tools()`
+
+---
+
+## Environment Variables Required to Run
+
+```bash
+# Backend
+export GROQ_API_KEY=...          # current (Groq)
+export SERPAPI_API_KEY=...       # for search_web tool
+
+# Optional
+export LOG_LEVEL=DEBUG           # default: DEBUG
+export LOG_TO_FILE=true          # default: true  (writes to backend/logs/agent.log)
+
+# When switching back to Claude:
+export ANTHROPIC_API_KEY=...     # replaces GROQ_API_KEY
+```
+
+## How to Run
+
+```bash
+# Backend
+cd backend
+source demoenv/bin/activate
+uvicorn main:app --port 8181 --reload
+
+# Frontend (separate terminal)
+cd frontend
+npm run dev
+# → http://localhost:3000
+```
+
+## Git Log
+
+| Commit | Message |
+|--------|---------|
+| `6604b74` | Initial commit: agentic chat app with Claude Sonnet 4.6 |
+| `ee7967f` | chore: swap LLM back to Groq (openai/gpt-oss-120b) for testing |
+| `ef643f7` | feat: implement search_web tool with SerpAPI (real Google results) |
+| `89d7eb4` | docs: update CLAUDE.md and add PROGRESS.md session log |
+| `fa20966` | refactor: OOP backend restructure with agents/, tools/ packages and structured logging |
+
+---
+
+# Session: Feb 21, 2026
 
 ---
 
