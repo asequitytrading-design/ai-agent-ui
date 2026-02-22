@@ -68,6 +68,32 @@ refactor: OOP backend restructure with agents/, tools/ packages and structured l
 ```
 14 files changed, 1,191 insertions, 127 deletions
 
+### 10. MkDocs documentation site
+
+- Installed `mkdocs==1.6.1` and `mkdocs-material==9.7.2` into `demoenv`
+- Created `mkdocs.yml` — material theme (indigo, light/dark toggle), nav tabs, code copy, pymdownx extensions
+- Populated all 11 docs pages from scratch based on a full codebase read-and-analyse pass:
+
+| Page | Content |
+|------|---------|
+| `docs/index.md` | Stack, end-to-end flow, quick start, layout |
+| `docs/backend/overview.md` | Module map, startup sequence, agentic loop, extension guide |
+| `docs/backend/api.md` | Both endpoints, JSON shapes, error codes, curl examples |
+| `docs/backend/agents.md` | AgentConfig, BaseAgent loop, AgentRegistry, GeneralAgent, Claude switch |
+| `docs/backend/tools.md` | ToolRegistry, both tools, invoke() comparison, how to add tools |
+| `docs/backend/config.md` | Settings fields, priority order, .env usage, lru_cache |
+| `docs/backend/logging.md` | Format, handlers, hot-reload safety, what-gets-logged table |
+| `docs/frontend/overview.md` | Component, state, send flow, UI layout, limitations |
+| `docs/dev/how-to-run.md` | Prerequisites, backend + frontend setup, verification, Claude switch |
+| `docs/dev/decisions.md` | Full rationale for every architectural and tooling decision |
+| `docs/dev/changelog.md` | Session log with commit hashes, pending-issues table |
+
+- Committed and pushed (commit f7f1cbc)
+```
+docs: add MkDocs site with full project documentation
+```
+13 files changed, 1,951 insertions
+
 ---
 
 ## Current State of the Codebase
@@ -85,7 +111,8 @@ refactor: OOP backend restructure with agents/, tools/ packages and structured l
 | Config / env vars | ✅ Pydantic Settings with `.env` support |
 | Frontend chat UI | ✅ Unchanged — working |
 | Multi-turn history | ✅ Working |
-| Git + GitHub | ✅ Clean — 5 commits pushed |
+| Documentation | ✅ MkDocs site — 11 pages, material theme (`mkdocs serve`) |
+| Git + GitHub | ✅ Clean — 6 commits pushed |
 
 ---
 
@@ -105,6 +132,7 @@ refactor: OOP backend restructure with agents/, tools/ packages and structured l
 - **Session persistence** — history lost on page refresh (React state only)
 - **Add more agents** — registry supports multiple agents; register additional `BaseAgent` subclasses in `ChatServer._register_agents()`
 - **Add more tools** — register additional `@tool` functions in `ChatServer._register_tools()`
+- **Agentic loop iteration cap** — no `max_iterations` guard; a misbehaving LLM could loop forever
 
 ---
 
@@ -146,6 +174,7 @@ npm run dev
 | `ef643f7` | feat: implement search_web tool with SerpAPI (real Google results) |
 | `89d7eb4` | docs: update CLAUDE.md and add PROGRESS.md session log |
 | `fa20966` | refactor: OOP backend restructure with agents/, tools/ packages and structured logging |
+| `f7f1cbc` | docs: add MkDocs site with full project documentation |
 
 ---
 

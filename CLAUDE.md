@@ -21,6 +21,12 @@ ai-agent-ui/
 ├── .gitignore             # Root gitignore (covers both frontend + backend)
 ├── CLAUDE.md              # This file — project context for Claude Code
 ├── PROGRESS.md            # Session log: what was done, what's pending
+├── mkdocs.yml             # MkDocs config (material theme)
+├── docs/                  # MkDocs source pages
+│   ├── index.md
+│   ├── backend/           # overview, api, agents, tools, config, logging
+│   ├── frontend/          # overview
+│   └── dev/               # how-to-run, decisions, changelog
 ├── frontend/              # Next.js app
 │   ├── .gitignore         # Next.js-specific ignores (.next/, node_modules/, etc.)
 │   ├── app/
@@ -80,6 +86,14 @@ npm run dev
 ```
 
 The frontend hardcodes the backend URL as `http://127.0.0.1:8181` (move to `.env.local` before deploying).
+
+### MkDocs (documentation)
+```bash
+cd ai-agent-ui
+source backend/demoenv/bin/activate   # mkdocs installed in demoenv
+mkdocs serve                           # → http://127.0.0.1:8000
+mkdocs build --site-dir site/          # static build
+```
 
 ---
 
@@ -181,6 +195,9 @@ Also update the `model` field in `create_general_agent()` to `"claude-sonnet-4-6
 | `6604b74` | Initial commit: agentic chat app with Claude Sonnet 4.6 |
 | `ee7967f` | chore: swap LLM back to Groq (openai/gpt-oss-120b) for testing |
 | `ef643f7` | feat: implement search_web tool with SerpAPI (real Google results) |
+| `89d7eb4` | docs: update CLAUDE.md and add PROGRESS.md session log |
+| `fa20966` | refactor: OOP backend restructure with agents/, tools/ packages and structured logging |
+| `f7f1cbc` | docs: add MkDocs site with full project documentation |
 
 ---
 
@@ -197,6 +214,7 @@ Also update the `model` field in `create_general_agent()` to `"claude-sonnet-4-6
 - **`config.py` with Pydantic Settings** — env vars validated at startup; `.env` file supported; `get_settings()` cached with `@lru_cache`
 - **Google-style Sphinx docstrings** added to all backend Python files (module-level + class + method)
 - **Python 3.9 type annotation compat** — `X | Y` union syntax (PEP 604, Python 3.10+) replaced with `Optional[X]` from `typing`, since `demoenv` runs Python 3.9.13
+- **MkDocs with material theme** — documentation site added; `mkdocs==1.6.1` and `mkdocs-material==9.7.2` installed in `demoenv`; 11 pages covering backend, frontend, API, decisions, and changelog; served with `mkdocs serve`
 
 ---
 
