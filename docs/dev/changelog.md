@@ -4,6 +4,33 @@ Session-by-session record of what was built, changed, and fixed.
 
 ---
 
+## Feb 23, 2026 (continued)
+
+### Per-agent history, analysis cache, and market news tool
+
+Three independent improvements committed as `895df0f`.
+
+**New files:**
+
+| File | Description |
+|------|-------------|
+| `backend/tools/agent_tool.py` | `create_search_market_news_tool(general_agent)` — wraps `GeneralAgent` as a `@tool` callable by the stock agent |
+
+**Modified:**
+
+| File | Change |
+|------|--------|
+| `frontend/app/page.tsx` | Replaced single `messages` state with `histories: Record<string, Message[]>` keyed by `agentId`; switching agents now preserves each conversation independently |
+| `backend/tools/price_analysis_tool.py` | Added same-day text cache (`data/cache/{TICKER}_analysis_{date}.txt`); `analyse_stock_price` returns cached result immediately on repeat calls |
+| `backend/tools/forecasting_tool.py` | Same-day cache added (`data/cache/{TICKER}_forecast_{N}m_{date}.txt`); `forecast_stock` skips Prophet retraining if cache exists |
+| `backend/agents/stock_agent.py` | Added `"search_market_news"` to `tool_names`; updated system prompt step 5 to call it before finalising each report |
+| `backend/main.py` | Creates and registers `search_market_news` tool between general and stock agent construction (dependency order) |
+| `.gitignore` | Added `data/cache/` |
+
+**Commit:** `895df0f` — *feat: per-agent history, analysis cache, and market news tool*
+
+---
+
 ## Feb 23, 2026
 
 ### Plotly Dash Dashboard (Phase 8)
@@ -149,5 +176,5 @@ Built the complete application from scratch in a single session.
 | Backend URL hardcoded in frontend | Medium | Move to `NEXT_PUBLIC_BACKEND_URL` in `.env.local` |
 | No request timeout on frontend | Medium | Long agent loops block the UI indefinitely |
 | No streaming | Low | Full response appears at once; SSE/WebSockets would improve UX |
-| No session persistence | Low | Page refresh clears conversation |
+| No session persistence | Low | Page refresh clears `histories` state (React only) |
 | `agent_id` not exposed in UI | Low | Frontend has toggle (General / Stock Analysis); further agents require UI changes |

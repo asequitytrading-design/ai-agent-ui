@@ -2,6 +2,45 @@
 
 ---
 
+# Session: Feb 23, 2026 (continued) — Per-agent history, cache, and news tool
+
+## What We Built
+
+Three independent improvements implemented and pushed as commit `895df0f`.
+
+### Task 1 — Agent-to-agent news lookup (`search_market_news`)
+
+**New file:** `backend/tools/agent_tool.py`
+- `create_search_market_news_tool(general_agent)` factory creates a `@tool`-decorated function that delegates to `general_agent.run()`.
+- The stock agent calls this tool in step 5 of its pipeline to enrich analysis reports with live news.
+
+**Modified:**
+- `backend/main.py` — registers `search_market_news` tool between general and stock agent construction (dependency ordering).
+- `backend/agents/stock_agent.py` — added `"search_market_news"` to `tool_names`; updated system prompt to call it before finalising each report.
+
+### Task 2 — Per-agent chat history
+
+**Modified:** `frontend/app/page.tsx`
+- Replaced `const [messages, setMessages] = useState<Message[]>([])` with `histories: Record<string, Message[]>` keyed by `agentId`.
+- Added scoped `setMessages` helper that writes only to `histories[agentId]`.
+- Removed `setMessages([])` from agent switch button — switching agents now preserves both conversations.
+
+### Task 3 — Same-day analysis/forecast cache
+
+**Modified:** `backend/tools/price_analysis_tool.py`, `backend/tools/forecasting_tool.py`
+- Added `_CACHE_DIR = data/cache/`, `_load_cache(ticker, key)`, `_save_cache(ticker, key, result)` helpers to both files.
+- `analyse_stock_price` checks `data/cache/{TICKER}_analysis_{YYYY-MM-DD}.txt` on every call; returns instantly on cache hit.
+- `forecast_stock` checks `data/cache/{TICKER}_forecast_{N}m_{YYYY-MM-DD}.txt` similarly.
+- `.gitignore` — added `data/cache/`.
+
+### Commit
+
+| Hash | Message |
+|------|---------|
+| `895df0f` | feat: per-agent history, analysis cache, and market news tool |
+
+---
+
 # Session: Feb 23, 2026 (continued) — Plotly Dash Dashboard
 
 ## What We Built — Phase 8 Dashboard

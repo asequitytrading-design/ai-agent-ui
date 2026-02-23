@@ -1,6 +1,6 @@
 # Tools
 
-The tool framework lives in `backend/tools/`. It provides a registry that decouples tool storage from agent code, plus two concrete tools: one for the current time and one for live web search.
+The tool framework lives in `backend/tools/`. It provides a registry that decouples tool storage from agent code, plus concrete tool modules for general use and stock analysis.
 
 ---
 
@@ -11,6 +11,10 @@ The tool framework lives in `backend/tools/`. It provides a registry that decoup
 | `tools/registry.py` | `ToolRegistry` — maps tool names to `BaseTool` instances |
 | `tools/time_tool.py` | `get_current_time` — returns current system datetime |
 | `tools/search_tool.py` | `search_web` — queries SerpAPI for live search results |
+| `tools/agent_tool.py` | `create_search_market_news_tool` — wraps `GeneralAgent` as a `@tool` |
+| `tools/stock_data_tool.py` | 6 stock data tools (delta fetch, parquet, registry) |
+| `tools/price_analysis_tool.py` | `analyse_stock_price` — technical indicators + chart + same-day cache |
+| `tools/forecasting_tool.py` | `forecast_stock` — Prophet forecast + chart + same-day cache |
 | `tools/__init__.py` | Empty (marks directory as a Python package) |
 
 ---
@@ -113,6 +117,79 @@ def search_web(query: str) -> str:
 **Why the try/except matters:** Without it, a failed SerpAPI call would raise inside the agentic loop. The `BaseAgent.run()` would re-raise and the HTTP handler would catch it and return a `500`. With the try/except, the error becomes a `ToolMessage` string, the LLM receives it, and can respond gracefully (e.g. "I wasn't able to search the web, but I can tell you that...").
 
 **Requires:** `SERPAPI_API_KEY` set in the environment. Get a key at [serpapi.com](https://serpapi.com) — the free tier allows 100 searches/month.
+
+---
+
+## search_market_news
+
+Defined in `tools/agent_tool.py` via the `create_search_market_news_tool(general_agent)` factory.
+
+This tool lets the stock agent delegate web searches to the general agent, which already has `search_web` bound to its LLM. The factory creates a `@tool`-decorated function that calls `general_agent.run(query, history=[])` and returns the result string.
+
+```python
+@tool
+def search_market_news(query: str) -> str:
+    """Search the web for recent news, earnings, analyst reports, or macro
+    developments relevant to a stock or market topic."""
+    try:
+        return general_agent.run(user_input=query, history=[])
+    except Exception as exc:
+        return f"News search failed: {exc}"
+```
+
+**Why a factory?** The tool needs a reference to the general agent, which is only available after `create_general_agent()` has been called. A factory function receives the agent as an argument and captures it in the closure, making the dependency explicit and testable.
+
+**Registration order** (enforced in `ChatServer._register_agents()`):
+
+```python
+general = create_general_agent(self.tool_registry)
+self.agent_registry.register(general)
+
+news_tool = create_search_market_news_tool(general)   # ← depends on general
+self.tool_registry.register(news_tool)
+
+stock = create_stock_agent(self.tool_registry)         # ← depends on news_tool
+self.agent_registry.register(stock)
+```
+
+**Arguments:**
+
+| Argument | Type | Description |
+|----------|------|-------------|
+| `query` | `str` | Search query, e.g. `"AAPL earnings Q1 2026 analyst outlook"` |
+
+**Return value:** The general agent's synthesised answer string (which itself called `search_web` internally), or `"News search failed: <reason>"` on exception.
+
+---
+
+## Same-day cache (analyse_stock_price and forecast_stock)
+
+Both analysis tools cache their text output to avoid re-running expensive pipelines (30–90 s) when the same ticker is requested more than once in a day.
+
+**Cache location:** `data/cache/` (gitignored)
+
+**Key format:**
+
+| Tool | File |
+|------|------|
+| `analyse_stock_price(ticker)` | `data/cache/{TICKER}_analysis_{YYYY-MM-DD}.txt` |
+| `forecast_stock(ticker, months)` | `data/cache/{TICKER}_forecast_{N}m_{YYYY-MM-DD}.txt` |
+
+**Logic (identical in both tools):**
+
+```python
+cached = _load_cache(ticker, "analysis")
+if cached:
+    logger.info("Returning cached analysis for %s", ticker)
+    return cached
+
+# ... full pipeline ...
+
+_save_cache(ticker, "analysis", report)
+return report
+```
+
+The cache key includes today's date, so files from previous days are silently ignored and the full pipeline runs again — no manual cache invalidation required. If a ticker is re-analysed on the same day, the cached file is returned in milliseconds.
 
 ---
 

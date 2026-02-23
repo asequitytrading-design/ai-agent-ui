@@ -116,11 +116,27 @@ The codebase does use `list[dict]` and `dict[str, T]` as type hints directly on 
 
 ---
 
+### Agent-to-agent tool via factory function
+
+The stock agent needs access to live web search, but `search_web` requires SerpAPI and is already owned by the general agent. Rather than registering `search_web` directly on the stock agent (which would duplicate the tool coupling), a factory function `create_search_market_news_tool(general_agent)` in `tools/agent_tool.py` wraps the general agent's `run()` method as a `@tool`. The stock agent calls this tool, which in turn triggers the general agent's full agentic loop (including `search_web`) and returns the result as a string.
+
+The key constraint this solves: the factory must run **after** the general agent is created but **before** the stock agent is instantiated (so the tool is in the registry when `BaseAgent._setup()` fetches tool names). This ordering is enforced in `ChatServer._register_agents()`.
+
+### Same-day text cache for analyse_stock_price and forecast_stock
+
+Running the full analysis pipeline (technical indicators + Prophet training) takes 30–90 seconds. A user who asks about AAPL twice in the same day should not wait twice. Both tools now check for a dated text file in `data/cache/` before running. If a file matching `{TICKER}_{key}_{date.today()}.txt` exists, it is returned immediately. On the first run, the result is saved to that file. The cache is keyed by date so it automatically expires at midnight with no cron job required. `data/cache/` is gitignored.
+
+---
+
 ## Frontend
 
 ### Single-file component (page.tsx)
 
 The entire chat UI — state, handlers, and rendering — lives in one file. For a single-page app with one feature, this is appropriate. The overhead of splitting into multiple components and files would add complexity without benefit at this scale.
+
+### Per-agent chat history (histories record instead of single messages array)
+
+The original frontend kept a single `messages: Message[]` array. Switching between agents cleared it, which was confusing for users moving back and forth between General and Stock Analysis. The state was replaced with `histories: Record<string, Message[]>` keyed by `agentId`. A derived `messages` variable and a scoped `setMessages` helper ensure all existing message-manipulation code continues to work unchanged — the helper writes only to `histories[agentId]`. React state is still the only persistence mechanism, so histories are lost on page refresh.
 
 ### Local state only (no Redux, Context, or Zustand)
 

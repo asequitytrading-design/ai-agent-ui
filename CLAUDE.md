@@ -80,9 +80,10 @@ ai-agent-ui/
     │   ├── registry.py      # ToolRegistry
     │   ├── time_tool.py     # get_current_time @tool
     │   ├── search_tool.py   # search_web @tool
+    │   ├── agent_tool.py    # create_search_market_news_tool — wraps GeneralAgent as @tool
     │   ├── stock_data_tool.py     # 6 @tools: fetch/load/list stock data (Yahoo Finance + parquet)
-    │   ├── price_analysis_tool.py # 1 @tool: technical indicators + 3-panel Plotly chart
-    │   └── forecasting_tool.py    # 1 @tool: Prophet forecast + confidence chart
+    │   ├── price_analysis_tool.py # 1 @tool: technical indicators + 3-panel Plotly chart + same-day cache
+    │   └── forecasting_tool.py    # 1 @tool: Prophet forecast + confidence chart + same-day cache
     ├── requirements.txt     # Frozen pip deps (from demoenv)
     ├── logs/                # Created at runtime — gitignored
     └── demoenv/             # Python virtualenv — NOT committed
@@ -355,21 +356,29 @@ Six `@tool` functions for Yahoo Finance data management:
 - `get_dividend_history(ticker)` — saves to `data/processed/{TICKER}_dividends.parquet`.
 - `list_available_stocks()` — reads `stock_registry.json`, prints formatted table.
 
+### `backend/tools/agent_tool.py`
+Factory function `create_search_market_news_tool(general_agent)` — call after `create_general_agent()` and before `create_stock_agent()`:
+- Returns a `@tool`-decorated `search_market_news(query: str) -> str` that delegates to `general_agent.run(query, history=[])`.
+- Stock agent calls this tool to enrich reports with live news before finalising.
+- Error-safe: returns `"News search failed: <reason>"` on exception.
+
 ### `backend/tools/price_analysis_tool.py`
 One `@tool` function (`analyse_stock_price`) backed by private helpers:
+- Checks `data/cache/{TICKER}_analysis_{YYYY-MM-DD}.txt` — returns cached result immediately if found.
 - Computes SMA 50/200, EMA 20, RSI 14, MACD, Bollinger Bands, ATR 14 using `ta` library.
 - Analyses bull/bear phases, max drawdown, support/resistance, annualised volatility, Sharpe ratio.
 - Generates 3-panel Plotly dark chart (candlestick + volume + RSI), saved to `charts/analysis/{TICKER}_analysis.html`.
-- Returns a formatted string report with all metrics.
+- Saves result to cache and returns formatted string report.
 
 ### `backend/tools/forecasting_tool.py`
 One `@tool` function (`forecast_stock`) backed by private helpers:
+- Checks `data/cache/{TICKER}_forecast_{N}m_{YYYY-MM-DD}.txt` — returns cached result immediately if found.
 - Prepares data in Prophet `ds`/`y` format using `Adj Close`.
 - Trains Prophet with yearly + weekly seasonality, US federal holidays, 80% confidence interval.
 - Generates price targets at 3, 6, 9 month marks.
 - Evaluates accuracy via 12-month in-sample backtest (MAE, RMSE, MAPE).
 - Saves forecast to `data/forecasts/{TICKER}_{N}m_forecast.parquet`.
-- Generates Plotly forecast chart (historical + forecast + confidence band + annotations), saved to `charts/forecasts/{TICKER}_forecast.html`.
+- Saves result to cache and generates Plotly forecast chart, saved to `charts/forecasts/{TICKER}_forecast.html`.
 
 ### `backend/agents/base.py` — fix applied Feb 23, 2026
 - `SystemMessage` import added; `_build_messages()` now prepends a `SystemMessage` when `config.system_prompt` is non-empty.
@@ -432,9 +441,11 @@ Dashboard URL: `http://127.0.0.1:8050`. No API keys required — reads local par
 
 ### `frontend/app/page.tsx`
 - Single-page chat UI, `"use client"` component
-- State: `messages` (array of `{role, content, timestamp}`), `input`, `loading`
-- On send: appends user message, POSTs to backend with full `history` array, appends assistant reply
-- Multi-turn: every request sends the full prior conversation as `history`
+- State: `histories` (`Record<string, Message[]>` keyed by `agentId`), `input`, `loading`, `agentId`
+- Derived: `messages = histories[agentId] ?? []` — current agent's conversation
+- Scoped `setMessages` helper writes only to `histories[agentId]`; switching agents preserves each conversation
+- On send: appends user message, POSTs to backend with the active agent's `history`, appends assistant reply
+- Multi-turn: every request sends the full prior conversation for that agent as `history`
 
 **UI elements:**
 - Header with "✦ AI Agent / Claude Sonnet 4.6" badge + clear chat button (trash icon, only shown when messages exist)
@@ -461,6 +472,8 @@ Dashboard URL: `http://127.0.0.1:8050`. No API keys required — reads local par
 | `89d7eb4` | docs: update CLAUDE.md and add PROGRESS.md session log |
 | `fa20966` | refactor: OOP backend restructure with agents/, tools/ packages and structured logging |
 | `f7f1cbc` | docs: add MkDocs site with full project documentation |
+| `eb4e64a` | feat: render assistant messages as markdown HTML in chat UI |
+| `895df0f` | feat: per-agent history, analysis cache, and market news tool |
 
 ---
 
@@ -479,6 +492,9 @@ Dashboard URL: `http://127.0.0.1:8050`. No API keys required — reads local par
 - **Python 3.9 type annotation compat** — `X | Y` union syntax (PEP 604, Python 3.10+) replaced with `Optional[X]` from `typing`, since `demoenv` runs Python 3.9.13
 - **MkDocs with material theme** — documentation site added; `mkdocs==1.6.1` and `mkdocs-material==9.7.2` installed in `demoenv`; 11 pages covering backend, frontend, API, decisions, and changelog; served with `mkdocs serve`
 - **Pre-push git hook** — `hooks/pre-push` (committed; install with `cp hooks/pre-push .git/hooks/pre-push && chmod +x`); AST-based checks for `print()` (hard block) and module docstrings (warning); `mkdocs build` (hard block); only enforced on pushes to `main`
+- **Per-agent chat history** — `histories: Record<string, Message[]>` in `page.tsx` replaces a single `messages` array; switching between agents no longer clears conversations
+- **Same-day cache for analysis/forecast** — `analyse_stock_price` and `forecast_stock` write results to `data/cache/{TICKER}_{key}_{YYYY-MM-DD}.txt`; repeat calls within the same calendar day return instantly; `data/cache/` is gitignored
+- **Agent-to-agent tool via factory** — `create_search_market_news_tool(general_agent)` in `tools/agent_tool.py` wraps the General Agent as a `@tool` so the Stock Agent can delegate web searches without direct SerpAPI coupling; must be registered after the General Agent but before the Stock Agent
 
 ---
 
