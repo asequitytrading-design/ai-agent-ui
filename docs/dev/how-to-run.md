@@ -164,6 +164,26 @@ export ANTHROPIC_API_KEY=sk-ant-...
 
 ---
 
+## Dashboard
+
+The dashboard runs independently — no backend server or API keys required.
+
+```bash
+cd ai-agent-ui
+./run_dashboard.sh          # activates demoenv, starts on http://127.0.0.1:8050
+```
+
+Or manually:
+
+```bash
+source backend/demoenv/bin/activate
+python dashboard/app.py
+```
+
+Open [http://127.0.0.1:8050](http://127.0.0.1:8050). The Home page will be empty until stock data has been fetched at least once via the chat interface or the pipeline below.
+
+---
+
 ## MkDocs (this documentation)
 
 ```bash

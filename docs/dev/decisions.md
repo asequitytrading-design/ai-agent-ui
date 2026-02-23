@@ -138,6 +138,41 @@ The tradeoff is that very long conversations send proportionally larger payloads
 
 ---
 
+## Dashboard
+
+### Direct parquet reads instead of HTTP
+
+The dashboard reads OHLCV data and forecasts directly from local parquet files rather than going through the FastAPI backend. This means:
+
+- The dashboard starts in under a second with no network dependency.
+- It can run fully offline after an initial data fetch.
+- The FastAPI server does not need to be running.
+
+The tradeoff is that "Run New Analysis" must import backend tool modules directly (via `sys.path` insertion in `app.py`) instead of calling an API endpoint. For a local development tool this is acceptable; a production deployment would expose a dedicated endpoint.
+
+### register_callbacks factory pattern
+
+All Dash callbacks are defined inside a `register_callbacks(app)` function in `callbacks.py` rather than at module scope. This avoids the circular import that would occur if `callbacks.py` imported `app` from `app.py` while `app.py` imported from `callbacks.py`. The factory receives the `app` instance as an argument.
+
+### dcc.Store for cross-page ticker propagation
+
+When a user clicks a stock card on the Home page, the `navigate_to_analysis` callback writes the ticker to a `dcc.Store` (`nav-ticker-store`) and updates the URL pathname. The `sync_analysis_ticker` and `sync_forecast_ticker` callbacks on the destination pages read from this store to pre-select the correct ticker in the dropdown. This avoids URL query-string parsing as the primary mechanism (though the `?ticker=AAPL` query param is also supported for direct linking).
+
+### suppress_callback_exceptions=True
+
+The Analysis, Forecast, and Compare page components (including their dropdowns and charts) are rendered only when the user navigates to those pages. Dash raises errors at startup if a callback references a component ID that is not yet in the layout. `suppress_callback_exceptions=True` silences these errors and defers validation to runtime, which is the standard approach for multi-page Dash apps.
+
+### allow_duplicate=True on forecast-accuracy-row
+
+Two callbacks write to `forecast-accuracy-row.children`:
+
+1. `update_forecast_chart` — fires whenever the ticker or horizon changes; writes a placeholder note ("Accuracy metrics appear after clicking Run New Analysis").
+2. `run_new_analysis` — fires when the button is clicked; writes the real MAE / RMSE / MAPE cards.
+
+Dash 2+ requires `allow_duplicate=True` on any output that appears in more than one callback. This is set on the `run_new_analysis` output since `update_forecast_chart` is the primary writer.
+
+---
+
 ## Version Control
 
 ### Virtualenv excluded from git

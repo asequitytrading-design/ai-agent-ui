@@ -4,6 +4,61 @@ Session-by-session record of what was built, changed, and fixed.
 
 ---
 
+## Feb 23, 2026
+
+### Plotly Dash Dashboard (Phase 8)
+
+Completed the four-page interactive web dashboard.
+
+**New files:**
+
+| File | Description |
+|------|-------------|
+| `dashboard/__init__.py` | Package marker with module docstring |
+| `dashboard/app.py` | Dash entry point — DARKLY theme, `dcc.Location` routing, `dcc.Store`, `dcc.Interval`, `server` attr for gunicorn |
+| `dashboard/layouts.py` | `home_layout`, `analysis_layout`, `forecast_layout`, `compare_layout` factories + `NAVBAR` |
+| `dashboard/callbacks.py` | All interactive callbacks registered via `register_callbacks(app)` |
+| `dashboard/assets/custom.css` | Dark theme overrides (cards, sliders, dropdowns, tables) |
+| `run_dashboard.sh` | Convenience launcher script |
+| `docs/dashboard/overview.md` | This documentation page |
+
+**Bug fix:**
+
+- Added `allow_duplicate=True` on `forecast-accuracy-row.children` in `run_new_analysis` callback — two callbacks write to that output and Dash requires explicit opt-in for duplicate outputs.
+
+**Commits:**
+
+| Hash | Message |
+|------|---------|
+| `c219dac` | feat: add Plotly Dash stock analysis dashboard (Phase 8) |
+| `422e85b` | fix: allow duplicate forecast-accuracy-row output in run\_new\_analysis callback |
+
+---
+
+### Stock Analysis Agent
+
+Added a full stock analysis capability backed by Yahoo Finance, Prophet, and Plotly.
+
+**New files:**
+
+| File | Description |
+|------|-------------|
+| `backend/agents/stock_agent.py` | `StockAgent(BaseAgent)` + `create_stock_agent` factory |
+| `backend/tools/stock_data_tool.py` | 6 `@tool` functions — delta fetch + parquet storage |
+| `backend/tools/price_analysis_tool.py` | `analyse_stock_price` — technical indicators + 3-panel chart |
+| `backend/tools/forecasting_tool.py` | `forecast_stock` — Prophet forecast + confidence chart |
+| `docs/stock_agent.md` | Stock agent documentation |
+
+**Modified:**
+
+- `backend/agents/base.py` — added `SystemMessage` support; `_build_messages()` prepends system prompt when set.
+- `backend/main.py` — registered 8 stock tools and `StockAgent`.
+- `frontend/app/page.tsx` — agent selector toggle (General / Stock Analysis).
+
+**Commit:** `bdd3701` — *feat: add stock analysis agent with Yahoo Finance delta fetching, Prophet forecasting, price analysis, and Plotly charts*
+
+---
+
 ## Feb 22, 2026
 
 ### OOP Backend Refactor
@@ -95,4 +150,4 @@ Built the complete application from scratch in a single session.
 | No request timeout on frontend | Medium | Long agent loops block the UI indefinitely |
 | No streaming | Low | Full response appears at once; SSE/WebSockets would improve UX |
 | No session persistence | Low | Page refresh clears conversation |
-| `agent_id` not exposed in UI | Low | Frontend always uses default `"general"` agent |
+| `agent_id` not exposed in UI | Low | Frontend has toggle (General / Stock Analysis); further agents require UI changes |

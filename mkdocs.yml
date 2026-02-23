@@ -49,6 +49,8 @@ nav:
       - Logging: backend/logging.md
   - Stock Agent:
       - Overview: stock_agent.md
+  - Dashboard:
+      - Overview: dashboard/overview.md
   - Frontend:
       - Overview: frontend/overview.md
   - Development:
