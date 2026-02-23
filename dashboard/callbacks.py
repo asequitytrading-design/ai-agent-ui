@@ -976,7 +976,7 @@ def register_callbacks(app) -> None:
         [
             Output("run-analysis-status", "children"),
             Output("forecast-refresh-store", "data"),
-            Output("forecast-accuracy-row", "children"),
+            Output("forecast-accuracy-row", "children", allow_duplicate=True),
         ],
         Input("run-analysis-btn", "n_clicks"),
         [
