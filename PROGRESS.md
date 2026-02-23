@@ -2,6 +2,97 @@
 
 ---
 
+# Session: Feb 24, 2026 — SPA navigation and internal link routing
+
+## What We Built
+
+Three frontend follow-ups after the hardening session.
+
+### Fix 1 — Menu repositioned to bottom-right
+
+- Changed outer container from `fixed bottom-6 left-6` → `fixed bottom-6 right-6`; popup anchor from `left-0` → `right-0` to avoid overlap with the Next.js dev watermark badge.
+
+### Fix 2 — SPA navigation (view state + iframes)
+
+- Added `type View = "chat" | "docs" | "dashboard"` and `const [view, setView] = useState<View>("chat")`.
+- Replaced `<a target="_blank">` menu links with `<button>` elements calling `switchView(v)`.
+- When `view === "chat"`: renders full chat UI (scrollable `<main>` + `<footer>`).
+- When `view === "docs"` or `view === "dashboard"`: renders a full-height `<iframe>` pointed at the service URL; chat state is preserved because the component stays mounted.
+- `switchView(v)` sets `view`, resets `iframeUrl` to `null`, and closes the menu.
+- Menu items highlight the active view (indigo background + small dot indicator).
+- Header adapts: agent selector shown only on chat view; other views show a text breadcrumb.
+- Added `NAV_ITEMS` constant (Chat, Docs, Dashboard) with SVG icons, replacing the inline `<a>` elements.
+
+### Fix 3 — Internal links from chat messages use view state
+
+- Added `onInternalLink: (href: string) => void` prop to `MarkdownContent`.
+- The custom `a` renderer checks if `href` starts with `NEXT_PUBLIC_DASHBOARD_URL` or `NEXT_PUBLIC_DOCS_URL`; if so renders a `<button onClick={() => onInternalLink(href)}>` instead of `<a target="_blank">`.
+- `handleInternalLink(href)` in `ChatPage` sets `view` and `iframeUrl` to the exact URL (e.g. `…/analysis?ticker=AAPL`) so the iframe loads the right page directly.
+- External links (news, Wikipedia, etc.) still open in a new tab.
+- `iframeUrl` is reset to `null` when the user navigates via the menu (so the menu always opens the homepage of each service).
+
+---
+
+# Session: Feb 24, 2026 — UI/backend hardening
+
+## What We Built
+
+Four independent improvements across frontend and backend.
+
+### Task 1 — Backend URL → `.env.local`
+
+- Created `frontend/.env.local` and `frontend/.env.local.example` with `NEXT_PUBLIC_BACKEND_URL`, `NEXT_PUBLIC_DASHBOARD_URL`, `NEXT_PUBLIC_DOCS_URL`.
+- Updated `frontend/app/page.tsx` to use `` `${process.env.NEXT_PUBLIC_BACKEND_URL}/chat` `` with a fallback.
+- Added `!.env.local.example` negation to `frontend/.gitignore` so the example file is committable.
+
+### Task 2 — Agentic loop iteration cap
+
+- Added `MAX_ITERATIONS: int = 15` module-level constant in `backend/agents/base.py`.
+- Added guard at the top of the `while True:` loop: logs `WARNING` and breaks if `iteration > MAX_ITERATIONS`.
+
+### Task 3 — Session persistence via localStorage
+
+- Added load-on-mount `useEffect` in `page.tsx` that reads `chat_histories` from localStorage and revives `Date` objects via `new Date(m.timestamp)`.
+- Added save-on-change `useEffect` that writes `histories` to localStorage on every state update.
+
+### Task 4 — Navigation menu + path replacement
+
+- Added `menuOpen` state, `menuRef`, and click-outside handler.
+- Added fixed bottom-right FAB button (grid icon) that opens a popup with Chat / Docs / Dashboard items.
+- Added `preprocessContent()` that replaces absolute chart paths with clickable dashboard links and strips raw data file paths before markdown rendering.
+
+---
+
+# Session: Feb 23, 2026 (continued) — Per-agent history, cache, and news tool
+
+## What We Built
+
+Four independent improvements across frontend and backend.
+
+### Task 1 — Backend URL → `.env.local`
+
+- Created `frontend/.env.local` and `frontend/.env.local.example` with `NEXT_PUBLIC_BACKEND_URL`, `NEXT_PUBLIC_DASHBOARD_URL`, `NEXT_PUBLIC_DOCS_URL`.
+- Updated `frontend/app/page.tsx` line ~144 to use `` `${process.env.NEXT_PUBLIC_BACKEND_URL}/chat` `` with a fallback.
+- Added `!.env.local.example` negation to `frontend/.gitignore` so the example file is committable.
+
+### Task 2 — Agentic loop iteration cap
+
+- Added `MAX_ITERATIONS: int = 15` module-level constant in `backend/agents/base.py`.
+- Added guard at the top of the `while True:` loop: logs `WARNING` and breaks if `iteration > MAX_ITERATIONS`.
+
+### Task 3 — Session persistence via localStorage
+
+- Added load-on-mount `useEffect` in `page.tsx` that reads `chat_histories` from localStorage and revives `Date` objects via `new Date(m.timestamp)`.
+- Added save-on-change `useEffect` that writes `histories` to localStorage on every state update.
+
+### Task 4 — Bottom-left navigation menu + path replacement
+
+- Added `menuOpen` state, `menuRef`, and click-outside handler in `page.tsx`.
+- Added fixed bottom-left FAB button (grid icon) that opens a popup with Docs and Dashboard links (using `NEXT_PUBLIC_DOCS_URL` / `NEXT_PUBLIC_DASHBOARD_URL`).
+- Added `preprocessContent()` function that replaces absolute chart paths with clickable dashboard links and strips raw data file paths before markdown rendering.
+
+---
+
 # Session: Feb 23, 2026 (continued) — Per-agent history, cache, and news tool
 
 ## What We Built

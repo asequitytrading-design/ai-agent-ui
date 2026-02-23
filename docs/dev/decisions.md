@@ -130,6 +130,52 @@ Running the full analysis pipeline (technical indicators + Prophet training) tak
 
 ## Frontend
 
+### SPA navigation via view state + iframes
+
+The original menu opened Docs and Dashboard in new browser tabs. The replacement uses a `View` state (`"chat" | "docs" | "dashboard"`) and renders the non-chat surfaces as full-height `<iframe>` elements.
+
+Why iframes rather than full Next.js pages:
+
+- The Dashboard (Dash) and Docs (MkDocs) are independent Python processes. Embedding them as iframes is the only way to show them inside the Next.js shell without rewriting them as React components.
+- Iframes preserve the services' full interactivity and navigation (Dash callbacks, MkDocs search, etc.) without any duplication of their UI logic.
+- The component stays mounted when switching views, so `histories`, `input`, and all other React state is preserved across navigations.
+
+`iframeUrl` is stored separately from `view` so that:
+
+- Clicking a link like "View AAPL Analysis →" opens the exact page (`/analysis?ticker=AAPL`).
+- Clicking "Dashboard" in the menu always opens the dashboard homepage (by resetting `iframeUrl` to `null`).
+
+### Internal link routing through onInternalLink callback
+
+`preprocessContent()` replaces absolute chart file paths with markdown links pointing to the dashboard service URL. If these links were rendered as plain `<a>` elements they would open in a new tab, defeating the SPA design.
+
+The `MarkdownContent` component accepts an `onInternalLink(href)` prop. The custom `a` renderer inspects every `href`: if it starts with `NEXT_PUBLIC_DASHBOARD_URL` or `NEXT_PUBLIC_DOCS_URL`, it renders a `<button onClick={() => onInternalLink(href)}>` instead. External links (news articles, Wikipedia, etc.) still use `<a target="_blank">`.
+
+This keeps external link behaviour unchanged while routing all internal navigation through the view state.
+
+### Frontend environment variables in .env.local
+
+Three `NEXT_PUBLIC_*` variables replace hard-coded localhost URLs:
+
+- `NEXT_PUBLIC_BACKEND_URL` — used in `sendMessage()` for the POST.
+- `NEXT_PUBLIC_DASHBOARD_URL` — used in `preprocessContent()` and `handleInternalLink()`.
+- `NEXT_PUBLIC_DOCS_URL` — used in `handleInternalLink()` and the menu.
+
+`frontend/.env.local` is gitignored. `frontend/.env.local.example` is committed as a reference. `frontend/.gitignore` has a `!.env.local.example` negation so the example file bypasses the `.env*` rule.
+
+### Agentic loop iteration cap (MAX_ITERATIONS = 15)
+
+Without a guard, a misbehaving LLM could call tools indefinitely. `MAX_ITERATIONS = 15` is set as a module-level constant in `backend/agents/base.py`. The guard fires at the top of the `while True:` loop (after incrementing the counter but before the next LLM call), logs a `WARNING`, and breaks. The last available response is returned. 15 iterations is well above any legitimate tool chain observed in practice.
+
+### Session persistence via localStorage
+
+Chat history previously lived only in React state and was lost on page refresh. Two `useEffect` hooks now persist it:
+
+1. **Load on mount** — reads `"chat_histories"` from `localStorage`, revives `Date` objects with `new Date(m.timestamp)` (needed because `JSON.stringify` serialises `Date` as ISO strings).
+2. **Save on change** — writes `histories` on every state update.
+
+The clear button calls `setMessages([])`, which triggers the save effect automatically — no explicit `localStorage.removeItem()` needed. Other agents' histories are preserved when clearing one agent.
+
 ### Single-file component (page.tsx)
 
 The entire chat UI — state, handlers, and rendering — lives in one file. For a single-page app with one feature, this is appropriate. The overhead of splitting into multiple components and files would add complexity without benefit at this scale.

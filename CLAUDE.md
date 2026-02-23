@@ -440,22 +440,41 @@ Dashboard URL: `http://127.0.0.1:8050`. No API keys required — reads local par
 ## Frontend Details
 
 ### `frontend/app/page.tsx`
-- Single-page chat UI, `"use client"` component
-- State: `histories` (`Record<string, Message[]>` keyed by `agentId`), `input`, `loading`, `agentId`
-- Derived: `messages = histories[agentId] ?? []` — current agent's conversation
-- Scoped `setMessages` helper writes only to `histories[agentId]`; switching agents preserves each conversation
-- On send: appends user message, POSTs to backend with the active agent's `history`, appends assistant reply
-- Multi-turn: every request sends the full prior conversation for that agent as `history`
+- `"use client"` component — full SPA with three embedded views
+- **`type View = "chat" | "docs" | "dashboard"`** — controls which surface is shown
 
-**UI elements:**
-- Header with "✦ AI Agent / Claude Sonnet 4.6" badge + clear chat button (trash icon, only shown when messages exist)
-- Chat bubbles: indigo for user (right), white card for assistant (left)
-- Avatars: gradient "✦" circle for assistant, "You" circle for user
-- Timestamps below each bubble
-- Three-dot bouncing typing indicator while loading
-- Auto-growing textarea (max 160px), resets after send
-- Enter to send, Shift+Enter for newline
-- Empty state with centered prompt when no messages
+**State:**
+- `view` — active surface; switching keeps the component mounted so chat state is preserved
+- `iframeUrl` — specific URL for the iframe (e.g. `/analysis?ticker=AAPL`); `null` falls back to the service base URL; reset to `null` when switching via the menu
+- `histories: Record<string, Message[]>` keyed by `agentId` — per-agent chat history, persisted to `localStorage`
+- `input`, `loading`, `agentId`, `menuOpen`
+
+**Navigation:**
+- Bottom-right FAB (grid icon, `fixed bottom-6 right-6 z-50`) opens a popup menu with Chat / Docs / Dashboard items
+- Active view highlighted with indigo background + dot indicator
+- `switchView(v)` sets `view`, resets `iframeUrl` to `null`, closes menu
+- When `view !== "chat"`: `<iframe src={iframeUrl ?? baseUrl} className="flex-1 w-full border-0" />` fills remaining height
+- When `view === "chat"`: scrollable `<main>` + sticky `<footer>` input area
+
+**Internal link routing:**
+- `preprocessContent()` replaces `*/charts/analysis/{TICKER}_analysis.html` → `[View {TICKER} Analysis →]({DASHBOARD_URL}/analysis?ticker={TICKER})` and forecast paths; strips `*/data/...` paths
+- `MarkdownContent` takes `onInternalLink: (href) => void`; the `a` renderer checks if `href` starts with `NEXT_PUBLIC_DASHBOARD_URL` or `NEXT_PUBLIC_DOCS_URL` — if so, renders a `<button>` calling `onInternalLink` (opens in-app); otherwise `<a target="_blank">` for external links
+- `handleInternalLink(href)` sets `view` + `iframeUrl` so the iframe loads the exact page
+
+**Session persistence:**
+- Load-on-mount `useEffect` reads `chat_histories` from `localStorage` and revives `Date` objects
+- Save-on-change `useEffect` writes `histories` to `localStorage` on every update
+
+**Header adapts by view:**
+- Chat: agent selector toggle (General / Stock Analysis) + clear button (when messages exist)
+- Docs / Dashboard: text breadcrumb ("Documentation" / "Dashboard"); no input area shown
+
+**`frontend/.env.local` (gitignored) / `frontend/.env.local.example` (committed):**
+```
+NEXT_PUBLIC_BACKEND_URL=http://127.0.0.1:8181
+NEXT_PUBLIC_DASHBOARD_URL=http://127.0.0.1:8050
+NEXT_PUBLIC_DOCS_URL=http://127.0.0.1:8000
+```
 
 ---
 
@@ -495,6 +514,11 @@ Dashboard URL: `http://127.0.0.1:8050`. No API keys required — reads local par
 - **Per-agent chat history** — `histories: Record<string, Message[]>` in `page.tsx` replaces a single `messages` array; switching between agents no longer clears conversations
 - **Same-day cache for analysis/forecast** — `analyse_stock_price` and `forecast_stock` write results to `data/cache/{TICKER}_{key}_{YYYY-MM-DD}.txt`; repeat calls within the same calendar day return instantly; `data/cache/` is gitignored
 - **Agent-to-agent tool via factory** — `create_search_market_news_tool(general_agent)` in `tools/agent_tool.py` wraps the General Agent as a `@tool` so the Stock Agent can delegate web searches without direct SerpAPI coupling; must be registered after the General Agent but before the Stock Agent
+- **Agentic loop iteration cap** — `MAX_ITERATIONS = 15` constant in `backend/agents/base.py`; guard at the top of the `while True:` loop logs `WARNING` and breaks on iteration > 15
+- **Frontend env configuration** — `NEXT_PUBLIC_BACKEND_URL`, `NEXT_PUBLIC_DASHBOARD_URL`, `NEXT_PUBLIC_DOCS_URL` in `frontend/.env.local`; `frontend/.env.local.example` committed as reference; `.gitignore` has `!.env.local.example` negation
+- **Session persistence** — `chat_histories` saved to `localStorage` on every state change; revived on mount with `new Date(m.timestamp)` to restore Date objects; clear button clears only the active agent's history (localStorage auto-updated by the save effect)
+- **Bottom-left navigation menu** — fixed FAB (grid icon, `bottom-6 left-6`) opens a popup with Docs and Dashboard links; click-outside handler via `useRef` + `mousedown` event
+- **Path replacement in messages** — `preprocessContent()` in `page.tsx` replaces `*/charts/analysis/{TICKER}_analysis.html` → `[View {TICKER} Analysis →]({DASHBOARD_URL}/analysis?ticker={TICKER})` and forecast equivalents; strips `*/data/...` paths; applied before `ReactMarkdown` renders
 
 ---
 
@@ -503,5 +527,3 @@ Dashboard URL: `http://127.0.0.1:8050`. No API keys required — reads local par
 - **Anthropic API not working** — currently on Groq as a workaround; switch back when resolved (see 2-line change in `agents/general_agent.py` and `agents/stock_agent.py` → `_build_llm()` above)
 - **`SERPAPI_API_KEY` must be set** — `search_web` will return an error string without it; get key at serpapi.com (100 free searches/month)
 - **No streaming** — backend waits for full agentic loop before responding; SSE or WebSockets would improve perceived speed
-- **No session persistence** — history lives only in React state, lost on page refresh
-- **Backend URL hardcoded** — `http://127.0.0.1:8181` in `page.tsx`; move to `frontend/.env.local` before deploying

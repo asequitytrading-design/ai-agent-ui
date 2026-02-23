@@ -20,6 +20,9 @@ This module defines two public symbols:
     4. When the model returns a response with no tool calls, return
        :attr:`~langchain_core.messages.AIMessage.content` as the final answer.
 
+The loop is bounded by :data:`MAX_ITERATIONS` (default 15); if hit, a
+``WARNING`` is logged and the last available response is returned.
+
 Concrete agent implementations (e.g. :class:`~agents.general_agent.GeneralAgent`)
 only need to implement :meth:`BaseAgent._build_llm` to return a provider-specific
 chat model.  All loop logic, message formatting, and logging live here.
@@ -42,6 +45,8 @@ from dataclasses import dataclass, field
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, BaseMessage, SystemMessage
 
 from tools.registry import ToolRegistry
+
+MAX_ITERATIONS: int = 15
 
 
 @dataclass
@@ -218,6 +223,13 @@ class BaseAgent(ABC):
         try:
             while True:
                 iteration += 1
+                if iteration > MAX_ITERATIONS:
+                    self.logger.warning(
+                        "Agent '%s' hit MAX_ITERATIONS (%d). Returning last response.",
+                        self.config.agent_id,
+                        MAX_ITERATIONS,
+                    )
+                    break
                 self.logger.debug(
                     "Iteration %d | message_count=%d", iteration, len(messages)
                 )

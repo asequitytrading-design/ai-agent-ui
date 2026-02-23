@@ -5,6 +5,8 @@ import axios from "axios";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+type View = "chat" | "docs" | "dashboard";
+
 interface Message {
   role: "user" | "assistant";
   content: string;
@@ -29,7 +31,26 @@ function TypingDots() {
   );
 }
 
-function MarkdownContent({ content }: { content: string }) {
+function preprocessContent(content: string): string {
+  const dashboardUrl = process.env.NEXT_PUBLIC_DASHBOARD_URL ?? "http://127.0.0.1:8050";
+
+  content = content.replace(
+    /\S+\/charts\/analysis\/([A-Z0-9._-]+)_analysis\.html/g,
+    (_, ticker) => `[View ${ticker} Analysis →](${dashboardUrl}/analysis?ticker=${ticker})`
+  );
+  content = content.replace(
+    /\S+\/charts\/forecasts\/([A-Z0-9._-]+)_forecast\.html/g,
+    (_, ticker) => `[View ${ticker} Forecast →](${dashboardUrl}/forecast?ticker=${ticker})`
+  );
+  content = content.replace(/\S+\/data\/(raw|processed|forecasts|cache|metadata)\/\S+/g, "");
+
+  return content;
+}
+
+function MarkdownContent({ content, onInternalLink }: { content: string; onInternalLink: (href: string) => void }) {
+  const dashboardBase = process.env.NEXT_PUBLIC_DASHBOARD_URL ?? "http://127.0.0.1:8050";
+  const docsBase = process.env.NEXT_PUBLIC_DOCS_URL ?? "http://127.0.0.1:8000";
+
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
@@ -47,11 +68,24 @@ function MarkdownContent({ content }: { content: string }) {
         blockquote: ({ children }) => (
           <blockquote className="border-l-4 border-indigo-300 pl-3 italic text-gray-500 my-2">{children}</blockquote>
         ),
-        a: ({ href, children }) => (
-          <a href={href} target="_blank" rel="noopener noreferrer" className="text-indigo-600 underline hover:text-indigo-800">
-            {children}
-          </a>
-        ),
+        a: ({ href, children }) => {
+          const isInternal = href && (href.startsWith(dashboardBase) || href.startsWith(docsBase));
+          if (isInternal) {
+            return (
+              <button
+                onClick={() => onInternalLink(href!)}
+                className="text-indigo-600 underline hover:text-indigo-800 cursor-pointer text-left"
+              >
+                {children}
+              </button>
+            );
+          }
+          return (
+            <a href={href} target="_blank" rel="noopener noreferrer" className="text-indigo-600 underline hover:text-indigo-800">
+              {children}
+            </a>
+          );
+        },
         pre: ({ children }) => (
           <pre className="bg-gray-900 text-gray-100 rounded-lg px-4 py-3 overflow-x-auto text-xs font-mono my-2">
             {children}
@@ -80,7 +114,7 @@ function MarkdownContent({ content }: { content: string }) {
         tr: ({ children }) => <tr className="even:bg-gray-50">{children}</tr>,
       }}
     >
-      {content}
+      {preprocessContent(content)}
     </ReactMarkdown>
   );
 }
@@ -92,7 +126,41 @@ const AGENTS = [
 ];
 // === END STOCK AGENT ROUTING ===
 
+const NAV_ITEMS: { view: View; label: string; icon: React.ReactNode }[] = [
+  {
+    view: "chat",
+    label: "Chat",
+    icon: (
+      <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+      </svg>
+    ),
+  },
+  {
+    view: "docs",
+    label: "Docs",
+    icon: (
+      <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+        <polyline points="14 2 14 8 20 8" />
+      </svg>
+    ),
+  },
+  {
+    view: "dashboard",
+    label: "Dashboard",
+    icon: (
+      <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="3" y="3" width="18" height="18" rx="2" />
+        <path d="M3 9h18M9 21V9" />
+      </svg>
+    ),
+  },
+];
+
 export default function ChatPage() {
+  const [view, setView] = useState<View>("chat");
+  const [iframeUrl, setIframeUrl] = useState<string | null>(null);
   const [histories, setHistories] = useState<Record<string, Message[]>>({
     general: [],
     stock: [],
@@ -102,6 +170,29 @@ export default function ChatPage() {
   // === STOCK AGENT ROUTING — ADDED BY PLAN PROMPT 8 ===
   const [agentId, setAgentId] = useState("general");
   // === END STOCK AGENT ROUTING ===
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  // Load persisted histories from localStorage on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("chat_histories");
+      if (saved) {
+        const parsed = JSON.parse(saved) as Record<string, { role: "user" | "assistant"; content: string; timestamp: string }[]>;
+        const revived: Record<string, Message[]> = {};
+        for (const [id, msgs] of Object.entries(parsed)) {
+          revived[id] = msgs.map((m) => ({ ...m, timestamp: new Date(m.timestamp) }));
+        }
+        setHistories(revived);
+      }
+    } catch { /* ignore corrupt data */ }
+  }, []);
+
+  // Save histories to localStorage whenever they change
+  useEffect(() => {
+    try {
+      localStorage.setItem("chat_histories", JSON.stringify(histories));
+    } catch { /* ignore quota errors */ }
+  }, [histories]);
 
   // Derived messages for the active agent
   const messages = histories[agentId] ?? [];
@@ -116,10 +207,41 @@ export default function ChatPage() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
+
+  // Close menu when clicking outside
+  useEffect(() => {
+    if (!menuOpen) return;
+    const handleClick = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [menuOpen]);
+
+  const switchView = (v: View) => {
+    setView(v);
+    setIframeUrl(null); // reset to base URL when navigating via menu
+    setMenuOpen(false);
+  };
+
+  const handleInternalLink = (href: string) => {
+    const dashboardBase = process.env.NEXT_PUBLIC_DASHBOARD_URL ?? "http://127.0.0.1:8050";
+    const docsBase = process.env.NEXT_PUBLIC_DOCS_URL ?? "http://127.0.0.1:8000";
+    if (href.startsWith(dashboardBase)) {
+      setView("dashboard");
+      setIframeUrl(href);
+    } else if (href.startsWith(docsBase)) {
+      setView("docs");
+      setIframeUrl(href);
+    }
+  };
 
   const sendMessage = async () => {
     if (!input.trim() || loading) return;
@@ -135,13 +257,13 @@ export default function ChatPage() {
     setInput("");
     setLoading(true);
 
-    // Reset textarea height
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
 
     try {
-      const res = await axios.post("http://127.0.0.1:8181/chat", {
+      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://127.0.0.1:8181";
+      const res = await axios.post(`${backendUrl}/chat`, {
         message: userMessage.content,
         history: messages.map((m) => ({ role: m.role, content: m.content })),
         agent_id: agentId, // === STOCK AGENT ROUTING — ADDED BY PLAN PROMPT 8 ===
@@ -177,20 +299,24 @@ export default function ChatPage() {
     }
   };
 
-  // Auto-grow textarea
   const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value);
     e.target.style.height = "auto";
     e.target.style.height = `${Math.min(e.target.scrollHeight, 160)}px`;
   };
 
+  const iframeSrc =
+    iframeUrl ??
+    (view === "docs"
+      ? (process.env.NEXT_PUBLIC_DOCS_URL ?? "http://127.0.0.1:8000")
+      : (process.env.NEXT_PUBLIC_DASHBOARD_URL ?? "http://127.0.0.1:8050"));
+
   return (
     <div className="flex flex-col h-screen bg-gray-50 font-sans">
 
       {/* Header */}
-      <header className="flex items-center justify-between px-6 py-3 bg-white border-b border-gray-200 shadow-sm">
+      <header className="flex items-center justify-between px-6 py-3 bg-white border-b border-gray-200 shadow-sm shrink-0">
         <div className="flex items-center gap-3">
-          {/* Claude sparkle icon */}
           <div className="w-8 h-8 rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center text-white text-sm font-bold select-none">
             ✦
           </div>
@@ -198,32 +324,39 @@ export default function ChatPage() {
             <h1 className="font-semibold text-gray-900 leading-tight">AI Agent</h1>
             <span className="text-xs text-indigo-600 font-medium">Claude Sonnet 4.6</span>
           </div>
-          {/* === STOCK AGENT ROUTING — ADDED BY PLAN PROMPT 8 === */}
-          <div className="flex items-center gap-1 ml-4 bg-gray-100 rounded-lg p-0.5">
-            {AGENTS.map((a) => (
-              <button
-                key={a.id}
-                onClick={() => setAgentId(a.id)}
-                className={`text-xs px-3 py-1.5 rounded-md font-medium transition-colors ${
-                  agentId === a.id
-                    ? "bg-white text-indigo-700 shadow-sm"
-                    : "text-gray-500 hover:text-gray-700"
-                }`}
-              >
-                {a.label}
-              </button>
-            ))}
-          </div>
-          {/* === END STOCK AGENT ROUTING === */}
+
+          {/* Agent toggle (chat only) / View label (docs + dashboard) */}
+          {view === "chat" ? (
+            /* === STOCK AGENT ROUTING — ADDED BY PLAN PROMPT 8 === */
+            <div className="flex items-center gap-1 ml-4 bg-gray-100 rounded-lg p-0.5">
+              {AGENTS.map((a) => (
+                <button
+                  key={a.id}
+                  onClick={() => setAgentId(a.id)}
+                  className={`text-xs px-3 py-1.5 rounded-md font-medium transition-colors ${
+                    agentId === a.id
+                      ? "bg-white text-indigo-700 shadow-sm"
+                      : "text-gray-500 hover:text-gray-700"
+                  }`}
+                >
+                  {a.label}
+                </button>
+              ))}
+            </div>
+            /* === END STOCK AGENT ROUTING === */
+          ) : (
+            <span className="ml-4 text-sm font-medium text-gray-500">
+              {view === "docs" ? "Documentation" : "Dashboard"}
+            </span>
+          )}
         </div>
 
-        {messages.length > 0 && (
+        {view === "chat" && messages.length > 0 && (
           <button
             onClick={() => setMessages([])}
             title="Clear chat"
             className="flex items-center gap-1.5 text-sm text-gray-400 hover:text-red-500 transition-colors px-3 py-1.5 rounded-lg hover:bg-red-50"
           >
-            {/* Trash icon */}
             <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="3 6 5 6 21 6" />
               <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
@@ -235,103 +368,150 @@ export default function ChatPage() {
         )}
       </header>
 
-      {/* Chat area */}
-      <main className="flex-1 overflow-y-auto px-4 py-6 space-y-6">
+      {/* Main content — chat UI or embedded iframe */}
+      {view === "chat" ? (
+        <>
+          <main className="flex-1 overflow-y-auto px-4 py-6 space-y-6">
 
-        {messages.length === 0 && !loading && (
-          <div className="flex flex-col items-center justify-center h-full text-center gap-4 pb-24">
-            <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center text-white text-2xl shadow-lg">
-              ✦
-            </div>
-            <div>
-              <p className="text-gray-700 font-medium text-lg">How can I help you today?</p>
-              {/* === STOCK AGENT ROUTING — ADDED BY PLAN PROMPT 8 === */}
-              <p className="text-gray-400 text-sm mt-1">
-                {AGENTS.find((a) => a.id === agentId)?.hint}
-              </p>
-              {/* === END STOCK AGENT ROUTING === */}
-            </div>
-          </div>
-        )}
-
-        {messages.map((msg, i) => (
-          <div
-            key={i}
-            className={`flex items-end gap-2.5 ${msg.role === "user" ? "flex-row-reverse" : "flex-row"}`}
-          >
-            {/* Avatar */}
-            {msg.role === "assistant" ? (
-              <div className="w-8 h-8 shrink-0 rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center text-white text-xs font-bold select-none">
-                ✦
-              </div>
-            ) : (
-              <div className="w-8 h-8 shrink-0 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 text-xs font-bold select-none">
-                You
+            {messages.length === 0 && !loading && (
+              <div className="flex flex-col items-center justify-center h-full text-center gap-4 pb-24">
+                <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center text-white text-2xl shadow-lg">
+                  ✦
+                </div>
+                <div>
+                  <p className="text-gray-700 font-medium text-lg">How can I help you today?</p>
+                  {/* === STOCK AGENT ROUTING — ADDED BY PLAN PROMPT 8 === */}
+                  <p className="text-gray-400 text-sm mt-1">
+                    {AGENTS.find((a) => a.id === agentId)?.hint}
+                  </p>
+                  {/* === END STOCK AGENT ROUTING === */}
+                </div>
               </div>
             )}
 
-            <div className={`flex flex-col gap-1 max-w-[72%] ${msg.role === "user" ? "items-end" : "items-start"}`}>
+            {messages.map((msg, i) => (
               <div
-                className={`px-4 py-2.5 rounded-2xl text-sm shadow-sm ${
-                  msg.role === "user"
-                    ? "bg-indigo-600 text-white rounded-br-sm leading-relaxed whitespace-pre-wrap break-words"
-                    : "bg-white text-gray-800 border border-gray-100 rounded-bl-sm"
-                }`}
+                key={i}
+                className={`flex items-end gap-2.5 ${msg.role === "user" ? "flex-row-reverse" : "flex-row"}`}
               >
-                {msg.role === "user" ? msg.content : <MarkdownContent content={msg.content} />}
-              </div>
-              <span className="text-[11px] text-gray-400 px-1">
-                {formatTime(msg.timestamp)}
-              </span>
-            </div>
-          </div>
-        ))}
+                {msg.role === "assistant" ? (
+                  <div className="w-8 h-8 shrink-0 rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center text-white text-xs font-bold select-none">
+                    ✦
+                  </div>
+                ) : (
+                  <div className="w-8 h-8 shrink-0 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 text-xs font-bold select-none">
+                    You
+                  </div>
+                )}
 
-        {/* Typing indicator */}
-        {loading && (
-          <div className="flex items-end gap-2.5">
-            <div className="w-8 h-8 shrink-0 rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center text-white text-xs font-bold">
-              ✦
+                <div className={`flex flex-col gap-1 max-w-[72%] ${msg.role === "user" ? "items-end" : "items-start"}`}>
+                  <div
+                    className={`px-4 py-2.5 rounded-2xl text-sm shadow-sm ${
+                      msg.role === "user"
+                        ? "bg-indigo-600 text-white rounded-br-sm leading-relaxed whitespace-pre-wrap break-words"
+                        : "bg-white text-gray-800 border border-gray-100 rounded-bl-sm"
+                    }`}
+                  >
+                    {msg.role === "user" ? msg.content : <MarkdownContent content={msg.content} onInternalLink={handleInternalLink} />}
+                  </div>
+                  <span className="text-[11px] text-gray-400 px-1">
+                    {formatTime(msg.timestamp)}
+                  </span>
+                </div>
+              </div>
+            ))}
+
+            {loading && (
+              <div className="flex items-end gap-2.5">
+                <div className="w-8 h-8 shrink-0 rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center text-white text-xs font-bold">
+                  ✦
+                </div>
+                <div className="bg-white border border-gray-100 rounded-2xl rounded-bl-sm shadow-sm">
+                  <TypingDots />
+                </div>
+              </div>
+            )}
+
+            <div ref={messagesEndRef} />
+          </main>
+
+          <footer className="bg-white border-t border-gray-200 px-4 py-3 shrink-0">
+            <div className="max-w-3xl mx-auto flex items-end gap-2">
+              <textarea
+                ref={textareaRef}
+                rows={1}
+                placeholder="Message Claude..."
+                value={input}
+                onChange={handleInput}
+                onKeyDown={handleKeyDown}
+                disabled={loading}
+                className="flex-1 resize-none bg-gray-50 border border-gray-200 rounded-xl px-4 py-2.5 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent transition disabled:opacity-50 max-h-40 overflow-y-auto"
+                style={{ height: "42px" }}
+              />
+              <button
+                onClick={sendMessage}
+                disabled={loading || !input.trim()}
+                className="shrink-0 w-10 h-10 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-200 disabled:cursor-not-allowed text-white flex items-center justify-center transition-colors shadow-sm"
+                title="Send"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 rotate-90" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="22" y1="2" x2="11" y2="13" />
+                  <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                </svg>
+              </button>
             </div>
-            <div className="bg-white border border-gray-100 rounded-2xl rounded-bl-sm shadow-sm">
-              <TypingDots />
-            </div>
+            <p className="text-center text-[11px] text-gray-400 mt-2">
+              Shift+Enter for new line · Enter to send
+            </p>
+          </footer>
+        </>
+      ) : (
+        <iframe
+          src={iframeSrc}
+          className="flex-1 w-full border-0"
+          title={view === "docs" ? "Documentation" : "Dashboard"}
+        />
+      )}
+
+      {/* Bottom-right navigation menu */}
+      <div className="fixed bottom-6 right-6 z-50" ref={menuRef}>
+        <button
+          onClick={() => setMenuOpen((v) => !v)}
+          title="Open navigation"
+          className="w-11 h-11 rounded-xl bg-white border border-gray-200 shadow-md flex items-center justify-center text-gray-500 hover:text-indigo-600 hover:border-indigo-300 hover:shadow-lg transition-all"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="3" width="7" height="7" />
+            <rect x="14" y="3" width="7" height="7" />
+            <rect x="3" y="14" width="7" height="7" />
+            <rect x="14" y="14" width="7" height="7" />
+          </svg>
+        </button>
+
+        {menuOpen && (
+          <div className="absolute bottom-14 right-0 bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden min-w-[160px]">
+            {NAV_ITEMS.map((item, idx) => (
+              <div key={item.view}>
+                {idx > 0 && <div className="border-t border-gray-100" />}
+                <button
+                  onClick={() => switchView(item.view)}
+                  className={`w-full flex items-center gap-2.5 px-4 py-3 text-sm transition-colors text-left ${
+                    view === item.view
+                      ? "bg-indigo-50 text-indigo-600 font-medium"
+                      : "text-gray-700 hover:bg-gray-50 hover:text-indigo-600"
+                  }`}
+                >
+                  {item.icon}
+                  {item.label}
+                  {view === item.view && (
+                    <span className="ml-auto w-1.5 h-1.5 rounded-full bg-indigo-500" />
+                  )}
+                </button>
+              </div>
+            ))}
           </div>
         )}
-
-        <div ref={messagesEndRef} />
-      </main>
-
-      {/* Input area */}
-      <footer className="bg-white border-t border-gray-200 px-4 py-3">
-        <div className="max-w-3xl mx-auto flex items-end gap-2">
-          <textarea
-            ref={textareaRef}
-            rows={1}
-            placeholder="Message Claude..."
-            value={input}
-            onChange={handleInput}
-            onKeyDown={handleKeyDown}
-            disabled={loading}
-            className="flex-1 resize-none bg-gray-50 border border-gray-200 rounded-xl px-4 py-2.5 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent transition disabled:opacity-50 max-h-40 overflow-y-auto"
-            style={{ height: "42px" }}
-          />
-          <button
-            onClick={sendMessage}
-            disabled={loading || !input.trim()}
-            className="shrink-0 w-10 h-10 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-200 disabled:cursor-not-allowed text-white flex items-center justify-center transition-colors shadow-sm"
-            title="Send"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 rotate-90" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="22" y1="2" x2="11" y2="13" />
-              <polygon points="22 2 15 22 11 13 2 9 22 2" />
-            </svg>
-          </button>
-        </div>
-        <p className="text-center text-[11px] text-gray-400 mt-2">
-          Shift+Enter for new line · Enter to send
-        </p>
-      </footer>
+      </div>
 
     </div>
   );

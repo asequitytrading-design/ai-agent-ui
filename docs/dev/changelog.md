@@ -4,6 +4,41 @@ Session-by-session record of what was built, changed, and fixed.
 
 ---
 
+## Feb 24, 2026
+
+### SPA navigation, session persistence, and UI hardening
+
+Eight improvements across frontend and backend committed as a single session.
+
+**Backend:**
+
+| File | Change |
+|------|--------|
+| `backend/agents/base.py` | Added `MAX_ITERATIONS = 15` constant; guard at top of agentic loop logs `WARNING` and breaks when `iteration > MAX_ITERATIONS` |
+
+**Frontend new files:**
+
+| File | Description |
+|------|-------------|
+| `frontend/.env.local.example` | Committed reference for `NEXT_PUBLIC_BACKEND_URL`, `NEXT_PUBLIC_DASHBOARD_URL`, `NEXT_PUBLIC_DOCS_URL` |
+
+**Frontend changes (`frontend/app/page.tsx`):**
+
+| Change | Detail |
+|--------|--------|
+| Env-based backend URL | `http://127.0.0.1:8181` replaced with `` `${process.env.NEXT_PUBLIC_BACKEND_URL}/chat` `` |
+| localStorage persistence | Load-on-mount + save-on-change `useEffect` hooks; `Date` objects revived on load |
+| `View` state + SPA routing | `"chat" \| "docs" \| "dashboard"` state; docs and dashboard rendered as full-height `<iframe>`; chat state preserved on view switch |
+| `iframeUrl` state | Stores the specific URL when opened via an internal link; reset to `null` when switching via menu |
+| Navigation menu | Grid icon FAB (bottom-right); `NAV_ITEMS` array with Chat / Docs / Dashboard; active view highlighted |
+| `preprocessContent()` | Replaces chart file paths with dashboard links; strips data file paths |
+| `handleInternalLink()` | Sets `view` + `iframeUrl` when a dashboard/docs link in chat is clicked |
+| Internal link routing in `MarkdownContent` | `onInternalLink` prop; `a` renderer renders `<button>` for internal links, `<a target="_blank">` for external |
+
+**Commit:** *(this session)*
+
+---
+
 ## Feb 23, 2026 (continued)
 
 ### Per-agent history, analysis cache, and market news tool
@@ -172,9 +207,5 @@ Built the complete application from scratch in a single session.
 | Issue | Priority | Notes |
 |-------|----------|-------|
 | Anthropic API not working | High | Switch back once access is fixed — see [How to Run](how-to-run.md) |
-| No iteration cap on agentic loop | Medium | Misbehaving LLM could loop forever |
-| Backend URL hardcoded in frontend | Medium | Move to `NEXT_PUBLIC_BACKEND_URL` in `.env.local` |
 | No request timeout on frontend | Medium | Long agent loops block the UI indefinitely |
 | No streaming | Low | Full response appears at once; SSE/WebSockets would improve UX |
-| No session persistence | Low | Page refresh clears `histories` state (React only) |
-| `agent_id` not exposed in UI | Low | Frontend has toggle (General / Stock Analysis); further agents require UI changes |
