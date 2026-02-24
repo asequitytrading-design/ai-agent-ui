@@ -26,6 +26,7 @@ Typical usage (via LangChain tool call)::
     result = analyse_stock_price.invoke({"ticker": "AAPL"})
 """
 
+import json
 import logging
 import math
 from datetime import date
@@ -47,6 +48,7 @@ logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).parent.parent.parent
 _DATA_RAW = _PROJECT_ROOT / "data" / "raw"
+_DATA_METADATA = _PROJECT_ROOT / "data" / "metadata"
 _CHARTS_ANALYSIS = _PROJECT_ROOT / "charts" / "analysis"
 _CACHE_DIR = _PROJECT_ROOT / "data" / "cache"
 
@@ -83,6 +85,42 @@ def _save_cache(ticker: str, key: str, result: str) -> None:
     path = _CACHE_DIR / f"{ticker}_{key}_{date.today()}.txt"
     path.write_text(result, encoding="utf-8")
     logger.debug("Cache saved: %s", path)
+
+
+def _currency_symbol(code: str) -> str:
+    """Return the display symbol for a 3-letter ISO currency code.
+
+    Args:
+        code: ISO 4217 currency code, e.g. ``"USD"`` or ``"INR"``.
+
+    Returns:
+        The currency symbol string, e.g. ``"$"`` or ``"₹"``.
+        Falls back to the code itself for unmapped currencies.
+    """
+    return {
+        "USD": "$", "INR": "₹", "GBP": "£", "EUR": "€",
+        "JPY": "¥", "CNY": "¥", "AUD": "A$", "CAD": "CA$",
+        "HKD": "HK$", "SGD": "S$",
+    }.get((code or "USD").upper(), code or "$")
+
+
+def _load_currency(ticker: str) -> str:
+    """Read the ISO currency code for *ticker* from its metadata JSON.
+
+    Args:
+        ticker: Stock ticker symbol (already uppercased).
+
+    Returns:
+        ISO currency code string, e.g. ``"USD"`` or ``"INR"``.
+        Falls back to ``"USD"`` if the metadata file is missing.
+    """
+    meta_path = _DATA_METADATA / f"{ticker}_info.json"
+    try:
+        with open(meta_path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data.get("currency", "USD") or "USD"
+    except Exception:
+        return "USD"
 
 
 def _load_parquet(ticker: str) -> Optional[pd.DataFrame]:
@@ -505,6 +543,7 @@ def analyse_stock_price(ticker: str) -> str:
     """
     ticker = ticker.upper().strip()
     logger.info("analyse_stock_price | ticker=%s", ticker)
+    sym = _currency_symbol(_load_currency(ticker))
 
     cached = _load_cache(ticker, "analysis")
     if cached:
@@ -527,14 +566,14 @@ def analyse_stock_price(ticker: str) -> str:
         report = (
             f"=== PRICE ANALYSIS: {ticker} ===\n\n"
             f"PRICE SUMMARY\n"
-            f"  Current Price   : ${stats['current_price']}\n"
-            f"  All Time High   : ${stats['all_time_high']} ({stats['all_time_high_date']})\n"
-            f"  All Time Low    : ${stats['all_time_low']} ({stats['all_time_low_date']})\n"
+            f"  Current Price   : {sym}{stats['current_price']}\n"
+            f"  All Time High   : {sym}{stats['all_time_high']} ({stats['all_time_high_date']})\n"
+            f"  All Time Low    : {sym}{stats['all_time_low']} ({stats['all_time_low_date']})\n"
             f"  10Y Total Return: {stats['total_return_pct']:+.1f}%\n"
             f"  Avg Annual Ret  : {stats['avg_annual_return_pct']:+.1f}%\n\n"
             f"TECHNICAL INDICATORS\n"
-            f"  SMA 50          : ${stats['sma_50']} ({stats['sma_50_signal']})\n"
-            f"  SMA 200         : ${stats['sma_200']} ({stats['sma_200_signal']})\n"
+            f"  SMA 50          : {sym}{stats['sma_50']} ({stats['sma_50_signal']})\n"
+            f"  SMA 200         : {sym}{stats['sma_200']} ({stats['sma_200_signal']})\n"
             f"  RSI (14)        : {stats['rsi_14']} — {stats['rsi_signal']}\n"
             f"  MACD            : {stats['macd_signal']}\n"
             f"  Volatility      : {movement['annualized_volatility_pct']}% annualised\n"

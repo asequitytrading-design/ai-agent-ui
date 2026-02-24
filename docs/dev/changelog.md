@@ -4,6 +4,32 @@ Session-by-session record of what was built, changed, and fixed.
 
 ---
 
+## Feb 24, 2026 (continued — currency fix)
+
+### Dynamic currency symbols for multi-market stocks
+
+Replaced all hard-coded `$` (USD) price symbols with dynamic currency symbols
+loaded from `data/metadata/{TICKER}_info.json`. Indian stocks now show `₹`,
+UK stocks `£`, EU stocks `€`, etc.
+
+**Backend:**
+
+| File | Change |
+|------|--------|
+| `backend/tools/price_analysis_tool.py` | Added `import json`, `_DATA_METADATA` path, `_currency_symbol()` and `_load_currency()` helpers; 5 report-string `$` → `{sym}` |
+| `backend/tools/forecasting_tool.py` | Same helpers added; 2 chart annotation `$` → `{sym}`; 5 report-string `$` → `{sym}`; `yaxis_title` → dynamic currency code |
+| `backend/tools/stock_data_tool.py` | Same helpers added; dividend report `$` → dynamic symbol |
+
+**Dashboard:**
+
+| File | Change |
+|------|--------|
+| `dashboard/callbacks.py` | Added `_currency_symbol()` and `_get_currency()` helpers; `_build_stats_cards` / `_build_target_cards` / `_build_accuracy_row` / `_build_forecast_fig` / `refresh_stock_cards` all use dynamic symbol; `_build_target_cards` and `_build_accuracy_row` gained `ticker` parameter |
+
+**Commit:** *(this session)*
+
+---
+
 ## Feb 24, 2026 (continued)
 
 ### Streaming, request timeout, iframe cross-origin, and dashboard light theme

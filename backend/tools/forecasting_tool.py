@@ -24,6 +24,7 @@ Typical usage (via LangChain tool call)::
     result = forecast_stock.invoke({"ticker": "AAPL", "months": 9})
 """
 
+import json
 import logging
 import math
 from datetime import date, timedelta
@@ -46,6 +47,7 @@ logger = logging.getLogger(__name__)
 _PROJECT_ROOT = Path(__file__).parent.parent.parent
 _DATA_RAW = _PROJECT_ROOT / "data" / "raw"
 _DATA_FORECASTS = _PROJECT_ROOT / "data" / "forecasts"
+_DATA_METADATA = _PROJECT_ROOT / "data" / "metadata"
 _CHARTS_FORECASTS = _PROJECT_ROOT / "charts" / "forecasts"
 _CACHE_DIR = _PROJECT_ROOT / "data" / "cache"
 
@@ -82,6 +84,42 @@ def _save_cache(ticker: str, key: str, result: str) -> None:
     path = _CACHE_DIR / f"{ticker}_{key}_{date.today()}.txt"
     path.write_text(result, encoding="utf-8")
     logger.debug("Cache saved: %s", path)
+
+
+def _currency_symbol(code: str) -> str:
+    """Return the display symbol for a 3-letter ISO currency code.
+
+    Args:
+        code: ISO 4217 currency code, e.g. ``"USD"`` or ``"INR"``.
+
+    Returns:
+        The currency symbol string, e.g. ``"$"`` or ``"₹"``.
+        Falls back to the code itself for unmapped currencies.
+    """
+    return {
+        "USD": "$", "INR": "₹", "GBP": "£", "EUR": "€",
+        "JPY": "¥", "CNY": "¥", "AUD": "A$", "CAD": "CA$",
+        "HKD": "HK$", "SGD": "S$",
+    }.get((code or "USD").upper(), code or "$")
+
+
+def _load_currency(ticker: str) -> str:
+    """Read the ISO currency code for *ticker* from its metadata JSON.
+
+    Args:
+        ticker: Stock ticker symbol (already uppercased).
+
+    Returns:
+        ISO currency code string, e.g. ``"USD"`` or ``"INR"``.
+        Falls back to ``"USD"`` if the metadata file is missing.
+    """
+    meta_path = _DATA_METADATA / f"{ticker}_info.json"
+    try:
+        with open(meta_path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data.get("currency", "USD") or "USD"
+    except Exception:
+        return "USD"
 
 
 def _load_parquet(ticker: str) -> Optional[pd.DataFrame]:
@@ -349,6 +387,8 @@ def _create_forecast_chart(
         Absolute path to the saved HTML chart file as a string.
     """
     _CHARTS_FORECASTS.mkdir(parents=True, exist_ok=True)
+    currency_code = _load_currency(ticker)
+    sym = _currency_symbol(currency_code)
 
     fig = go.Figure()
 
@@ -413,7 +453,7 @@ def _create_forecast_chart(
     fig.add_annotation(
         x=forecast_df["ds"].max(),
         y=current_price,
-        text=f"Current: ${current_price:.2f}",
+        text=f"Current: {sym}{current_price:.2f}",
         showarrow=False,
         font=dict(color="rgba(255,255,255,0.6)", size=10),
         xanchor="right",
@@ -427,7 +467,7 @@ def _create_forecast_chart(
         fig.add_annotation(
             x=target["date"],
             y=target["price"],
-            text=f"{key}: ${target['price']}<br>{sign}{target['pct_change']:.1f}%",
+            text=f"{key}: {sym}{target['price']}<br>{sign}{target['pct_change']:.1f}%",
             showarrow=True,
             arrowhead=2,
             arrowcolor=colors.get(key, "white"),
@@ -451,7 +491,7 @@ def _create_forecast_chart(
             font=dict(size=16),
         ),
         xaxis_title="Date",
-        yaxis_title="Price (USD)",
+        yaxis_title=f"Price ({currency_code})",
         height=600,
         showlegend=True,
         margin=dict(l=60, r=30, t=80, b=50),
@@ -498,6 +538,7 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
     ticker = ticker.upper().strip()
     months = max(1, int(months))
     logger.info("forecast_stock | ticker=%s | months=%d", ticker, months)
+    sym = _currency_symbol(_load_currency(ticker))
 
     cached = _load_cache(ticker, f"forecast_{months}m")
     if cached:
@@ -540,23 +581,23 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
             if t:
                 sign = "+" if t["pct_change"] >= 0 else ""
                 target_lines.append(
-                    f"  {key.upper()} Target  : ${t['price']} "
+                    f"  {key.upper()} Target  : {sym}{t['price']} "
                     f"({sign}{t['pct_change']:.1f}%) "
-                    f"[${t['lower']} – ${t['upper']}]"
+                    f"[{sym}{t['lower']} – {sym}{t['upper']}]"
                 )
 
         if "error" in accuracy:
             acc_line = f"  Accuracy        : {accuracy['error']}"
         else:
             acc_line = (
-                f"  MAE             : ${accuracy['MAE']}\n"
-                f"  RMSE            : ${accuracy['RMSE']}\n"
+                f"  MAE             : {sym}{accuracy['MAE']}\n"
+                f"  RMSE            : {sym}{accuracy['RMSE']}\n"
                 f"  MAPE            : {accuracy['MAPE_pct']:.1f}%"
             )
 
         report = (
             f"=== PRICE FORECAST: {ticker} ({months}-month horizon) ===\n\n"
-            f"CURRENT PRICE     : ${current_price:.2f}\n\n"
+            f"CURRENT PRICE     : {sym}{current_price:.2f}\n\n"
             f"PRICE TARGETS\n"
             + "\n".join(target_lines)
             + f"\n\nSENTIMENT         : {sentiment_emoji}\n\n"

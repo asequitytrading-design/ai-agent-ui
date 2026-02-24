@@ -57,6 +57,47 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Currency helpers
+# ---------------------------------------------------------------------------
+
+
+def _currency_symbol(code: str) -> str:
+    """Return the display symbol for a 3-letter ISO currency code.
+
+    Args:
+        code: ISO 4217 currency code, e.g. ``"USD"`` or ``"INR"``.
+
+    Returns:
+        The currency symbol string, e.g. ``"$"`` or ``"₹"``.
+        Falls back to the code itself for unmapped currencies.
+    """
+    return {
+        "USD": "$", "INR": "₹", "GBP": "£", "EUR": "€",
+        "JPY": "¥", "CNY": "¥", "AUD": "A$", "CAD": "CA$",
+        "HKD": "HK$", "SGD": "S$",
+    }.get((code or "USD").upper(), code or "$")
+
+
+def _get_currency(ticker: str) -> str:
+    """Return the currency symbol for *ticker* by reading its metadata JSON.
+
+    Args:
+        ticker: Stock ticker symbol.
+
+    Returns:
+        Currency symbol string such as ``"$"`` or ``"₹"``.
+        Falls back to ``"$"`` if the metadata file is missing.
+    """
+    meta_path = _DATA_METADATA / f"{ticker.upper()}_info.json"
+    try:
+        with open(meta_path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return _currency_symbol(data.get("currency", "USD") or "USD")
+    except Exception:
+        return "$"
+
+
+# ---------------------------------------------------------------------------
 # Private data-loading helpers
 # ---------------------------------------------------------------------------
 
@@ -345,6 +386,7 @@ def _build_forecast_fig(
     Returns:
         :class:`plotly.graph_objects.Figure` for use in a :class:`dcc.Graph`.
     """
+    sym = _get_currency(ticker)
     sentiment_emoji = {"Bullish": "🟢", "Bearish": "🔴", "Neutral": "🟡"}.get(
         summary.get("sentiment", ""), ""
     )
@@ -398,7 +440,7 @@ def _build_forecast_fig(
     )
     fig.add_annotation(
         x=forecast_df["ds"].max(), y=current_price,
-        text=f"Current: ${current_price:.2f}",
+        text=f"Current: {sym}{current_price:.2f}",
         showarrow=False,
         font=dict(color="rgba(0,0,0,0.5)", size=10),
         xanchor="right", yanchor="bottom",
@@ -410,7 +452,7 @@ def _build_forecast_fig(
         sign = "+" if target["pct_change"] >= 0 else ""
         fig.add_annotation(
             x=target["date"], y=target["price"],
-            text=f"{key}: ${target['price']}<br>{sign}{target['pct_change']:.1f}%",
+            text=f"{key}: {sym}{target['price']}<br>{sign}{target['pct_change']:.1f}%",
             showarrow=True, arrowhead=2,
             arrowcolor=colors.get(key, "#111827"),
             font=dict(color=colors.get(key, "#111827"), size=11),
@@ -456,6 +498,7 @@ def _build_stats_cards(df: pd.DataFrame, ticker: str):
     import dash_bootstrap_components as dbc
     from dash import html
 
+    sym = _get_currency(ticker)
     close = df["Close"]
     daily_returns = close.pct_change().dropna()
 
@@ -476,8 +519,8 @@ def _build_stats_cards(df: pd.DataFrame, ticker: str):
     )
 
     stats = [
-        ("All-Time High",  f"${ath:,}",     "text-success"),
-        ("All-Time Low",   f"${atl:,}",     "text-danger"),
+        ("All-Time High",  f"{sym}{ath:,}",     "text-success"),
+        ("All-Time Low",   f"{sym}{atl:,}",     "text-danger"),
         ("Annual Return",  f"{annual_ret:+.1f}%",
          "text-success" if annual_ret >= 0 else "text-danger"),
         ("Max Drawdown",   f"{max_dd:.1f}%",  "text-danger"),
@@ -497,13 +540,14 @@ def _build_stats_cards(df: pd.DataFrame, ticker: str):
     return dbc.Row(cols)
 
 
-def _build_target_cards(summary: dict, current_price: float):
+def _build_target_cards(summary: dict, current_price: float, ticker: str = ""):
     """Build price-target cards for the forecast page.
 
     Args:
         summary: Dict produced by the forecast summary helper with a
             ``targets`` sub-dict keyed by ``"3m"``, ``"6m"``, ``"9m"``.
         current_price: Most recent closing price (for display).
+        ticker: Ticker symbol used to look up the correct currency symbol.
 
     Returns:
         :class:`dash_bootstrap_components.Row` of price-target cards.
@@ -511,6 +555,7 @@ def _build_target_cards(summary: dict, current_price: float):
     import dash_bootstrap_components as dbc
     from dash import html
 
+    sym = _get_currency(ticker) if ticker else "$"
     targets = summary.get("targets", {})
     if not targets:
         return html.P("No price targets available.", className="text-muted")
@@ -532,13 +577,13 @@ def _build_target_cards(summary: dict, current_price: float):
                     className=f"text-center bg-transparent border-{color_map[key]}",
                 ),
                 dbc.CardBody([
-                    html.H5(f"${t['price']:,}", className="text-center mb-1"),
+                    html.H5(f"{sym}{t['price']:,}", className="text-center mb-1"),
                     html.P(
                         f"{sign}{t['pct_change']:.1f}%",
                         className=f"text-center fw-bold mb-1 {text_color}",
                     ),
                     html.Small(
-                        f"${t['lower']:,} – ${t['upper']:,}",
+                        f"{sym}{t['lower']:,} – {sym}{t['upper']:,}",
                         className="text-muted d-block text-center",
                     ),
                 ]),
@@ -549,12 +594,13 @@ def _build_target_cards(summary: dict, current_price: float):
     return dbc.Row(cols)
 
 
-def _build_accuracy_row(accuracy: dict):
+def _build_accuracy_row(accuracy: dict, ticker: str = ""):
     """Build the model-accuracy metric cards for the forecast page.
 
     Args:
         accuracy: Dict with ``MAE``, ``RMSE``, ``MAPE_pct`` keys (or
             ``"error"`` key if accuracy could not be computed).
+        ticker: Ticker symbol used to look up the correct currency symbol.
 
     Returns:
         :class:`dash_bootstrap_components.Row` or an error paragraph.
@@ -565,9 +611,10 @@ def _build_accuracy_row(accuracy: dict):
     if "error" in accuracy:
         return html.P(f"Accuracy: {accuracy['error']}", className="text-muted small")
 
+    sym = _get_currency(ticker) if ticker else "$"
     metrics = [
-        ("MAE",  f"${accuracy['MAE']:,.2f}", "Mean Absolute Error"),
-        ("RMSE", f"${accuracy['RMSE']:,.2f}", "Root Mean Square Error"),
+        ("MAE",  f"{sym}{accuracy['MAE']:,.2f}", "Mean Absolute Error"),
+        ("RMSE", f"{sym}{accuracy['RMSE']:,.2f}", "Root Mean Square Error"),
         ("MAPE", f"{accuracy['MAPE_pct']:.1f}%", "Mean Abs % Error (lower = better)"),
     ]
     cols = [
@@ -693,7 +740,7 @@ def register_callbacks(app) -> None:
                     cp = float(df["Close"].iloc[-1])
                     fp = float(df["Close"].iloc[0])
                     tr = (cp / fp - 1) * 100
-                    current_price_str = f"${cp:,.2f}"
+                    current_price_str = f"{_get_currency(ticker)}{cp:,.2f}"
                     total_return_str  = f"{tr:+.1f}%"
                     return_color_cls  = "text-success" if tr >= 0 else "text-danger"
             except Exception as exc:
@@ -971,7 +1018,7 @@ def register_callbacks(app) -> None:
         summary = _generate_forecast_summary_cb(forecast_df, current_price, ticker, horizon_months)
         fig = _build_forecast_fig(prophet_df, forecast_df, ticker, current_price, summary)
 
-        target_cards  = _build_target_cards(summary, current_price)
+        target_cards  = _build_target_cards(summary, current_price, ticker)
         accuracy_note = [html.P(
             "Model accuracy metrics are computed when you click 'Run New Analysis'.",
             className="text-muted small",
@@ -1054,7 +1101,7 @@ def register_callbacks(app) -> None:
 
             logger.info("New analysis complete for %s.", ticker)
 
-            acc_row = _build_accuracy_row(accuracy)
+            acc_row = _build_accuracy_row(accuracy, ticker)
             status  = dbc.Alert(
                 f"Analysis complete for {ticker}. Forecast updated.",
                 color="success", duration=5000,

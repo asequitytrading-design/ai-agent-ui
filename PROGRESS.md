@@ -55,6 +55,44 @@ Four independent improvements to UX, reliability, and visual consistency.
 
 ## Commit
 
+`be09863` — feat: streaming, request timeout, iframe cross-origin, and dashboard light theme
+
+---
+
+# Session: Feb 24, 2026 — Dynamic currency symbols for multi-market stocks
+
+## What We Built
+
+Replaced all hard-coded `$` currency symbols with dynamic symbols loaded from
+`data/metadata/{TICKER}_info.json`. This fixes Indian stocks (RELIANCE.NS, TCS.NS,
+INFY.NS etc.) which previously displayed `$` instead of `₹`.
+
+**Infrastructure already in place:** `stock_data_tool.get_stock_info()` already
+stores `"currency": info.get("currency", "USD")` in each ticker's metadata JSON.
+yfinance returns `"INR"` for NSE-listed stocks.
+
+### What changed
+
+Added a shared `_currency_symbol(code) -> str` + `_load_currency(ticker) -> str`
+helper pair to three backend tool modules and a `_currency_symbol()` /
+`_get_currency(ticker)` pair to the dashboard callbacks.
+
+Currency mapping: `USD→$`, `INR→₹`, `GBP→£`, `EUR→€`, `JPY/CNY→¥`, `AUD→A$`,
+`CAD→CA$`, `HKD→HK$`, `SGD→S$`. Unmapped codes fall back to the code itself.
+
+## Files Changed
+
+| File | What changed |
+|------|-------------|
+| `backend/tools/price_analysis_tool.py` | `import json`, `_DATA_METADATA` path; `_currency_symbol()` + `_load_currency()`; 5 report `$` → `{sym}` |
+| `backend/tools/forecasting_tool.py` | Same helpers; 2 chart annotation `$` → `{sym}`; 5 report `$` → `{sym}`; `yaxis_title` now uses actual currency code |
+| `backend/tools/stock_data_tool.py` | Same helpers; dividend report `$` → dynamic symbol |
+| `dashboard/callbacks.py` | `_currency_symbol()` + `_get_currency()` helpers; all price displays in stat cards, target cards, accuracy row, forecast chart, home cards now dynamic; `_build_target_cards` and `_build_accuracy_row` gained `ticker` param |
+| `docs/dev/changelog.md` | New session entry |
+| `PROGRESS.md` | This entry |
+
+## Commit
+
 Pending.
 
 ---

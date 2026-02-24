@@ -52,6 +52,42 @@ _REGISTRY_PATH = _DATA_METADATA / "stock_registry.json"
 # ---------------------------------------------------------------------------
 
 
+def _currency_symbol(code: str) -> str:
+    """Return the display symbol for a 3-letter ISO currency code.
+
+    Args:
+        code: ISO 4217 currency code, e.g. ``"USD"`` or ``"INR"``.
+
+    Returns:
+        The currency symbol string, e.g. ``"$"`` or ``"₹"``.
+        Falls back to the code itself for unmapped currencies.
+    """
+    return {
+        "USD": "$", "INR": "₹", "GBP": "£", "EUR": "€",
+        "JPY": "¥", "CNY": "¥", "AUD": "A$", "CAD": "CA$",
+        "HKD": "HK$", "SGD": "S$",
+    }.get((code or "USD").upper(), code or "$")
+
+
+def _load_currency(ticker: str) -> str:
+    """Read the ISO currency code for *ticker* from its metadata JSON.
+
+    Args:
+        ticker: Stock ticker symbol (already uppercased).
+
+    Returns:
+        ISO currency code string, e.g. ``"USD"`` or ``"INR"``.
+        Falls back to ``"USD"`` if the metadata file is missing.
+    """
+    meta_path = _DATA_METADATA / f"{ticker}_info.json"
+    try:
+        with open(meta_path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data.get("currency", "USD") or "USD"
+    except Exception:
+        return "USD"
+
+
 def _load_registry() -> dict:
     """Load the stock registry JSON file from disk.
 
@@ -435,7 +471,7 @@ def get_dividend_history(ticker: str) -> str:
         msg = (
             f"Dividend history for {ticker}: {len(df)} payments. "
             f"Date range: {df['date'].min().date()} to {df['date'].max().date()}. "
-            f"Most recent: ${df['dividend'].iloc[-1]:.4f} "
+            f"Most recent: {_currency_symbol(_load_currency(ticker))}{df['dividend'].iloc[-1]:.4f} "
             f"on {df['date'].iloc[-1].date()}. "
             f"Saved to {out_path}."
         )
