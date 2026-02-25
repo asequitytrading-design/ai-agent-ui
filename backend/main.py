@@ -45,9 +45,17 @@ than embedding error strings in a ``200`` body.
 import asyncio
 import json
 import logging
+import os
 import queue
+import sys
 import threading
 import time
+
+# Make the project root importable so that the auth/ package (which lives
+# alongside backend/ rather than inside it) can be found by Python.
+_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -78,6 +86,8 @@ from tools.price_analysis_tool import analyse_stock_price
 from tools.forecasting_tool import forecast_stock
 from agents.stock_agent import create_stock_agent
 # === END STOCK AGENT ROUTING ===
+
+from auth.api import create_auth_router
 
 
 class ChatRequest(BaseModel):
@@ -210,6 +220,10 @@ class ChatServer:
         app.post("/chat", response_model=ChatResponse)(self._chat_handler)
         app.post("/chat/stream")(self._chat_stream_handler)
         app.get("/agents")(self._list_agents_handler)
+
+        # Auth + user management router (mounts /auth/*, /users/*, /admin/*)
+        app.include_router(create_auth_router())
+
         return app
 
     async def _chat_handler(self, req: ChatRequest) -> ChatResponse:
@@ -365,5 +379,16 @@ class ChatServer:
 
 settings = get_settings()
 setup_logging(level=settings.log_level, log_to_file=settings.log_to_file)
+
+# Export JWT settings loaded by Pydantic into os.environ so that
+# auth/dependencies.py (which reads os.environ directly) can find them
+# even when JWT_SECRET_KEY is only defined in backend/.env.
+if settings.jwt_secret_key and "JWT_SECRET_KEY" not in os.environ:
+    os.environ["JWT_SECRET_KEY"] = settings.jwt_secret_key
+if "ACCESS_TOKEN_EXPIRE_MINUTES" not in os.environ:
+    os.environ["ACCESS_TOKEN_EXPIRE_MINUTES"] = str(settings.access_token_expire_minutes)
+if "REFRESH_TOKEN_EXPIRE_DAYS" not in os.environ:
+    os.environ["REFRESH_TOKEN_EXPIRE_DAYS"] = str(settings.refresh_token_expire_days)
+
 server = ChatServer(settings)
 app = server.app  # uvicorn entry point: uvicorn main:app --port 8181 --reload

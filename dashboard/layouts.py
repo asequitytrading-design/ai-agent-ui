@@ -74,6 +74,16 @@ NAVBAR = dbc.NavbarSimple(
         dbc.NavItem(dbc.NavLink("Analysis", href="/analysis", className="nav-link-custom")),
         dbc.NavItem(dbc.NavLink("Forecast", href="/forecast", className="nav-link-custom")),
         dbc.NavItem(dbc.NavLink("Compare", href="/compare", className="nav-link-custom")),
+        dbc.NavItem(dbc.NavLink("Admin", href="/admin/users", className="nav-link-custom")),
+        dbc.NavItem(
+            dbc.Button(
+                "🔑 Change Password",
+                id="open-change-password-btn",
+                size="sm",
+                color="outline-secondary",
+                className="ms-2",
+            )
+        ),
     ],
     brand="📊 AI Stock Analysis",
     brand_href="/",
@@ -377,4 +387,197 @@ def compare_layout() -> html.Div:
                 ),
             ], xs=12, lg=4),
         ]),
+    ])
+
+
+# ---------------------------------------------------------------------------
+# Page 5: Admin — User Management
+# ---------------------------------------------------------------------------
+
+
+def admin_users_layout() -> html.Div:
+    """Build the Admin / User Management page layout.
+
+    Displays two tabs: a user management table with Add / Edit / Deactivate
+    controls, and an audit log viewer.  Only rendered for superusers — the
+    ``display_page`` callback in ``app.py`` enforces the role guard before
+    calling this function.
+
+    Returns:
+        :class:`~dash.html.Div` representing the full admin page.
+    """
+    return html.Div([
+        # ── Header ───────────────────────────────────────────────────────
+        dbc.Row(dbc.Col([
+            html.H2("User Management", className="mb-1 fw-bold"),
+            html.P(
+                "Create, edit, and deactivate user accounts.  View the full audit log.",
+                className="text-muted mb-4",
+            ),
+        ])),
+
+        # ── Tabs: Users | Audit Log ───────────────────────────────────────
+        dbc.Tabs(
+            id="admin-tabs",
+            active_tab="users-tab",
+            children=[
+                # ── Tab 1: Users ──────────────────────────────────────────
+                dbc.Tab(
+                    label="Users",
+                    tab_id="users-tab",
+                    children=[
+                        html.Div(className="mt-3", children=[
+                            dbc.Row([
+                                dbc.Col(
+                                    html.H5("All Accounts", className="text-muted my-auto"),
+                                ),
+                                dbc.Col(
+                                    dbc.Button(
+                                        "+ Add User",
+                                        id="add-user-btn",
+                                        color="primary",
+                                        size="sm",
+                                        className="float-end",
+                                    ),
+                                    className="text-end",
+                                ),
+                            ], className="mb-3 align-items-center"),
+
+                            # Status message from save/delete operations
+                            html.Div(id="users-action-status", className="mb-3"),
+
+                            dcc.Loading(
+                                id="loading-users",
+                                type="circle",
+                                color="#4f46e5",
+                                children=html.Div(id="users-table-container"),
+                            ),
+                        ]),
+                    ],
+                ),
+
+                # ── Tab 2: Audit Log ──────────────────────────────────────
+                dbc.Tab(
+                    label="Audit Log",
+                    tab_id="audit-tab",
+                    children=[
+                        html.Div(className="mt-3", children=[
+                            html.H5("Audit Log", className="text-muted mb-3"),
+                            dcc.Loading(
+                                id="loading-audit",
+                                type="circle",
+                                color="#4f46e5",
+                                children=html.Div(id="audit-log-container"),
+                            ),
+                        ]),
+                    ],
+                ),
+            ],
+        ),
+
+        # ── User add / edit modal ─────────────────────────────────────────
+        dbc.Modal(
+            id="user-modal",
+            is_open=False,
+            backdrop="static",
+            children=[
+                dbc.ModalHeader(
+                    dbc.ModalTitle(id="user-modal-title"),
+                    close_button=False,
+                ),
+                dbc.ModalBody([
+                    html.Div(
+                        id="modal-error",
+                        className="text-danger small mb-2",
+                    ),
+                    dbc.Row([
+                        dbc.Col([
+                            dbc.Label("Full Name"),
+                            dbc.Input(
+                                id="modal-full-name",
+                                type="text",
+                                placeholder="Jane Doe",
+                            ),
+                        ]),
+                    ], className="mb-3"),
+                    dbc.Row([
+                        dbc.Col([
+                            dbc.Label("Email"),
+                            dbc.Input(
+                                id="modal-email",
+                                type="email",
+                                placeholder="jane@example.com",
+                            ),
+                        ]),
+                    ], className="mb-3"),
+                    # Password row — visible only when adding a new user
+                    html.Div(
+                        id="modal-password-row",
+                        children=[
+                            dbc.Row([
+                                dbc.Col([
+                                    dbc.Label("Password"),
+                                    dbc.Input(
+                                        id="modal-password",
+                                        type="password",
+                                        placeholder="Min 8 chars, at least one digit",
+                                    ),
+                                ]),
+                            ], className="mb-3"),
+                        ],
+                    ),
+                    dbc.Row([
+                        dbc.Col([
+                            dbc.Label("Role"),
+                            dbc.Select(
+                                id="modal-role",
+                                options=[
+                                    {"label": "General User", "value": "general"},
+                                    {"label": "Superuser",    "value": "superuser"},
+                                ],
+                                value="general",
+                            ),
+                        ]),
+                    ], className="mb-3"),
+                    # Active toggle — visible only when editing an existing user
+                    html.Div(
+                        id="modal-active-row",
+                        children=[
+                            dbc.Row([
+                                dbc.Col([
+                                    dbc.Checklist(
+                                        id="modal-is-active",
+                                        options=[{"label": "Active account", "value": "active"}],
+                                        value=["active"],
+                                        switch=True,
+                                    ),
+                                ]),
+                            ], className="mb-2"),
+                        ],
+                        style={"display": "none"},
+                    ),
+                ]),
+                dbc.ModalFooter([
+                    dbc.Button(
+                        "Cancel",
+                        id="modal-cancel-btn",
+                        color="secondary",
+                        outline=True,
+                        size="sm",
+                        className="me-2",
+                    ),
+                    dbc.Button(
+                        "Save",
+                        id="modal-save-btn",
+                        color="primary",
+                        size="sm",
+                    ),
+                ]),
+            ],
+        ),
+
+        # ── Hidden stores ─────────────────────────────────────────────────
+        dcc.Store(id="users-store", data=[]),
+        dcc.Store(id="user-modal-store", data=None),
+        dcc.Store(id="users-refresh-store", data=0),
     ])

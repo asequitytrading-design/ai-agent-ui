@@ -19,17 +19,18 @@ Example::
 import json
 import logging
 import math
+import os
 import sys
 from datetime import date
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qs
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import ta
-from dash import Input, Output, State, ctx, no_update
+from dash import ALL, Input, Output, State, ctx, html, no_update
 from plotly.subplots import make_subplots
 
 # ---------------------------------------------------------------------------
@@ -95,6 +96,351 @@ def _get_currency(ticker: str) -> str:
         return _currency_symbol(data.get("currency", "USD") or "USD")
     except Exception:
         return "$"
+
+
+# ---------------------------------------------------------------------------
+# JWT authentication helpers
+# ---------------------------------------------------------------------------
+
+_FRONTEND_LOGIN_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000") + "/login"
+
+
+def _validate_token(token: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Decode and validate a JWT access token.
+
+    Reads ``JWT_SECRET_KEY`` from the environment.  Returns the decoded
+    payload if the token is valid and of type ``"access"``; returns ``None``
+    for any failure (missing key, invalid signature, expired token, wrong
+    type).
+
+    Args:
+        token: Raw JWT string, or ``None``.
+
+    Returns:
+        Decoded payload dict, or ``None`` if invalid.
+    """
+    if not token:
+        return None
+    secret = os.environ.get("JWT_SECRET_KEY", "")
+    if not secret:
+        logger.warning(
+            "_validate_token: JWT_SECRET_KEY not set — all dashboard requests will be denied."
+        )
+        return None
+    try:
+        from jose import JWTError, jwt as _jwt
+
+        payload = _jwt.decode(token, secret, algorithms=["HS256"])
+        if payload.get("type") != "access":
+            return None
+        return payload
+    except Exception as exc:
+        logger.debug("Token validation failed: %s", exc)
+        return None
+
+
+def _unauth_notice() -> html.Div:
+    """Return a Dash layout component shown when the user is not authenticated.
+
+    Displays a centred card with a link back to the Next.js login page.
+
+    Returns:
+        A :class:`~dash.html.Div` containing the unauthenticated UI.
+    """
+    return html.Div(
+        html.Div(
+            [
+                html.Div("🔒", style={"fontSize": "2.5rem", "marginBottom": "0.75rem"}),
+                html.H5("Authentication required", className="mb-2 fw-semibold"),
+                html.P(
+                    "Your session has expired or you are not signed in.",
+                    className="text-muted mb-3",
+                    style={"fontSize": "0.9rem"},
+                ),
+                html.A(
+                    "Sign in →",
+                    href=_FRONTEND_LOGIN_URL,
+                    target="_top",
+                    className="btn btn-primary btn-sm px-4",
+                ),
+            ],
+            style={
+                "background": "#fff",
+                "border": "1px solid #e5e7eb",
+                "borderRadius": "1rem",
+                "padding": "2.5rem",
+                "maxWidth": "360px",
+                "textAlign": "center",
+            },
+        ),
+        style={
+            "display": "flex",
+            "alignItems": "center",
+            "justifyContent": "center",
+            "minHeight": "60vh",
+        },
+    )
+
+
+def _admin_forbidden() -> html.Div:
+    """Return a Dash layout component shown when a non-superuser visits /admin/*.
+
+    Returns:
+        A :class:`~dash.html.Div` with a 403-style message and a back link.
+    """
+    return html.Div(
+        html.Div(
+            [
+                html.Div("⛔", style={"fontSize": "2.5rem", "marginBottom": "0.75rem"}),
+                html.H5("Access denied", className="mb-2 fw-semibold"),
+                html.P(
+                    "This page requires superuser privileges.",
+                    className="text-muted mb-3",
+                    style={"fontSize": "0.9rem"},
+                ),
+                html.A(
+                    "← Back to home",
+                    href="/",
+                    className="btn btn-outline-secondary btn-sm px-4",
+                ),
+            ],
+            style={
+                "background": "#fff",
+                "border": "1px solid #e5e7eb",
+                "borderRadius": "1rem",
+                "padding": "2.5rem",
+                "maxWidth": "360px",
+                "textAlign": "center",
+            },
+        ),
+        style={
+            "display": "flex",
+            "alignItems": "center",
+            "justifyContent": "center",
+            "minHeight": "60vh",
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Backend API helper
+# ---------------------------------------------------------------------------
+
+_BACKEND_URL = os.environ.get("BACKEND_URL", "http://127.0.0.1:8181")
+
+
+def _resolve_token(
+    stored_token: Optional[str],
+    url_search: Optional[str],
+) -> Optional[str]:
+    """Return the best available JWT, preferring the URL query parameter.
+
+    Args:
+        stored_token: Token persisted in ``auth-token-store`` localStorage.
+        url_search: URL query string, e.g. ``"?token=eyJ..."``.
+
+    Returns:
+        JWT string or ``None`` if neither source has a token.
+    """
+    token = stored_token
+    if url_search:
+        qs = parse_qs(url_search.lstrip("?"))
+        url_token = qs.get("token", [None])[0]
+        if url_token:
+            token = url_token
+    return token
+
+
+def _api_call(
+    method: str,
+    path: str,
+    token: Optional[str],
+    json_body: Optional[Dict[str, Any]] = None,
+) -> Optional[Any]:
+    """Make an authenticated HTTP request to the FastAPI backend.
+
+    Args:
+        method: HTTP method — ``"get"``, ``"post"``, ``"patch"``,
+            or ``"delete"``.
+        path: URL path starting with ``"/"`` (e.g. ``"/users"``).
+        token: JWT access token; ``None`` causes an immediate ``None`` return.
+        json_body: Optional JSON-serialisable request body for POST/PATCH.
+
+    Returns:
+        The :mod:`requests` ``Response`` object, or ``None`` on connection
+        error or missing token.
+    """
+    if not token:
+        return None
+    try:
+        import requests as _req  # lazy import — avoids startup cost
+
+        url = f"{_BACKEND_URL}{path}"
+        headers = {"Authorization": f"Bearer {token}"}
+        kwargs: Dict[str, Any] = {"headers": headers, "timeout": 10}
+        if json_body is not None:
+            kwargs["json"] = json_body
+        fn = getattr(_req, method.lower())
+        return fn(url, **kwargs)
+    except Exception as exc:
+        logger.error("API call %s %s failed: %s", method.upper(), path, exc)
+        return None
+
+
+def _build_users_table(users: List[Dict[str, Any]]) -> Any:
+    """Render a Bootstrap table of user records with action buttons.
+
+    Each row displays name, email, role, status, timestamps, and two
+    action buttons: Edit (opens the edit modal) and Deactivate/Reactivate
+    (calls the API directly).
+
+    Args:
+        users: List of user dicts as returned by ``GET /users``.
+
+    Returns:
+        A :class:`~dash_bootstrap_components.Table`, or a plain
+        :class:`~dash.html.P` element when *users* is empty.
+    """
+    import dash_bootstrap_components as _dbc
+    from dash import html as _html
+
+    if not users:
+        return _html.P("No user accounts found.", className="text-muted")
+
+    header = _html.Thead(_html.Tr([
+        _html.Th("Name"),
+        _html.Th("Email"),
+        _html.Th("Role"),
+        _html.Th("Status"),
+        _html.Th("Created"),
+        _html.Th("Last Login"),
+        _html.Th("Actions", className="text-end"),
+    ]))
+
+    rows = []
+    for user in users:
+        is_active = user.get("is_active", True)
+        created = (user.get("created_at") or "")[:10] or "—"
+        last_login = (user.get("last_login_at") or "")[:10] or "—"
+
+        row = _html.Tr([
+            _html.Td(user.get("full_name", "—")),
+            _html.Td(
+                user.get("email", "—"),
+                style={"fontSize": "0.85rem"},
+            ),
+            _html.Td(
+                _dbc.Badge(
+                    user.get("role", "—"),
+                    color="danger" if user.get("role") == "superuser" else "primary",
+                    className="fw-normal",
+                )
+            ),
+            _html.Td(
+                _dbc.Badge(
+                    "Active" if is_active else "Inactive",
+                    color="success" if is_active else "secondary",
+                    className="fw-normal",
+                )
+            ),
+            _html.Td(created, style={"fontSize": "0.8rem", "color": "#6b7280"}),
+            _html.Td(last_login, style={"fontSize": "0.8rem", "color": "#6b7280"}),
+            _html.Td(
+                [
+                    _dbc.Button(
+                        "Edit",
+                        id={"type": "edit-user-btn", "index": user["user_id"]},
+                        size="sm",
+                        color="outline-primary",
+                        className="me-1 py-0 px-2",
+                        style={"fontSize": "0.75rem"},
+                    ),
+                    _dbc.Button(
+                        "Deactivate" if is_active else "Reactivate",
+                        id={"type": "toggle-user-btn", "index": user["user_id"]},
+                        size="sm",
+                        color="outline-danger" if is_active else "outline-success",
+                        className="py-0 px-2",
+                        style={"fontSize": "0.75rem"},
+                    ),
+                ],
+                className="text-end",
+            ),
+        ])
+        rows.append(row)
+
+    return _dbc.Table(
+        [header, _html.Tbody(rows)],
+        bordered=True,
+        hover=True,
+        responsive=True,
+        className="table table-sm align-middle",
+    )
+
+
+def _build_audit_table(events: List[Dict[str, Any]]) -> Any:
+    """Render a Bootstrap table of audit log events, newest-first.
+
+    Args:
+        events: List of audit event dicts from ``GET /admin/audit-log``.
+
+    Returns:
+        A :class:`~dash_bootstrap_components.Table`, or a plain
+        :class:`~dash.html.P` when *events* is empty.
+    """
+    import dash_bootstrap_components as _dbc
+    from dash import html as _html
+
+    if not events:
+        return _html.P("No audit events found.", className="text-muted")
+
+    header = _html.Thead(_html.Tr([
+        _html.Th("When"),
+        _html.Th("Event"),
+        _html.Th("Actor"),
+        _html.Th("Target"),
+        _html.Th("Details"),
+    ]))
+
+    rows = []
+    for ev in events:
+        ts = (ev.get("event_timestamp") or "")[:19].replace("T", " ") or "—"
+        metadata = ev.get("metadata") or ""
+        if metadata and metadata.startswith("{"):
+            try:
+                meta_dict = json.loads(metadata)
+                metadata = ", ".join(f"{k}: {v}" for k, v in meta_dict.items())
+            except Exception:
+                pass
+
+        rows.append(_html.Tr([
+            _html.Td(ts, style={"fontSize": "0.78rem", "color": "#6b7280", "whiteSpace": "nowrap"}),
+            _html.Td(
+                _dbc.Badge(
+                    ev.get("event_type", "—"),
+                    color="info",
+                    className="fw-normal",
+                    style={"fontSize": "0.72rem"},
+                )
+            ),
+            _html.Td(
+                (ev.get("actor_user_id") or "—")[:8] + "…",
+                style={"fontSize": "0.78rem", "fontFamily": "monospace"},
+            ),
+            _html.Td(
+                (ev.get("target_user_id") or "—")[:8] + "…",
+                style={"fontSize": "0.78rem", "fontFamily": "monospace"},
+            ),
+            _html.Td(metadata, style={"fontSize": "0.78rem", "color": "#6b7280"}),
+        ]))
+
+    return _dbc.Table(
+        [header, _html.Tbody(rows)],
+        bordered=True,
+        hover=True,
+        responsive=True,
+        className="table table-sm",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -693,6 +1039,44 @@ def register_callbacks(app) -> None:
     from dash import html
 
     # ======================================================================
+    # Auth: extract JWT from ?token= query param and persist in client store
+    # ======================================================================
+
+    @app.callback(
+        Output("auth-token-store", "data"),
+        Input("url", "search"),
+        prevent_initial_call=False,
+    )
+    def store_token_from_url(search: Optional[str]) -> Optional[str]:
+        """Persist a JWT access token from the URL query string to localStorage.
+
+        When the Next.js frontend embeds the dashboard in an ``<iframe>`` it
+        appends ``?token=<jwt>`` to the URL.  This callback intercepts the
+        query parameter and writes the token to the ``auth-token-store``
+        (``storage_type="local"``), so it survives page navigation within
+        the dashboard without the token re-appearing in the URL.
+
+        If the URL does not contain a ``token`` parameter the callback
+        returns :data:`~dash.no_update` so any previously stored value is
+        preserved.
+
+        Args:
+            search: The query string portion of the current URL, e.g.
+                ``"?token=eyJ..."``.  May be ``None`` or an empty string.
+
+        Returns:
+            The raw JWT string to store, or :data:`~dash.no_update` when
+            the URL contains no ``token`` parameter.
+        """
+        if not search:
+            return no_update
+        qs = parse_qs(search.lstrip("?"))
+        token_list = qs.get("token")
+        if not token_list:
+            return no_update
+        return token_list[0]
+
+    # ======================================================================
     # Home page: refresh stock cards + populate registry dropdown
     # ======================================================================
 
@@ -891,8 +1275,9 @@ def register_callbacks(app) -> None:
             Input("date-range-slider", "value"),
             Input("overlay-toggles", "value"),
         ],
+        State("auth-token-store", "data"),
     )
-    def update_analysis_chart(ticker, date_range_idx, overlays):
+    def update_analysis_chart(ticker, date_range_idx, overlays, token):
         """Rebuild the 3-panel analysis chart and summary-stat cards.
 
         Args:
@@ -900,10 +1285,14 @@ def register_callbacks(app) -> None:
             date_range_idx: Integer index into the date-range map
                 (0=1M, 1=3M, 2=6M, 3=1Y, 4=3Y, 5=Max).
             overlays: List of active overlay keys.
+            token: JWT access token from the auth-token-store.
 
         Returns:
             Tuple of (analysis figure, stats row component).
         """
+        if _validate_token(token) is None:
+            return _empty_fig("Authentication required."), _unauth_notice()
+
         if not ticker:
             return _empty_fig("Select a ticker to begin."), []
 
@@ -970,8 +1359,9 @@ def register_callbacks(app) -> None:
             Input("forecast-horizon-radio", "value"),
             Input("forecast-refresh-store", "data"),
         ],
+        State("auth-token-store", "data"),
     )
-    def update_forecast_chart(ticker, horizon, refresh_trigger):
+    def update_forecast_chart(ticker, horizon, refresh_trigger, token):
         """Reload and render the forecast chart when inputs change.
 
         Args:
@@ -979,11 +1369,15 @@ def register_callbacks(app) -> None:
             horizon: Forecast horizon string (``"3"``, ``"6"``, ``"9"``).
             refresh_trigger: Counter incremented by the Run New Analysis
                 callback to force a chart refresh.
+            token: JWT access token from the auth-token-store.
 
         Returns:
             Tuple of (forecast figure, target-cards component,
             accuracy-row component).
         """
+        if _validate_token(token) is None:
+            return _empty_fig("Authentication required."), _unauth_notice(), []
+
         if not ticker:
             return _empty_fig("Select a ticker to begin."), [], []
 
@@ -1040,10 +1434,11 @@ def register_callbacks(app) -> None:
             State("forecast-ticker-dropdown", "value"),
             State("forecast-horizon-radio", "value"),
             State("forecast-refresh-store", "data"),
+            State("auth-token-store", "data"),
         ],
         prevent_initial_call=True,
     )
-    def run_new_analysis(n_clicks, ticker, horizon, current_refresh):
+    def run_new_analysis(n_clicks, ticker, horizon, current_refresh, token):
         """Run the full fetch → Prophet forecast pipeline for the selected ticker.
 
         Imports backend tool functions directly (no HTTP call to the backend
@@ -1055,11 +1450,15 @@ def register_callbacks(app) -> None:
             ticker: Selected ticker symbol.
             horizon: Forecast horizon string.
             current_refresh: Current store value (incremented on success).
+            token: JWT access token from the auth-token-store.
 
         Returns:
             Tuple of (status message, new refresh counter,
             accuracy-row component).
         """
+        if _validate_token(token) is None:
+            return _unauth_notice(), no_update, []
+
         if not ticker:
             return (
                 dbc.Alert("Please select a ticker first.", color="warning"),
@@ -1126,17 +1525,23 @@ def register_callbacks(app) -> None:
             Output("compare-heatmap",           "figure"),
         ],
         Input("compare-ticker-dropdown", "value"),
+        State("auth-token-store", "data"),
     )
-    def update_compare(tickers):
+    def update_compare(tickers, token):
         """Build the normalised performance chart, metrics table, and heatmap.
 
         Args:
             tickers: List of selected ticker symbols (2–5).
+            token: JWT access token from the auth-token-store.
 
         Returns:
             Tuple of (performance figure, metrics table component,
             heatmap figure).
         """
+        if _validate_token(token) is None:
+            empty = _empty_fig("Authentication required.", height=450)
+            return empty, _unauth_notice(), _empty_fig("", height=380)
+
         empty_perf = _empty_fig("Select 2–5 stocks to compare.", height=450)
         empty_heat = _empty_fig("", height=380)
 
@@ -1270,3 +1675,482 @@ def register_callbacks(app) -> None:
         )
 
         return perf_fig, table, heat_fig
+
+    # ======================================================================
+    # Admin: User Management
+    # ======================================================================
+
+    @app.callback(
+        Output("users-table-container", "children"),
+        Output("users-store", "data"),
+        Input("url", "pathname"),
+        Input("users-refresh-store", "data"),
+        State("auth-token-store", "data"),
+        State("url", "search"),
+        prevent_initial_call=False,
+    )
+    def load_users_table(
+        pathname: Optional[str],
+        _refresh: Optional[int],
+        stored_token: Optional[str],
+        url_search: Optional[str],
+    ):
+        """Fetch all users from the backend API and render the users table.
+
+        Fires on page navigation (to detect /admin/users) and whenever
+        ``users-refresh-store`` is incremented by a save or toggle action.
+
+        Args:
+            pathname: Current URL path.
+            _refresh: Refresh counter from ``users-refresh-store``.
+            stored_token: JWT from ``auth-token-store``.
+            url_search: URL query string for token fallback.
+
+        Returns:
+            Tuple of (table component, list of user dicts).
+        """
+        if pathname != "/admin/users":
+            return no_update, no_update
+
+        token = _resolve_token(stored_token, url_search)
+        resp = _api_call("get", "/users", token)
+        if resp is None:
+            return html.P("Could not reach backend.", className="text-danger"), []
+        if resp.status_code == 403:
+            return html.P("Not authorised.", className="text-danger"), []
+        if not resp.ok:
+            return html.P(f"Error {resp.status_code}: {resp.text}", className="text-danger"), []
+
+        users = resp.json()
+        return _build_users_table(users), users
+
+    @app.callback(
+        Output("audit-log-container", "children"),
+        Input("admin-tabs", "active_tab"),
+        Input("url", "pathname"),
+        State("auth-token-store", "data"),
+        State("url", "search"),
+        prevent_initial_call=False,
+    )
+    def load_audit_log(
+        active_tab: Optional[str],
+        pathname: Optional[str],
+        stored_token: Optional[str],
+        url_search: Optional[str],
+    ):
+        """Fetch the audit log from the backend API and render the table.
+
+        Fires when the admin page is visited or when the user switches to
+        the Audit Log tab.
+
+        Args:
+            active_tab: ID of the currently selected tab.
+            pathname: Current URL path.
+            stored_token: JWT from ``auth-token-store``.
+            url_search: URL query string for token fallback.
+
+        Returns:
+            Audit log table component.
+        """
+        if pathname != "/admin/users" or active_tab != "audit-tab":
+            return no_update
+
+        token = _resolve_token(stored_token, url_search)
+        resp = _api_call("get", "/admin/audit-log", token)
+        if resp is None:
+            return html.P("Could not reach backend.", className="text-danger")
+        if not resp.ok:
+            return html.P(f"Error {resp.status_code}.", className="text-danger")
+
+        events = resp.json().get("events", [])
+        return _build_audit_table(events)
+
+    @app.callback(
+        Output("user-modal", "is_open"),
+        Output("user-modal-title", "children"),
+        Output("modal-full-name", "value"),
+        Output("modal-email", "value"),
+        Output("modal-role", "value"),
+        Output("modal-is-active", "value"),
+        Output("modal-password-row", "style"),
+        Output("modal-active-row", "style"),
+        Output("user-modal-store", "data"),
+        Output("modal-error", "children"),
+        Input("add-user-btn", "n_clicks"),
+        Input({"type": "edit-user-btn", "index": ALL}, "n_clicks"),
+        Input("modal-cancel-btn", "n_clicks"),
+        State("users-store", "data"),
+        prevent_initial_call=True,
+    )
+    def toggle_user_modal(
+        add_clicks: Optional[int],
+        edit_clicks_list: List[Optional[int]],
+        cancel_clicks: Optional[int],
+        users_data: Optional[List[Dict[str, Any]]],
+    ):
+        """Open the Add / Edit user modal or close it on Cancel.
+
+        Triggered by the "Add User" button, any per-row "Edit" button, or the
+        Cancel button.  Pattern-matching collects all "Edit" button clicks into
+        a single callback.
+
+        Args:
+            add_clicks: ``n_clicks`` from the "Add User" button.
+            edit_clicks_list: List of ``n_clicks`` from all Edit buttons.
+            cancel_clicks: ``n_clicks`` from the Cancel button.
+            users_data: Cached list of user dicts from ``users-store``.
+
+        Returns:
+            Tuple of modal state, title, field values, visibility styles,
+            store data, and error message.
+        """
+        triggered = ctx.triggered_id
+
+        # ── Cancel ────────────────────────────────────────────────────────
+        if triggered == "modal-cancel-btn":
+            return (
+                False, no_update, no_update, no_update,
+                no_update, no_update, no_update, no_update,
+                no_update, "",
+            )
+
+        # ── Add user ──────────────────────────────────────────────────────
+        if triggered == "add-user-btn":
+            return (
+                True, "Add User",
+                "", "", "general", ["active"],
+                {},                        # show password row
+                {"display": "none"},       # hide is-active toggle
+                {"mode": "add", "user": None},
+                "",
+            )
+
+        # ── Edit user ─────────────────────────────────────────────────────
+        if isinstance(triggered, dict) and triggered.get("type") == "edit-user-btn":
+            user_id = triggered["index"]
+            user = next(
+                (u for u in (users_data or []) if u.get("user_id") == user_id),
+                None,
+            )
+            if user is None:
+                return (
+                    no_update, no_update, no_update, no_update,
+                    no_update, no_update, no_update, no_update,
+                    no_update, "User data not found — try refreshing.",
+                )
+            return (
+                True, f"Edit User — {user.get('email', '')}",
+                user.get("full_name", ""),
+                user.get("email", ""),
+                user.get("role", "general"),
+                ["active"] if user.get("is_active", True) else [],
+                {"display": "none"},       # hide password row for edits
+                {},                        # show is-active toggle
+                {"mode": "edit", "user": user},
+                "",
+            )
+
+        return (
+            no_update, no_update, no_update, no_update,
+            no_update, no_update, no_update, no_update,
+            no_update, no_update,
+        )
+
+    @app.callback(
+        Output("user-modal", "is_open", allow_duplicate=True),
+        Output("users-refresh-store", "data"),
+        Output("modal-error", "children", allow_duplicate=True),
+        Output("users-action-status", "children"),
+        Input("modal-save-btn", "n_clicks"),
+        State("user-modal-store", "data"),
+        State("modal-full-name", "value"),
+        State("modal-email", "value"),
+        State("modal-password", "value"),
+        State("modal-role", "value"),
+        State("modal-is-active", "value"),
+        State("users-refresh-store", "data"),
+        State("auth-token-store", "data"),
+        State("url", "search"),
+        prevent_initial_call=True,
+    )
+    def save_user(
+        n_clicks: Optional[int],
+        modal_data: Optional[Dict[str, Any]],
+        full_name: Optional[str],
+        email: Optional[str],
+        password: Optional[str],
+        role: Optional[str],
+        is_active_list: Optional[List[str]],
+        refresh_n: Optional[int],
+        stored_token: Optional[str],
+        url_search: Optional[str],
+    ):
+        """Create or update a user via the backend API.
+
+        Validates required fields locally, then calls ``POST /users`` (add
+        mode) or ``PATCH /users/{user_id}`` (edit mode).  On success the
+        modal is closed and the user table is refreshed.  On error the modal
+        stays open and an inline error message is shown.
+
+        Args:
+            n_clicks: Save button click count.
+            modal_data: Dict with ``mode`` (``"add"``/``"edit"``) and
+                ``user`` (the original user dict for edits).
+            full_name: Form value.
+            email: Form value.
+            password: Form value (only used in add mode).
+            role: Selected role value.
+            is_active_list: Checklist value — ``["active"]`` or ``[]``.
+            refresh_n: Current refresh counter (incremented on success).
+            stored_token: JWT from ``auth-token-store``.
+            url_search: URL query string for token fallback.
+
+        Returns:
+            Tuple of (modal open, new refresh count, error text, status alert).
+        """
+        if not n_clicks:
+            return no_update, no_update, no_update, no_update
+
+        # Validate required fields
+        if not (full_name and full_name.strip()):
+            return True, no_update, "Full name is required.", no_update
+        if not (email and email.strip()):
+            return True, no_update, "Email is required.", no_update
+
+        mode = (modal_data or {}).get("mode", "add")
+        token = _resolve_token(stored_token, url_search)
+
+        if mode == "add":
+            if not (password and password.strip()):
+                return True, no_update, "Password is required for new users.", no_update
+            payload: Dict[str, Any] = {
+                "full_name": full_name.strip(),
+                "email": email.strip(),
+                "password": password,
+                "role": role or "general",
+            }
+            resp = _api_call("post", "/users", token, json_body=payload)
+        else:
+            user = (modal_data or {}).get("user") or {}
+            user_id = user.get("user_id", "")
+            if not user_id:
+                return True, no_update, "Cannot determine user ID.", no_update
+            updates: Dict[str, Any] = {
+                "full_name": full_name.strip(),
+                "email": email.strip(),
+                "role": role or "general",
+                "is_active": "active" in (is_active_list or []),
+            }
+            resp = _api_call("patch", f"/users/{user_id}", token, json_body=updates)
+
+        if resp is None:
+            return True, no_update, "Could not reach backend.", no_update
+        if resp.status_code == 400:
+            detail = resp.json().get("detail", "Bad request")
+            return True, no_update, str(detail), no_update
+        if resp.status_code == 409:
+            return True, no_update, "Email already in use.", no_update
+        if not resp.ok:
+            return True, no_update, f"Error {resp.status_code}.", no_update
+
+        verb = "created" if mode == "add" else "updated"
+        alert = dbc.Alert(
+            f"User {verb} successfully.",
+            color="success",
+            dismissable=True,
+            duration=4000,
+            className="py-2",
+        )
+        new_refresh = (refresh_n or 0) + 1
+        return False, new_refresh, "", alert
+
+    @app.callback(
+        Output("users-refresh-store", "data", allow_duplicate=True),
+        Output("users-action-status", "children", allow_duplicate=True),
+        Input({"type": "toggle-user-btn", "index": ALL}, "n_clicks"),
+        State("users-store", "data"),
+        State("users-refresh-store", "data"),
+        State("auth-token-store", "data"),
+        State("url", "search"),
+        prevent_initial_call=True,
+    )
+    def toggle_user_activation(
+        n_clicks_list: List[Optional[int]],
+        users_data: Optional[List[Dict[str, Any]]],
+        refresh_n: Optional[int],
+        stored_token: Optional[str],
+        url_search: Optional[str],
+    ):
+        """Deactivate or reactivate a user with a single button click.
+
+        For active users calls ``DELETE /users/{id}`` (soft-delete).
+        For inactive users calls ``PATCH /users/{id}`` with
+        ``is_active: true``.
+
+        Args:
+            n_clicks_list: All toggle-user-btn click counts (pattern-match).
+            users_data: Cached user list from ``users-store``.
+            refresh_n: Current refresh counter.
+            stored_token: JWT from ``auth-token-store``.
+            url_search: URL query string for token fallback.
+
+        Returns:
+            Tuple of (new refresh count, status alert).
+        """
+        triggered = ctx.triggered_id
+        if not isinstance(triggered, dict) or triggered.get("type") != "toggle-user-btn":
+            return no_update, no_update
+
+        # Ignore if all clicks are None (initial render)
+        if not any(n_clicks_list):
+            return no_update, no_update
+
+        user_id = triggered["index"]
+        user = next(
+            (u for u in (users_data or []) if u.get("user_id") == user_id),
+            None,
+        )
+        if user is None:
+            return no_update, dbc.Alert(
+                "User not found — refresh the page.", color="warning",
+                dismissable=True, duration=4000, className="py-2",
+            )
+
+        token = _resolve_token(stored_token, url_search)
+        is_active = user.get("is_active", True)
+
+        if is_active:
+            resp = _api_call("delete", f"/users/{user_id}", token)
+            action = "deactivated"
+        else:
+            resp = _api_call("patch", f"/users/{user_id}", token, json_body={"is_active": True})
+            action = "reactivated"
+
+        if resp is None or not resp.ok:
+            err = "" if resp is None else f" ({resp.status_code})"
+            return no_update, dbc.Alert(
+                f"Action failed{err}.", color="danger",
+                dismissable=True, duration=4000, className="py-2",
+            )
+
+        alert = dbc.Alert(
+            f"User {action} successfully.",
+            color="success" if action == "reactivated" else "warning",
+            dismissable=True,
+            duration=4000,
+            className="py-2",
+        )
+        return (refresh_n or 0) + 1, alert
+
+    # ======================================================================
+    # Global: Change Password modal (accessible from NAVBAR on any page)
+    # ======================================================================
+
+    @app.callback(
+        Output("change-password-modal", "is_open"),
+        Output("change-pw-new", "value"),
+        Output("change-pw-confirm", "value"),
+        Output("change-pw-error", "children"),
+        Input("open-change-password-btn", "n_clicks"),
+        Input("change-pw-cancel-btn", "n_clicks"),
+        State("change-password-modal", "is_open"),
+        prevent_initial_call=True,
+    )
+    def toggle_change_password_modal(
+        open_clicks: Optional[int],
+        cancel_clicks: Optional[int],
+        is_open: bool,
+    ):
+        """Open or close the Change Password modal.
+
+        Clears all form fields and errors when opening or cancelling.
+
+        Args:
+            open_clicks: ``n_clicks`` from the "Change Password" NAVBAR button.
+            cancel_clicks: ``n_clicks`` from the modal Cancel button.
+            is_open: Current modal open state.
+
+        Returns:
+            Tuple of (is_open, new password cleared, confirm cleared, error cleared).
+        """
+        triggered = ctx.triggered_id
+        if triggered == "open-change-password-btn":
+            return True, "", "", ""
+        # Cancel
+        return False, "", "", ""
+
+    @app.callback(
+        Output("change-password-modal", "is_open", allow_duplicate=True),
+        Output("change-pw-error", "children", allow_duplicate=True),
+        Input("change-pw-save-btn", "n_clicks"),
+        State("change-pw-new", "value"),
+        State("change-pw-confirm", "value"),
+        State("auth-token-store", "data"),
+        State("url", "search"),
+        prevent_initial_call=True,
+    )
+    def save_new_password(
+        n_clicks: Optional[int],
+        new_pw: Optional[str],
+        confirm_pw: Optional[str],
+        stored_token: Optional[str],
+        url_search: Optional[str],
+    ):
+        """Apply a new password via the password-reset flow.
+
+        Validates locally (non-empty, min 8 chars, one digit, passwords match),
+        then calls ``POST /auth/password-reset/request`` to get a reset token
+        and ``POST /auth/password-reset/confirm`` to apply it.
+
+        Args:
+            n_clicks: Save button click count.
+            new_pw: New password value.
+            confirm_pw: Confirmation password value.
+            stored_token: JWT from ``auth-token-store``.
+            url_search: URL query string for token fallback.
+
+        Returns:
+            Tuple of (modal open, error message).
+        """
+        if not n_clicks:
+            return no_update, no_update
+
+        if not (new_pw and new_pw.strip()):
+            return True, "New password is required."
+        if new_pw != confirm_pw:
+            return True, "Passwords do not match."
+        if len(new_pw) < 8:
+            return True, "Password must be at least 8 characters."
+        if not any(c.isdigit() for c in new_pw):
+            return True, "Password must contain at least one digit."
+
+        token = _resolve_token(stored_token, url_search)
+        payload = _validate_token(token)
+        if payload is None:
+            return True, "Session expired — please sign in again."
+
+        email = payload.get("email", "")
+
+        # Step 1: request reset token
+        resp1 = _api_call(
+            "post", "/auth/password-reset/request", token,
+            json_body={"email": email},
+        )
+        if resp1 is None or not resp1.ok:
+            detail = "" if resp1 is None else resp1.json().get("detail", "")
+            return True, f"Request failed: {detail or 'backend unreachable'}."
+
+        reset_token = resp1.json().get("reset_token", "")
+        if not reset_token:
+            return True, "No reset token returned by server."
+
+        # Step 2: confirm with new password
+        resp2 = _api_call(
+            "post", "/auth/password-reset/confirm", token,
+            json_body={"reset_token": reset_token, "new_password": new_pw},
+        )
+        if resp2 is None or not resp2.ok:
+            detail = "" if resp2 is None else resp2.json().get("detail", "")
+            return True, f"Confirm failed: {detail or 'backend unreachable'}."
+
+        return False, ""

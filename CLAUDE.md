@@ -544,7 +544,81 @@ Dashboard uses FLATLY (light Bootstrap theme) — `#f9fafb` background, white ca
 
 Dashboard Flask server sends `X-Frame-Options: ALLOWALL` and `Content-Security-Policy: frame-ancestors *` on every response (added via `@server.after_request`). Frontend `<iframe>` has a loading spinner overlay (disappears on `onLoad`) and an error banner (appears on `onError`) with an "Open in new tab ↗" link.
 
+## Auth Module (Phases 1–5 complete, Phase 6 pending)
+
+JWT authentication + role-based access control across all three surfaces.
+
+### Storage
+Apache Iceberg via PyIceberg + SQLite (`data/iceberg/catalog.db`). Initialise: `python auth/create_tables.py`.
+
+### Backend (`auth/` package)
+- `auth/create_tables.py` — idempotent Iceberg table init
+- `auth/repository.py` — `IcebergUserRepository` (CRUD + audit log)
+- `auth/service.py` — `AuthService` (bcrypt, JWT HS256, in-memory deny-list)
+- `auth/models.py` — Pydantic request/response models
+- `auth/dependencies.py` — `get_current_user`, `superuser_only` FastAPI deps
+- `auth/api.py` — `create_auth_router()` factory (12 endpoints mounted at root)
+
+### Endpoints
+`POST /auth/login`, `POST /auth/login/form`, `POST /auth/refresh`, `POST /auth/logout`,
+`POST /auth/password-reset/request`, `POST /auth/password-reset/confirm`,
+`GET /users`, `POST /users`, `GET /users/{id}`, `PATCH /users/{id}`, `DELETE /users/{id}`,
+`GET /admin/audit-log`
+
+### Frontend (Next.js)
+- `frontend/lib/auth.ts` — token helpers (getAccessToken, setTokens, clearTokens, isTokenExpired, getRoleFromToken, refreshAccessToken)
+- `frontend/lib/apiFetch.ts` — drop-in authenticated fetch wrapper; auto-refreshes tokens; redirects to `/login` on 401
+- `frontend/app/login/page.tsx` — login page
+- `frontend/app/page.tsx` — auth guard on mount; logout button; `apiFetch` for API calls; Admin nav item visible to superusers only; `"admin"` view type routes to `/admin/users` Dash page
+
+### Dashboard (Plotly Dash — Phase 5)
+- `dcc.Store(id="auth-token-store", storage_type="local")` persists JWT in localStorage
+- Token extracted from `?token=` query param and stored via `store_token_from_url` callback
+- `display_page` validates token before rendering any page; shows `_unauth_notice()` for invalid tokens, `_admin_forbidden()` for non-superusers on `/admin/*`
+- **`/admin/users`**: superuser-only page with two tabs:
+  - *Users*: DataTable of all accounts + "Add User" button + per-row Edit / Deactivate-Reactivate buttons + inline modal
+  - *Audit Log*: full event table (event type, actor, target, metadata)
+- **Change Password**: NAVBAR button opens a global modal; calls `/auth/password-reset/request` then `/auth/password-reset/confirm`
+- `_api_call(method, path, token, json_body)` helper in `callbacks.py` makes authenticated HTTP requests to the FastAPI backend (`BACKEND_URL` env var, default `http://127.0.0.1:8181`)
+- Token propagated to Dash via `?token=<jwt>` query param when Next.js renders the iframe; admin view appends token to `/admin/users` URL
+
+### Environment variables required for auth
+```
+JWT_SECRET_KEY=<min-32-random-chars>
+ACCESS_TOKEN_EXPIRE_MINUTES=60   # default
+REFRESH_TOKEN_EXPIRE_DAYS=7      # default
+BACKEND_URL=http://127.0.0.1:8181  # for dashboard callbacks (default)
+FRONTEND_URL=http://localhost:3000  # for redirect links in Dash (default)
+```
+
+### Phase 6 complete
+- `scripts/seed_admin.py` — reads `ADMIN_EMAIL` + `ADMIN_PASSWORD` + `JWT_SECRET_KEY` from env/.env; validates password strength; creates superuser if not exists; idempotent
+- `run.sh` — `_init_auth()` function runs `create_tables.py` + `seed_admin.py` on first `./run.sh start` (guards on `data/iceberg/catalog.db` existence)
+- `docs/backend/auth.md` — full MkDocs auth documentation page (endpoints, models, config, security notes)
+- `mkdocs.yml` — added "Auth & Users" to Backend nav section; `mkdocs build` passes
+
+### Auth deployment fixes (Feb 25, 2026)
+Two runtime bugs fixed after first deploy:
+
+**Fix 1 — JWT env propagation (`backend/main.py`)**
+`auth/dependencies.py` reads `JWT_SECRET_KEY` from `os.environ` directly. Pydantic `Settings`
+reads `backend/.env` but does **not** write values back to `os.environ`. Fix: module-level startup
+block in `main.py` now copies all three JWT fields from `settings` into `os.environ` if absent:
+```python
+if settings.jwt_secret_key and "JWT_SECRET_KEY" not in os.environ:
+    os.environ["JWT_SECRET_KEY"] = settings.jwt_secret_key
+```
+
+**Fix 2 — Dashboard dotenv (`dashboard/app.py`)**
+The Dash process never loaded `backend/.env`, so `_validate_token()` always got an empty secret
+and returned `None` → "Authentication required" in every iframe. Fix: `_load_dotenv()` helper
+added at the top of `dashboard/app.py` (before imports) reads both `.env` and `backend/.env`
+into `os.environ` at startup.
+
+---
+
 ## Known Limitations / TODOs
 
 - **Anthropic API not working** — currently on Groq as a workaround; switch back when resolved (see 2-line change in `agents/general_agent.py` and `agents/stock_agent.py` → `_build_llm()` above)
 - **`SERPAPI_API_KEY` must be set** — `search_web` will return an error string without it; get key at serpapi.com (100 free searches/month)
+- **Auth module fully deployed** — `backend/.env` contains `JWT_SECRET_KEY`; superuser `asequitytrading@gmail.com` seeded; all services start cleanly with `./run.sh start`

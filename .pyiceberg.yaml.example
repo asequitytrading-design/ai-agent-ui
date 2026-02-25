@@ -1,0 +1,5 @@
+catalog:
+  local:
+    type: sql
+    uri: sqlite:///data/iceberg/catalog.db
+    warehouse: file:///absolute/path/to/ai-agent-ui/data/iceberg/warehouse

@@ -114,6 +114,45 @@ _print_table() {
     echo ""
 }
 
+# ── First-time auth initialisation ────────────────────────────────────────────
+
+# Run Iceberg table creation + admin seed on first start (idempotent guard:
+# if data/iceberg/catalog.db already exists, the function returns immediately).
+_init_auth() {
+    local catalog="${SCRIPT_DIR}/data/iceberg/catalog.db"
+    if [[ -f "$catalog" ]]; then
+        return 0
+    fi
+
+    echo -e "${Y}  Auth DB not found — initialising Iceberg tables…${N}"
+
+    if [[ -z "${JWT_SECRET_KEY:-}" ]]; then
+        echo -e "${R}  ERROR: JWT_SECRET_KEY is required for first-time auth setup.${N}"
+        echo "  Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+        echo "  Then export JWT_SECRET_KEY=<value> or add it to .env at the project root."
+        exit 1
+    fi
+
+    echo "  Running auth/create_tables.py…"
+    if ! (cd "$SCRIPT_DIR" && "$PYTHON" auth/create_tables.py); then
+        echo -e "${R}  ERROR: auth/create_tables.py failed.  See output above.${N}"
+        exit 1
+    fi
+
+    if [[ -n "${ADMIN_EMAIL:-}" ]] && [[ -n "${ADMIN_PASSWORD:-}" ]]; then
+        echo "  Running scripts/seed_admin.py…"
+        if ! (cd "$SCRIPT_DIR" && "$PYTHON" scripts/seed_admin.py); then
+            echo -e "${R}  ERROR: scripts/seed_admin.py failed.  See output above.${N}"
+            exit 1
+        fi
+        echo -e "${G}  Auth initialised. Admin account created: ${ADMIN_EMAIL}${N}"
+    else
+        echo -e "${Y}  WARNING: ADMIN_EMAIL / ADMIN_PASSWORD not set — tables created but no admin seeded.${N}"
+        echo "  Run 'python scripts/seed_admin.py' manually after setting those variables."
+    fi
+    echo ""
+}
+
 # ── Commands ──────────────────────────────────────────────────────────────────
 
 do_start() {
@@ -130,6 +169,9 @@ do_start() {
         echo -e "${Y}  WARNING: GROQ_API_KEY not set — backend will start but chat will fail${N}"
         echo ""
     fi
+
+    # First-time auth DB initialisation (no-op if already initialised)
+    _init_auth
 
     # Free any stale processes on our ports
     _free_port "$BACKEND_PORT"

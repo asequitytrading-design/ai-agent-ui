@@ -1,10 +1,13 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { clearTokens, getAccessToken, getRoleFromToken, isTokenExpired } from "@/lib/auth";
+import { apiFetch } from "@/lib/apiFetch";
 
-type View = "chat" | "docs" | "dashboard";
+type View = "chat" | "docs" | "dashboard" | "admin";
 
 interface Message {
   role: "user" | "assistant";
@@ -137,7 +140,7 @@ const AGENTS = [
 ];
 // === END STOCK AGENT ROUTING ===
 
-const NAV_ITEMS: { view: View; label: string; icon: React.ReactNode }[] = [
+const NAV_ITEMS: { view: View; label: string; superuserOnly?: boolean; icon: React.ReactNode }[] = [
   {
     view: "chat",
     label: "Chat",
@@ -167,9 +170,23 @@ const NAV_ITEMS: { view: View; label: string; icon: React.ReactNode }[] = [
       </svg>
     ),
   },
+  {
+    view: "admin",
+    label: "Admin",
+    superuserOnly: true,
+    icon: (
+      <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+        <circle cx="9" cy="7" r="4" />
+        <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+        <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+      </svg>
+    ),
+  },
 ];
 
 export default function ChatPage() {
+  const router = useRouter();
   const [view, setView] = useState<View>("chat");
   const [iframeUrl, setIframeUrl] = useState<string | null>(null);
   const [iframeLoading, setIframeLoading] = useState(false);
@@ -185,6 +202,14 @@ export default function ChatPage() {
   const [agentId, setAgentId] = useState("general");
   // === END STOCK AGENT ROUTING ===
   const [menuOpen, setMenuOpen] = useState(false);
+
+  // Auth guard — redirect to /login if no valid token
+  useEffect(() => {
+    const token = getAccessToken();
+    if (!token || isTokenExpired(token)) {
+      router.replace("/login");
+    }
+  }, [router]);
 
   // Load persisted histories from localStorage on mount
   useEffect(() => {
@@ -253,8 +278,12 @@ export default function ChatPage() {
     const dashboardBase = process.env.NEXT_PUBLIC_DASHBOARD_URL ?? "http://127.0.0.1:8050";
     const docsBase = process.env.NEXT_PUBLIC_DOCS_URL ?? "http://127.0.0.1:8000";
     if (href.startsWith(dashboardBase)) {
+      const token = getAccessToken();
+      const dashUrl = token
+        ? `${href}${href.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}`
+        : href;
       setView("dashboard");
-      setIframeUrl(href);
+      setIframeUrl(dashUrl);
       setIframeLoading(true);
       setIframeError(false);
     } else if (href.startsWith(docsBase)) {
@@ -286,7 +315,7 @@ export default function ChatPage() {
 
     try {
       const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://127.0.0.1:8181";
-      const res = await fetch(`${backendUrl}/chat/stream`, {
+      const res = await apiFetch(`${backendUrl}/chat/stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -388,11 +417,21 @@ export default function ChatPage() {
     e.target.style.height = `${Math.min(e.target.scrollHeight, 160)}px`;
   };
 
-  const iframeSrc =
-    iframeUrl ??
-    (view === "docs"
-      ? (process.env.NEXT_PUBLIC_DOCS_URL ?? "http://127.0.0.1:8000")
-      : (process.env.NEXT_PUBLIC_DASHBOARD_URL ?? "http://127.0.0.1:8050"));
+  // For the dashboard and admin, append ?token=<jwt> so the Dash app can
+  // validate the user without cross-origin localStorage access.  Docs
+  // iframes don't need authentication, so they receive the URL unchanged.
+  const iframeSrc = (() => {
+    const docsBase = process.env.NEXT_PUBLIC_DOCS_URL ?? "http://127.0.0.1:8000";
+    const dashBase = process.env.NEXT_PUBLIC_DASHBOARD_URL ?? "http://127.0.0.1:8050";
+    if (view === "docs") return iframeUrl ?? docsBase;
+    // Dashboard / Admin — attach the access token as a query parameter
+    const defaultUrl = view === "admin" ? `${dashBase}/admin/users` : dashBase;
+    const base = iframeUrl ?? defaultUrl;
+    const token = getAccessToken();
+    if (!token) return base;
+    const sep = base.includes("?") ? "&" : "?";
+    return `${base}${sep}token=${encodeURIComponent(token)}`;
+  })();
 
   return (
     <div className="flex flex-col h-screen bg-gray-50 font-sans">
@@ -429,7 +468,7 @@ export default function ChatPage() {
             /* === END STOCK AGENT ROUTING === */
           ) : (
             <span className="ml-4 text-sm font-medium text-gray-500">
-              {view === "docs" ? "Documentation" : "Dashboard"}
+              {view === "docs" ? "Documentation" : view === "admin" ? "Admin" : "Dashboard"}
             </span>
           )}
         </div>
@@ -470,6 +509,20 @@ export default function ChatPage() {
               Clear
             </button>
           )}
+
+          {/* Logout */}
+          <button
+            onClick={() => { clearTokens(); router.replace("/login"); }}
+            title="Sign out"
+            className="flex items-center gap-1.5 text-sm text-gray-400 hover:text-gray-700 transition-colors px-3 py-1.5 rounded-lg hover:bg-gray-100"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+              <polyline points="16 17 21 12 16 7" />
+              <line x1="21" y1="12" x2="9" y2="12" />
+            </svg>
+            Sign out
+          </button>
         </div>
       </header>
 
@@ -600,7 +653,7 @@ export default function ChatPage() {
           <iframe
             src={iframeSrc}
             className="w-full h-full border-0"
-            title={view === "docs" ? "Documentation" : "Dashboard"}
+            title={view === "docs" ? "Documentation" : view === "admin" ? "Admin" : "Dashboard"}
             onLoad={() => setIframeLoading(false)}
             onError={() => { setIframeLoading(false); setIframeError(true); }}
             sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals"
@@ -626,7 +679,9 @@ export default function ChatPage() {
 
         {menuOpen && (
           <div className="absolute bottom-14 right-0 bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden min-w-[160px]">
-            {NAV_ITEMS.map((item, idx) => (
+            {NAV_ITEMS.filter(
+              (item) => !item.superuserOnly || getRoleFromToken() === "superuser"
+            ).map((item, idx) => (
               <div key={item.view}>
                 {idx > 0 && <div className="border-t border-gray-100" />}
                 <button

@@ -51,7 +51,7 @@
   },
   "TCS.NS": {
     "ticker": "TCS.NS",
-    "last_fetch_date": "2026-02-23",
+    "last_fetch_date": "2026-02-24",
     "total_rows": 2471,
     "date_range": {
       "start": "2016-02-23",
@@ -61,7 +61,7 @@
   },
   "INFY.NS": {
     "ticker": "INFY.NS",
-    "last_fetch_date": "2026-02-23",
+    "last_fetch_date": "2026-02-24",
     "total_rows": 2471,
     "date_range": {
       "start": "2016-02-23",
@@ -78,5 +78,15 @@
       "end": "2026-02-23"
     },
     "file_path": "/Users/abhaysingh/Documents/ai-agent-ui/data/raw/HCLTECH.NS_raw.parquet"
+  },
+  "BEL.NS": {
+    "ticker": "BEL.NS",
+    "last_fetch_date": "2026-02-24",
+    "total_rows": 2471,
+    "date_range": {
+      "start": "2016-02-24",
+      "end": "2026-02-24"
+    },
+    "file_path": "/Users/abhaysingh/Documents/ai-agent-ui/data/raw/BEL.NS_raw.parquet"
   }
 }

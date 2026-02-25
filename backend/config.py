@@ -44,6 +44,13 @@ class Settings(BaseSettings):
             may run before the request is abandoned.  Applied to both the
             synchronous ``POST /chat`` endpoint and the streaming
             ``POST /chat/stream`` endpoint.  Defaults to ``900``.
+        jwt_secret_key: Secret used to sign and verify JWT tokens.  Must be
+            at least 32 random characters.  Maps to ``JWT_SECRET_KEY``.
+            Generate with ``python -c "import secrets; print(secrets.token_hex(32))"``.
+        access_token_expire_minutes: Lifetime of an access token in minutes.
+            Defaults to ``60``.
+        refresh_token_expire_days: Lifetime of a refresh token in days.
+            Defaults to ``7``.
     """
 
     groq_api_key: str = ""
@@ -52,6 +59,13 @@ class Settings(BaseSettings):
     log_level: str = "DEBUG"
     log_to_file: bool = True
     agent_timeout_seconds: int = 900
+
+    # Auth / JWT settings — required for the authentication module.
+    # JWT_SECRET_KEY must be at least 32 random characters.  Generate with:
+    #   python -c "import secrets; print(secrets.token_hex(32))"
+    jwt_secret_key: str = ""
+    access_token_expire_minutes: int = 60
+    refresh_token_expire_days: int = 7
 
     # Read from .env in the working directory; silently skip if absent.
     # Real environment variables always take precedence over .env values.

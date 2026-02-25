@@ -43,6 +43,7 @@ nav:
   - Backend:
       - Overview: backend/overview.md
       - API Reference: backend/api.md
+      - Auth & Users: backend/auth.md
       - Agents: backend/agents.md
       - Tools: backend/tools.md
       - Configuration: backend/config.md

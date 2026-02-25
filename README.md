@@ -18,18 +18,22 @@ A fullstack agentic chat application powered by LangChain, FastAPI, and Next.js.
 ## Quick Start
 
 ```bash
-# 1. Set API keys
-export GROQ_API_KEY=...
-export SERPAPI_API_KEY=...        # optional — needed for web search
+# 1. Set required secrets in backend/.env
+cat > backend/.env <<EOF
+GROQ_API_KEY=<your-groq-key>
+JWT_SECRET_KEY=$(python -c "import secrets; print(secrets.token_hex(32))")
+ADMIN_EMAIL=admin@example.com
+ADMIN_PASSWORD=Admin1234
+EOF
 
 # 2. Create the frontend env file
 cp frontend/.env.local.example frontend/.env.local
 
-# 3. Start everything
+# 3. Start everything (creates Iceberg tables + seeds superuser on first run)
 ./run.sh start
 
-# 4. Open the chat
-open http://localhost:3000
+# 4. Log in and open the chat
+open http://localhost:3000/login
 ```
 
 Stop all services: `./run.sh stop` · Status: `./run.sh status`
@@ -371,8 +375,15 @@ ai-agent-ui/
 | Package | Role |
 |---------|------|
 | Dash 4 | Web framework |
-| dash-bootstrap-components | DARKLY theme |
+| dash-bootstrap-components | FLATLY theme |
 | Plotly | Charts |
+
+### Auth
+| Package | Role |
+|---------|------|
+| python-jose | JWT (HS256) signing and verification |
+| passlib + bcrypt 4 | Password hashing (bcrypt cost 12) |
+| pyiceberg[sql-sqlite] | Apache Iceberg storage (SQLite catalog) |
 
 ---
 
@@ -380,13 +391,18 @@ ai-agent-ui/
 
 | Variable | Where | Required | Default |
 |----------|-------|----------|---------|
-| `GROQ_API_KEY` | shell / `backend/.env` | Yes | — |
-| `SERPAPI_API_KEY` | shell / `backend/.env` | No | `search_web` returns error string |
+| `GROQ_API_KEY` | `backend/.env` | Yes | — |
+| `JWT_SECRET_KEY` | `backend/.env` | Yes | — (min 32 chars) |
+| `ADMIN_EMAIL` | `backend/.env` | First run only | — |
+| `ADMIN_PASSWORD` | `backend/.env` | First run only | — |
+| `SERPAPI_API_KEY` | `backend/.env` | No | `search_web` returns error string |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | `backend/.env` | No | `60` |
+| `REFRESH_TOKEN_EXPIRE_DAYS` | `backend/.env` | No | `7` |
 | `NEXT_PUBLIC_BACKEND_URL` | `frontend/.env.local` | No | `http://127.0.0.1:8181` |
 | `NEXT_PUBLIC_DASHBOARD_URL` | `frontend/.env.local` | No | `http://127.0.0.1:8050` |
 | `NEXT_PUBLIC_DOCS_URL` | `frontend/.env.local` | No | `http://127.0.0.1:8000` |
-| `LOG_LEVEL` | shell / `backend/.env` | No | `DEBUG` |
-| `LOG_TO_FILE` | shell / `backend/.env` | No | `true` |
+| `LOG_LEVEL` | `backend/.env` | No | `DEBUG` |
+| `LOG_TO_FILE` | `backend/.env` | No | `true` |
 
 ---
 
@@ -425,6 +441,4 @@ Also set `ANTHROPIC_API_KEY` instead of `GROQ_API_KEY`.
 | Issue | Notes |
 |-------|-------|
 | **Groq LLM** | Claude Sonnet 4.6 is the intended model; Groq is a temporary workaround |
-| **No streaming** | Full response appears after the complete agentic loop; SSE/WebSockets would improve perceived speed |
-| **No request timeout** | A hung backend will block the UI until the browser times out |
-| **iframe cross-origin** | Dashboard and Docs are embedded via `<iframe>`; JavaScript bridge calls across frames are not supported (not needed) |
+| **`SERPAPI_API_KEY` required for web search** | `search_web` returns an error string without it; free tier at serpapi.com |

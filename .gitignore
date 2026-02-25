@@ -53,3 +53,9 @@ charts/forecasts/
 
 # MkDocs static build output
 site/
+
+# Auth module — Iceberg catalog + warehouse (runtime-generated)
+data/iceberg/
+
+# Iceberg catalog config (contains absolute local paths)
+.pyiceberg.yaml

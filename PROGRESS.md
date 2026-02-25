@@ -2,6 +2,333 @@
 
 ---
 
+# Session: Feb 25, 2026 — Auth deployment fixes (JWT env propagation + dashboard dotenv)
+
+## What We Fixed
+
+Two runtime bugs that prevented the auth module from working end-to-end after first deploy.
+
+### Bug 1 — `auth/dependencies.py` couldn't find `JWT_SECRET_KEY`
+
+**Root cause:** `auth/dependencies.py` reads `JWT_SECRET_KEY` directly from `os.environ`.
+Pydantic `Settings` reads `backend/.env` and populates its own model fields — but it does **not**
+write those values back to `os.environ`.  So when uvicorn started the backend without `JWT_SECRET_KEY`
+explicitly exported in the shell, every auth endpoint raised `ValueError: JWT_SECRET_KEY must be at
+least 32 characters`.
+
+**Fix:** Added 6 lines in `backend/main.py` (module-level startup block) that copy the three JWT
+settings loaded by Pydantic into `os.environ` if they aren't already there:
+
+```python
+if settings.jwt_secret_key and "JWT_SECRET_KEY" not in os.environ:
+    os.environ["JWT_SECRET_KEY"] = settings.jwt_secret_key
+if "ACCESS_TOKEN_EXPIRE_MINUTES" not in os.environ:
+    os.environ["ACCESS_TOKEN_EXPIRE_MINUTES"] = str(settings.access_token_expire_minutes)
+if "REFRESH_TOKEN_EXPIRE_DAYS" not in os.environ:
+    os.environ["REFRESH_TOKEN_EXPIRE_DAYS"] = str(settings.refresh_token_expire_days)
+```
+
+### Bug 2 — Dashboard iframe showed "Authentication required" even with a valid token
+
+**Root cause:** The Dash dashboard is a **separate process** from the backend.  `dashboard/callbacks.py`
+`_validate_token()` reads `JWT_SECRET_KEY` from `os.environ` directly.  The dashboard process
+inherited only the shell's environment — it never loaded `backend/.env`, so `JWT_SECRET_KEY` was
+always empty, and `_validate_token()` returned `None` for every token.
+
+**Fix:** Added a `_load_dotenv()` helper in `dashboard/app.py` (executed at module import time, before
+any Dash or callback imports) that reads both `<project-root>/.env` and `backend/.env` into
+`os.environ`, using the same pattern as `scripts/seed_admin.py`.  Existing env vars are never
+overwritten, so explicit shell exports still take precedence.
+
+### Files changed
+
+| File | Change |
+|---|---|
+| `backend/main.py` | Added JWT env export block in module-level startup |
+| `dashboard/app.py` | Added `_load_dotenv()` helper + calls for `.env` and `backend/.env` |
+| `backend/.env` | Created — contains `JWT_SECRET_KEY`, `ACCESS_TOKEN_EXPIRE_MINUTES`, `REFRESH_TOKEN_EXPIRE_DAYS` (gitignored) |
+
+### Superuser bootstrapped
+
+- Email: `asequitytrading@gmail.com`
+- Seeded via `python scripts/seed_admin.py` with `ADMIN_EMAIL` + `ADMIN_PASSWORD` passed as env vars
+- `backend/.env` generated with a 64-char hex `JWT_SECRET_KEY`
+
+---
+
+# Session: Feb 24, 2026 — Auth Module Phase 1 (Iceberg Foundation)
+
+## What We Built
+
+Implemented Phase 1 of the authentication module: Apache Iceberg storage layer.
+
+### Installed packages
+
+Added to `demoenv` and frozen to `backend/requirements.txt`:
+- `pyiceberg[sql-sqlite]` 0.10.0 — SqlCatalog + SQLite-backed local warehouse
+- `python-jose[cryptography]` 3.5.0 — JWT (Phase 2)
+- `passlib[bcrypt]` 1.7.4 + `bcrypt` 5.0.0 — password hashing (Phase 2)
+
+### Files created
+
+| File | Purpose |
+|---|---|
+| `.pyiceberg.yaml` | Iceberg catalog config (gitignored) — absolute warehouse path |
+| `.pyiceberg.yaml.example` | Template committed to git |
+| `auth/__init__.py` | Package init with module-level docstring |
+| `auth/create_tables.py` | Idempotent one-time init script for `auth.users` + `auth.audit_log` |
+| `auth/repository.py` | `IcebergUserRepository` — full CRUD + audit log |
+
+### Files modified
+
+- `.gitignore` — added `data/iceberg/` and `.pyiceberg.yaml`
+- `backend/requirements.txt` — re-frozen with new packages
+
+### Key technical notes
+
+- PyIceberg 0.10 `table.append()` requires a `pa.Table`, not a `pa.RecordBatch`.
+- `TimestampType` in PyIceberg maps to `pa.timestamp("us")` (microseconds, no timezone). Naive UTC datetimes must be passed — timezone-aware datetimes are normalised before storage.
+- Timestamps are returned as timezone-aware UTC `datetime` objects to callers.
+- Copy-on-write update pattern: read full table as pandas DataFrame, mutate, overwrite.
+- Audit log is append-only; sorted newest-first in `list_audit_events()`.
+
+### Smoke test results
+
+All 7 repository operations verified: create, get_by_email, get_by_id, list_all, update, append_audit_event, delete (soft).
+
+---
+
+# Session: Feb 24, 2026 — Auth Module Phase 2 (AuthService + Models + Dependencies)
+
+## What We Built
+
+### Files created
+
+| File | Purpose |
+|---|---|
+| `auth/models.py` | Pydantic request/response models for all auth + user endpoints |
+| `auth/service.py` | `AuthService` — bcrypt hashing, JWT create/decode, deny-list |
+| `auth/dependencies.py` | FastAPI dependency functions: `get_current_user`, `superuser_only` |
+
+### Files modified
+
+| File | Change |
+|---|---|
+| `backend/config.py` | Added `jwt_secret_key`, `access_token_expire_minutes`, `refresh_token_expire_days` to `Settings` |
+| `backend/requirements.txt` | Re-frozen: `bcrypt==4.0.1`, `email-validator==2.3.0`, `dnspython` |
+
+### Key technical notes
+
+- `passlib 1.7.4` + `bcrypt 5.0` incompatible (bcrypt 5.0 rejects >72-byte passwords during passlib's detection routine). Downgraded to `bcrypt==4.0.1`.
+- `EmailStr` in Pydantic v2 requires `email-validator` package — installed separately.
+- `AuthService` is instantiated once per process (via `@lru_cache` in `dependencies.py`) so the in-memory refresh-token deny-list persists across requests.
+- `_get_service()` reads `JWT_SECRET_KEY`, `ACCESS_TOKEN_EXPIRE_MINUTES`, `REFRESH_TOKEN_EXPIRE_DAYS` from env vars — decoupled from `backend/config.py` so `auth/` can be imported independently of the backend.
+- JWT payload: `sub`, `email`, `role`, `type` (`access`/`refresh`), `jti`, `iat`, `exp`.
+- `superuser_only` composes on top of `get_current_user` — returns HTTP 403 if role ≠ `superuser`.
+
+### Smoke test results
+
+All tests passed: hash/verify, access token, refresh token, wrong-type rejection, deny-list revocation, password strength validation, Pydantic model construction, dependency module import.
+
+---
+
+# Session: Feb 24, 2026 — Auth Module Phase 3 (API Router + main.py wiring)
+
+## What We Built
+
+### Files created
+
+| File | Purpose |
+|---|---|
+| `auth/api.py` | `create_auth_router()` — all 12 auth + user endpoints |
+
+### Files modified
+
+| File | Change |
+|---|---|
+| `backend/main.py` | Project root added to `sys.path`; `create_auth_router()` mounted via `app.include_router()` |
+| `backend/requirements.txt` | Re-frozen: `python-multipart==0.0.20` (OAuth2 form support) |
+
+### Endpoints added
+
+| Method | Path | Auth |
+|---|---|---|
+| POST | `/auth/login` | Public |
+| POST | `/auth/login/form` | Public (OAuth2 form for OpenAPI UI) |
+| POST | `/auth/refresh` | Refresh token (rotates on use) |
+| POST | `/auth/logout` | Access token |
+| POST | `/auth/password-reset/request` | Access token (self only) |
+| POST | `/auth/password-reset/confirm` | Access token (self only) |
+| GET | `/users` | Superuser |
+| POST | `/users` | Superuser |
+| GET | `/users/{user_id}` | Superuser |
+| PATCH | `/users/{user_id}` | Superuser |
+| DELETE | `/users/{user_id}` | Superuser (soft delete; self-delete blocked) |
+| GET | `/admin/audit-log` | Superuser |
+
+### Key technical notes
+
+- `python-multipart` required for `OAuth2PasswordRequestForm` (form endpoint).
+- Refresh token rotation on every `/auth/refresh` call — old token is immediately revoked.
+- Password reset token is returned in the response body for development; production should replace with email delivery.
+- `create_auth_router()` is a factory (not a module-level router) so it can be called after `sys.path` is fully configured.
+- `_get_repo()` uses `@lru_cache` for singleton — avoids repeated `os.chdir` calls.
+
+### End-to-end test results
+
+13/13 scenarios passed: login, wrong password → 401, create user, list users, get user, patch user, general user blocked → 403, token refresh, revoked refresh → 401, logout, delete user, audit log events.
+
+---
+
+# Session: Feb 25, 2026 — Auth Module Phase 6 (Prompt 7: Hardening + Docs)
+
+## What We Built
+
+Prompt 7 (Plan Phase 6): seed script, run.sh init, auth docs, mkdocs build.
+
+### Files created
+
+| File | Purpose |
+|---|---|
+| `scripts/seed_admin.py` | Idempotent superuser bootstrap from `ADMIN_EMAIL` + `ADMIN_PASSWORD` env vars; loads `.env` without extra deps |
+| `docs/backend/auth.md` | Full MkDocs auth documentation page |
+
+### Files modified
+
+| File | Change |
+|---|---|
+| `run.sh` | Added `_init_auth()` function; called at start of `do_start()` — creates Iceberg tables + seeds admin on first run only |
+| `mkdocs.yml` | Added "Auth & Users: backend/auth.md" to Backend nav section |
+
+### Password strength validation
+
+Already implemented in `auth/service.py` as `AuthService.validate_password_strength()` (min 8 chars, at least one digit) and called in `auth/api.py` for `POST /users` and `POST /auth/password-reset/confirm`. No change needed.
+
+### Security checklist verified
+
+- [x] `.env` in `.gitignore`
+- [x] `data/iceberg/` in `.gitignore`
+- [x] JWT secret min-32-char guard in `AuthService.__init__`
+- [x] No plaintext passwords in any log format strings
+- [x] All admin endpoints use `superuser_only` dependency
+- [x] Password reset tokens single-use + 30-minute expiry
+- [x] `mkdocs build` passes — documentation built in 0.86 seconds
+
+### `scripts/seed_admin.py` features
+
+- Loads `.env` from project root + `backend/.env` without requiring `python-dotenv`
+- Validates ADMIN_EMAIL, ADMIN_PASSWORD, JWT_SECRET_KEY before any DB operations
+- Validates password strength (min 8 chars, at least one digit)
+- Validates JWT_SECRET_KEY length (≥ 32 chars)
+- Idempotent: exits 0 with info message if user already exists
+- Logs all actions via `logging` (no bare `print()`)
+- Full module + function docstrings (pre-push hook compliant)
+
+### `run.sh` `_init_auth()` behaviour
+
+- Triggered by `./run.sh start` only when `data/iceberg/catalog.db` does not exist
+- Requires `JWT_SECRET_KEY` (exits 1 with instructions if missing)
+- Creates tables via `auth/create_tables.py`
+- Seeds admin via `scripts/seed_admin.py` if `ADMIN_EMAIL` + `ADMIN_PASSWORD` are set
+- Warns (does not fail) if admin env vars are absent
+
+## What's Next
+
+Auth module is **complete** (Phases 1–6).
+
+### End-to-end verification checklist (manual, requires services running)
+
+- [ ] `python auth/create_tables.py` — creates both Iceberg tables
+- [ ] `python scripts/seed_admin.py` — creates initial superuser
+- [ ] `POST /auth/login` — returns JWT pair for valid credentials
+- [ ] `GET /users` — returns 403 for a general user token
+- [ ] Next.js `/login` page — authenticates and redirects to chat
+- [ ] Unauthenticated `/` — redirects to `/login`
+- [ ] Dash dashboard — shows unauthenticated notice without token
+- [ ] `/admin/users` — shows 403 notice for general user, full UI for superuser
+- [ ] Add user modal — creates user, table refreshes
+- [ ] Deactivate button — soft-deletes user, status badge updates
+- [ ] Audit log tab — shows all events
+- [ ] Change Password modal — updates password via reset flow
+- [ ] `mkdocs build` passes ✓
+
+---
+
+# Session: Feb 25, 2026 — Auth Module Phase 5 + Prompt 6 (Admin UI)
+
+## What We Built
+
+Implemented Prompt 6 (Plan Phase 5): `/admin/users` Dash page with full user
+management, plus the global Change Password modal accessible from the NAVBAR.
+
+### Files modified
+
+| File | Change |
+|---|---|
+| `dashboard/layouts.py` | Added `admin_users_layout()` (two-tab admin page); updated NAVBAR with "Admin" link + "Change Password" button |
+| `dashboard/callbacks.py` | Added `_admin_forbidden()`, `_resolve_token()`, `_api_call()`, `_build_users_table()`, `_build_audit_table()` helpers; added 7 new callbacks (load_users_table, load_audit_log, toggle_user_modal, save_user, toggle_user_activation, toggle_change_password_modal, save_new_password); added `ALL` to top-level import |
+| `dashboard/app.py` | Imported `_admin_forbidden` + `admin_users_layout`; added `/admin/users` route with superuser role check; added global change-password modal to `app.layout` |
+| `frontend/app/page.tsx` | Added `"admin"` to `View` type; added Admin nav item (superuserOnly) to NAV_ITEMS; updated `iframeSrc` to handle admin view (uses `/admin/users` default URL with token); filtered NAV_ITEMS by `getRoleFromToken()`; updated breadcrumb + iframe title for admin view; imported `getRoleFromToken` |
+
+### Key features delivered
+
+- **Users tab**: DataTable of all accounts (name, email, role badge, status badge, created, last login) with per-row Edit and Deactivate/Reactivate buttons
+- **Add/Edit modal**: full form (name, email, password for new users, role, is-active toggle for edits); inline error messages; calls `POST /users` or `PATCH /users/{id}`
+- **Deactivate/Reactivate**: single-click toggle; calls `DELETE /users/{id}` (deactivate) or `PATCH /users/{id}` with `is_active: true` (reactivate)
+- **Audit Log tab**: full audit event table (timestamp, event type, actor, target, metadata)
+- **Change Password modal**: global, accessible from NAVBAR; validates locally; calls `POST /auth/password-reset/request` + `POST /auth/password-reset/confirm`
+- **Access control**: Admin page shows 403 notice for non-superusers; Admin nav item only visible for superusers in the Next.js frontend
+- **Token propagation**: admin iframe (`/admin/users`) gets `?token=<jwt>` automatically, same as the dashboard
+
+### Verification
+
+- `python -c "import dashboard.app"` — no errors ✓
+- `npx tsc --noEmit` — 0 TypeScript errors ✓
+- No bare `print()` in dashboard/ ✓
+
+## What's Next (Prompt 7)
+
+Phase 6: `scripts/seed_admin.py`, password strength validation in `auth/api.py`, security hardening checklist, docs update (`docs/backend/auth.md`), MkDocs build.
+
+---
+
+# Session: Feb 25, 2026 — Auth Module Phase 4 (Next.js Frontend Auth)
+
+## What We Built
+
+### Files created
+
+| File | Purpose |
+|---|---|
+| `frontend/lib/auth.ts` | Token helpers: `getAccessToken`, `setTokens`, `clearTokens`, `isTokenExpired`, `getRoleFromToken`, `refreshAccessToken` |
+| `frontend/lib/apiFetch.ts` | Authenticated fetch wrapper — injects Bearer token, auto-refreshes on expiry, redirects to `/login` on 401 |
+| `frontend/app/login/page.tsx` | Login page — email + password form, stores tokens on success, redirects to `/` |
+
+### Files modified
+
+| File | Change |
+|---|---|
+| `frontend/app/page.tsx` | Auth guard on mount (redirects to `/login` if no valid token); `fetch → apiFetch` in `sendMessage`; logout button in header |
+
+### Key design decisions
+
+- JWT payload decoded client-side (no library) — only reads `exp` claim for expiry check with 30s clock-skew buffer.
+- `refreshAccessToken` uses token rotation — stores new access + refresh tokens on success, clears tokens on failure.
+- `apiFetch` is a drop-in replacement for `fetch` — same signature, returns `Response`.
+- Logout: `clearTokens()` + `router.replace("/login")` — no server call needed for the access token (short TTL); the refresh token's deny-list entry is not written (acceptable: call `/auth/logout` from a dedicated profile page in a future phase).
+- Login page redirects away immediately if a valid token already exists (covers browser back-button scenarios).
+- Generic error message on login failure: "Invalid email or password" — never reveals which field was wrong.
+
+### TypeScript / lint status
+
+`npx tsc --noEmit` — 0 errors. ESLint — 0 errors, 1 pre-existing warning (unrelated to this work).
+
+## What's Next (Prompt 5)
+
+Dash token store, `_validate_token()` in `dashboard/callbacks.py`, callback guards, token propagation via `?token=` query param.
+
+---
+
 # Session: Feb 24, 2026 — Streaming, timeout, iframe cross-origin, dashboard theme
 
 ## What We Built
@@ -93,7 +420,7 @@ Currency mapping: `USD→$`, `INR→₹`, `GBP→£`, `EUR→€`, `JPY/CNY→¥
 
 ## Commit
 
-Pending.
+`5c017f2` — fix: dynamic currency symbols for multi-market stocks
 
 ---
 

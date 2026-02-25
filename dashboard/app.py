@@ -21,6 +21,8 @@ object) for deployment with gunicorn::
 import logging
 import sys
 from pathlib import Path
+from typing import Optional
+from urllib.parse import parse_qs
 
 # ---------------------------------------------------------------------------
 # Add project root to sys.path so backend.tools.* can be imported later
@@ -30,13 +32,46 @@ _PROJECT_ROOT = Path(__file__).parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+# ---------------------------------------------------------------------------
+# Load .env files into os.environ so JWT_SECRET_KEY and other backend
+# settings are available to callbacks even when not exported in the shell.
+# Mirrors the same pattern used in scripts/seed_admin.py.
+# ---------------------------------------------------------------------------
+import os as _os
+
+
+def _load_dotenv(path: Path) -> None:
+    """Parse key=value pairs from *path* into os.environ (no-op if absent)."""
+    if not path.exists():
+        return
+    with open(path, "r", encoding="utf-8") as _fh:
+        for _line in _fh:
+            _line = _line.strip()
+            if not _line or _line.startswith("#") or "=" not in _line:
+                continue
+            _k, _, _v = _line.partition("=")
+            _k = _k.strip()
+            _v = _v.strip().strip("'\"")
+            if _k and _k not in _os.environ:
+                _os.environ[_k] = _v
+
+
+_load_dotenv(_PROJECT_ROOT / ".env")
+_load_dotenv(_PROJECT_ROOT / "backend" / ".env")
+
 import dash
 import dash_bootstrap_components as dbc
-from dash import Input, Output, dcc, html
+from dash import Input, Output, State, dcc, html
 
-from dashboard.callbacks import register_callbacks
+from dashboard.callbacks import (
+    _admin_forbidden,
+    _unauth_notice,
+    _validate_token,
+    register_callbacks,
+)
 from dashboard.layouts import (
     NAVBAR,
+    admin_users_layout,
     analysis_layout,
     compare_layout,
     forecast_layout,
@@ -99,6 +134,10 @@ app.layout = html.Div(
         # Analysis / Forecast dropdowns can pre-select it on navigation
         dcc.Store(id="nav-ticker-store", data=None),
 
+        # Auth store — persists the JWT access token received via ?token= query
+        # param from the Next.js iframe src so callbacks can validate requests
+        dcc.Store(id="auth-token-store", storage_type="local"),
+
         # Top navigation bar (defined in layouts.py)
         NAVBAR,
 
@@ -114,6 +153,58 @@ app.layout = html.Div(
             interval=5 * 60 * 1000,   # milliseconds
             n_intervals=0,
         ),
+
+        # ── Global change-password modal (accessible from NAVBAR on any page) ──
+        dbc.Modal(
+            id="change-password-modal",
+            is_open=False,
+            backdrop="static",
+            children=[
+                dbc.ModalHeader(
+                    dbc.ModalTitle("Change Password"),
+                    close_button=False,
+                ),
+                dbc.ModalBody([
+                    html.Div(id="change-pw-error", className="text-danger small mb-2"),
+                    dbc.Row([
+                        dbc.Col([
+                            dbc.Label("New Password"),
+                            dbc.Input(
+                                id="change-pw-new",
+                                type="password",
+                                placeholder="Min 8 chars, at least one digit",
+                            ),
+                        ]),
+                    ], className="mb-3"),
+                    dbc.Row([
+                        dbc.Col([
+                            dbc.Label("Confirm New Password"),
+                            dbc.Input(
+                                id="change-pw-confirm",
+                                type="password",
+                                placeholder="Repeat new password",
+                            ),
+                        ]),
+                    ], className="mb-3"),
+                ]),
+                dbc.ModalFooter([
+                    dbc.Button(
+                        "Cancel",
+                        id="change-pw-cancel-btn",
+                        color="secondary",
+                        outline=True,
+                        size="sm",
+                        className="me-2",
+                    ),
+                    dbc.Button(
+                        "Save",
+                        id="change-pw-save-btn",
+                        color="primary",
+                        size="sm",
+                    ),
+                ]),
+            ],
+        ),
     ]
 )
 
@@ -128,23 +219,54 @@ register_callbacks(app)
 @app.callback(
     Output("page-content", "children"),
     Input("url", "pathname"),
+    Input("url", "search"),
+    State("auth-token-store", "data"),
 )
-def display_page(pathname: str) -> html.Div:
+def display_page(
+    pathname: str,
+    search: Optional[str],
+    stored_token: Optional[str],
+) -> html.Div:
     """Route the current URL pathname to the appropriate page layout.
+
+    Checks for a valid JWT before rendering any page.  The token is read
+    first from the ``?token=`` query parameter (takes precedence so a
+    freshly issued token from the Next.js frontend is always accepted),
+    then from the persistent ``auth-token-store`` client-side store.
 
     Args:
         pathname: Current URL path provided by :class:`~dash.dcc.Location`.
+        search: Query string portion of the URL (e.g. ``"?token=xxx"``).
+        stored_token: JWT string previously persisted in ``localStorage``
+            via the ``auth-token-store``.
 
     Returns:
-        The page-level :class:`~dash.html.Div` layout for the matched route.
+        The page-level :class:`~dash.html.Div` layout for the matched route,
+        or the unauthenticated notice if the token is missing or invalid.
         Defaults to :func:`~dashboard.layouts.home_layout` for unknown paths.
     """
+    # Resolve token — prefer URL param (freshest), fall back to localStorage
+    token: Optional[str] = stored_token
+    if search:
+        qs = parse_qs(search.lstrip("?"))
+        url_token = qs.get("token", [None])[0]
+        if url_token:
+            token = url_token
+
+    if _validate_token(token) is None:
+        return _unauth_notice()
+
     if pathname == "/analysis":
         return analysis_layout()
     if pathname == "/forecast":
         return forecast_layout()
     if pathname == "/compare":
         return compare_layout()
+    if pathname == "/admin/users":
+        payload = _validate_token(token)
+        if payload is None or payload.get("role") != "superuser":
+            return _admin_forbidden()
+        return admin_users_layout()
     return home_layout()
 
 
