@@ -20,6 +20,7 @@ import json
 import logging
 import math
 import os
+import re
 import sys
 from datetime import date
 from pathlib import Path
@@ -55,6 +56,74 @@ _REGISTRY_PATH = _DATA_METADATA / "stock_registry.json"
 # ---------------------------------------------------------------------------
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Input validation helpers
+# ---------------------------------------------------------------------------
+
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_UNSAFE_SQL = re.compile(
+    r"(--|/\*|\*/|';\s*|\";\s*|union\s+select|drop\s+table|or\s+1\s*=\s*1|or\s+'1'\s*=\s*'1')",
+    re.IGNORECASE,
+)
+_UNSAFE_XSS = re.compile(r"(javascript:|vbscript:|data:)", re.IGNORECASE)
+
+
+def _is_valid_email(value: str) -> bool:
+    """Return True if *value* looks like a valid email address.
+
+    Args:
+        value: String to check.
+
+    Returns:
+        ``True`` when the string matches a basic ``user@domain.tld`` pattern.
+    """
+    return bool(_EMAIL_RE.match(value))
+
+
+def _check_input_safety(value: str, field: str, max_len: int = 200) -> Optional[str]:
+    """Return an error string if *value* contains unsafe content, else ``None``.
+
+    Checks performed (in order): max length, HTML characters, null bytes,
+    XSS-style URI schemes, and common SQL injection sequences.
+
+    Args:
+        value: The user-supplied string to validate.
+        field: Human-readable field label used in error messages.
+        max_len: Maximum allowed character length (default 200).
+
+    Returns:
+        An error message string when a check fails, or ``None`` when the
+        value is safe.
+    """
+    if len(value) > max_len:
+        return f"{field} is too long (max {max_len} characters)."
+    if "<" in value or ">" in value:
+        return f"{field} must not contain HTML characters."
+    if "\x00" in value:
+        return f"{field} contains invalid characters."
+    if _UNSAFE_XSS.search(value):
+        return f"{field} contains unsafe content."
+    if _UNSAFE_SQL.search(value):
+        return f"{field} contains unsafe content."
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Market classification helper
+# ---------------------------------------------------------------------------
+
+
+def _get_market(ticker: str) -> str:
+    """Return ``'india'`` for NSE/BSE tickers (.NS / .BO), ``'us'`` otherwise.
+
+    Args:
+        ticker: Stock ticker symbol.
+
+    Returns:
+        ``'india'`` or ``'us'``.
+    """
+    return "india" if ticker.upper().endswith((".NS", ".BO")) else "us"
 
 
 # ---------------------------------------------------------------------------
@@ -1082,7 +1151,7 @@ def register_callbacks(app) -> None:
 
     @app.callback(
         [
-            Output("stock-cards-container", "children"),
+            Output("stock-raw-data-store", "data"),
             Output("home-registry-dropdown", "options"),
         ],
         [
@@ -1091,25 +1160,24 @@ def register_callbacks(app) -> None:
         ],
     )
     def refresh_stock_cards(n_intervals, pathname):
-        """Rebuild stock cards from the registry on page load or interval tick.
+        """Load stock data from the registry and store raw dicts for rendering.
+
+        Fires on page load or interval tick.  Stores serialisable dicts so that
+        ``render_home_cards`` can filter and paginate without repeating I/O.
 
         Args:
             n_intervals: Auto-refresh interval counter.
-            pathname: Current URL path (cards only shown on home).
+            pathname: Current URL path.
 
         Returns:
-            Tuple of (list of card columns, dropdown options list).
+            Tuple of (list of raw card data dicts, dropdown options list).
         """
         registry = _load_reg_cb()
         if not registry:
-            empty = [dbc.Col(
-                html.P("No stocks saved yet. Analyse a stock via the chat interface first.",
-                       className="text-muted"),
-            )]
-            return empty, []
+            return [], []
 
         dropdown_options = [{"label": t, "value": t} for t in sorted(registry.keys())]
-        cols = []
+        card_data = []
 
         for ticker, entry in sorted(registry.items()):
             last_updated = entry.get("last_fetch_date", "Unknown")
@@ -1131,9 +1199,9 @@ def register_callbacks(app) -> None:
                 logger.warning("Card data error for %s: %s", ticker, exc)
 
             # Sentiment from forecast parquet
-            sentiment     = "Unknown"
-            sent_color    = "secondary"
-            sent_emoji    = "⚪"
+            sentiment  = "Unknown"
+            sent_color = "secondary"
+            sent_emoji = "⚪"
             try:
                 forecast_files = list(_DATA_FORECASTS.glob(f"{ticker}_*m_forecast.parquet"))
                 if forecast_files:
@@ -1141,55 +1209,198 @@ def register_callbacks(app) -> None:
                     fc_df  = pd.read_parquet(latest, engine="pyarrow")
                     df_raw = _load_raw(ticker)
                     if df_raw is not None and len(fc_df) > 0:
-                        cp   = float(df_raw["Close"].iloc[-1])
-                        fp   = float(fc_df["yhat"].iloc[-1])
-                        pct  = (fp - cp) / cp * 100
+                        cp  = float(df_raw["Close"].iloc[-1])
+                        fp  = float(fc_df["yhat"].iloc[-1])
+                        pct = (fp - cp) / cp * 100
                         if pct > 10:
-                            sentiment, sent_color, sent_emoji = "Bullish",  "success", "🟢"
+                            sentiment, sent_color, sent_emoji = "Bullish", "success", "🟢"
                         elif pct < -10:
-                            sentiment, sent_color, sent_emoji = "Bearish",  "danger",  "🔴"
+                            sentiment, sent_color, sent_emoji = "Bearish", "danger",  "🔴"
                         else:
-                            sentiment, sent_color, sent_emoji = "Neutral",  "warning", "🟡"
+                            sentiment, sent_color, sent_emoji = "Neutral", "warning", "🟡"
             except Exception as exc:
                 logger.warning("Sentiment error for %s: %s", ticker, exc)
 
             # Company name from metadata JSON if available
-            company = ticker
+            company   = ticker
             info_path = _DATA_METADATA / f"{ticker}_info.json"
             if info_path.exists():
                 try:
                     with open(info_path) as fh:
-                        info   = json.load(fh)
+                        info    = json.load(fh)
                         company = info.get("name", ticker) or ticker
                 except Exception:
                     pass
 
+            card_data.append({
+                "ticker":            ticker,
+                "company":           company,
+                "current_price_str": current_price_str,
+                "total_return_str":  total_return_str,
+                "return_color_cls":  return_color_cls,
+                "last_updated":      last_updated,
+                "sentiment":         sentiment,
+                "sent_color":        sent_color,
+                "sent_emoji":        sent_emoji,
+                "market":            _get_market(ticker),
+            })
+
+        return card_data, dropdown_options
+
+    @app.callback(
+        Output("market-filter-store", "data"),
+        Output("filter-india-btn",    "color"),
+        Output("filter-us-btn",       "color"),
+        Output("home-pagination",     "active_page"),
+        Input("filter-india-btn", "n_clicks"),
+        Input("filter-us-btn",    "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def update_market_filter(india_clicks, us_clicks):
+        """Toggle the market filter store between India and US stocks.
+
+        Args:
+            india_clicks: Click count on the India filter button.
+            us_clicks: Click count on the US filter button.
+
+        Returns:
+            Tuple of (market string, india button color, us button color, reset page).
+        """
+        if ctx.triggered_id == "filter-us-btn":
+            return "us", "outline-secondary", "primary", 1
+        return "india", "primary", "outline-secondary", 1
+
+    @app.callback(
+        Output("home-pagination", "active_page", allow_duplicate=True),
+        Input("home-page-size", "value"),
+        prevent_initial_call=True,
+    )
+    def reset_home_page_on_size_change(page_size):
+        """Reset home pagination to page 1 when the page size changes.
+
+        Args:
+            page_size: New page size value from the select dropdown.
+
+        Returns:
+            Integer ``1`` to reset the active page.
+        """
+        return 1
+
+    @app.callback(
+        Output("users-pagination", "active_page"),
+        Input("users-search",    "value"),
+        Input("users-page-size", "value"),
+        prevent_initial_call=True,
+    )
+    def reset_users_page_on_filter(search, page_size):
+        """Reset users pagination to page 1 when search or page size changes.
+
+        Args:
+            search: Current search input value.
+            page_size: New page size value.
+
+        Returns:
+            Integer ``1`` to reset the active page.
+        """
+        return 1
+
+    @app.callback(
+        Output("audit-pagination", "active_page"),
+        Input("audit-search",    "value"),
+        Input("audit-page-size", "value"),
+        prevent_initial_call=True,
+    )
+    def reset_audit_page_on_filter(search, page_size):
+        """Reset audit log pagination to page 1 when search or page size changes.
+
+        Args:
+            search: Current search input value.
+            page_size: New page size value.
+
+        Returns:
+            Integer ``1`` to reset the active page.
+        """
+        return 1
+
+    @app.callback(
+        Output("stock-cards-container", "children"),
+        Output("home-pagination",       "max_value"),
+        Output("home-count-text",       "children"),
+        Input("stock-raw-data-store", "data"),
+        Input("market-filter-store",  "data"),
+        Input("home-pagination",      "active_page"),
+        Input("home-page-size",       "value"),
+    )
+    def render_home_cards(raw_data, market_filter, active_page, page_size):
+        """Filter, paginate, and render stock cards from stored raw data.
+
+        Args:
+            raw_data: List of raw card data dicts from ``stock-raw-data-store``.
+            market_filter: Active market string — ``'india'`` or ``'us'``.
+            active_page: Current pagination page (1-indexed).
+            page_size: Number of cards per page as a string (e.g. ``"10"``).
+
+        Returns:
+            Tuple of (list of card columns, pagination max_value, count text).
+        """
+        PAGE_SIZE = int(page_size or 10)
+        if not raw_data:
+            return (
+                [dbc.Col(html.P(
+                    "No stocks saved yet. Analyse a stock via the chat interface first.",
+                    className="text-muted",
+                ))],
+                1,
+                "",
+            )
+
+        market   = market_filter or "india"
+        page     = active_page or 1
+        filtered = [d for d in raw_data if d.get("market") == market]
+
+        if not filtered:
+            label = "India (.NS / .BO)" if market == "india" else "US"
+            return (
+                [dbc.Col(html.P(f"No {label} stocks saved yet.", className="text-muted"))],
+                1,
+                "",
+            )
+
+        total     = len(filtered)
+        max_pages = max(1, math.ceil(total / PAGE_SIZE))
+        page      = min(page, max_pages)
+        start     = (page - 1) * PAGE_SIZE
+        page_data = filtered[start: start + PAGE_SIZE]
+        count_txt = f"Showing {start + 1}–{min(start + PAGE_SIZE, total)} of {total}"
+
+        cols = []
+        for d in page_data:
             card = html.A(
-                href=f"/analysis?ticker={ticker}",
+                href=f"/analysis?ticker={d['ticker']}",
                 className="text-decoration-none",
                 children=dbc.Card([
                     dbc.CardBody([
                         html.Div([
-                            html.H5(ticker, className="card-title text-info mb-0"),
+                            html.H5(d["ticker"], className="card-title text-info mb-0"),
                             dbc.Badge(
-                                f"{sent_emoji} {sentiment}",
-                                color=sent_color,
+                                f"{d['sent_emoji']} {d['sentiment']}",
+                                color=d["sent_color"],
                                 className="ms-auto",
                             ),
                         ], className="d-flex justify-content-between align-items-center mb-1"),
-                        html.P(company, className="card-subtitle text-muted small mb-3"),
+                        html.P(d["company"], className="card-subtitle text-muted small mb-3"),
                         html.Div([
                             html.Div([
                                 html.Small("Price", className="text-muted d-block"),
-                                html.Strong(current_price_str, className="text-dark"),
+                                html.Strong(d["current_price_str"], className="text-dark"),
                             ], className="me-3"),
                             html.Div([
                                 html.Small("10Y Return", className="text-muted d-block"),
-                                html.Strong(total_return_str, className=return_color_cls),
+                                html.Strong(d["total_return_str"], className=d["return_color_cls"]),
                             ], className="me-3"),
                             html.Div([
                                 html.Small("Updated", className="text-muted d-block"),
-                                html.Small(last_updated, className="text-muted"),
+                                html.Small(d["last_updated"], className="text-muted"),
                             ]),
                         ], className="d-flex align-items-start"),
                     ]),
@@ -1197,7 +1408,7 @@ def register_callbacks(app) -> None:
             )
             cols.append(dbc.Col(card, xs=12, sm=6, md=4, lg=3, className="mb-4"))
 
-        return cols, dropdown_options
+        return cols, max_pages, count_txt
 
     # ======================================================================
     # Home page: navigate to analysis page on search / dropdown select
@@ -1681,7 +1892,6 @@ def register_callbacks(app) -> None:
     # ======================================================================
 
     @app.callback(
-        Output("users-table-container", "children"),
         Output("users-store", "data"),
         Input("url", "pathname"),
         Input("users-refresh-store", "data"),
@@ -1695,10 +1905,11 @@ def register_callbacks(app) -> None:
         stored_token: Optional[str],
         url_search: Optional[str],
     ):
-        """Fetch all users from the backend API and render the users table.
+        """Fetch all users from the backend API and store the raw list.
 
         Fires on page navigation (to detect /admin/users) and whenever
         ``users-refresh-store`` is incremented by a save or toggle action.
+        Rendering is handled by ``render_users_page``.
 
         Args:
             pathname: Current URL path.
@@ -1707,25 +1918,64 @@ def register_callbacks(app) -> None:
             url_search: URL query string for token fallback.
 
         Returns:
-            Tuple of (table component, list of user dicts).
+            List of user dicts, or an empty list on error.
         """
         if pathname != "/admin/users":
-            return no_update, no_update
+            return no_update
 
         token = _resolve_token(stored_token, url_search)
-        resp = _api_call("get", "/users", token)
-        if resp is None:
-            return html.P("Could not reach backend.", className="text-danger"), []
-        if resp.status_code == 403:
-            return html.P("Not authorised.", className="text-danger"), []
-        if not resp.ok:
-            return html.P(f"Error {resp.status_code}: {resp.text}", className="text-danger"), []
+        resp  = _api_call("get", "/users", token)
+        if resp is None or not resp.ok:
+            return []
 
-        users = resp.json()
-        return _build_users_table(users), users
+        return resp.json()
 
     @app.callback(
-        Output("audit-log-container", "children"),
+        Output("users-table-container", "children"),
+        Output("users-pagination",      "max_value"),
+        Output("users-count-text",      "children"),
+        Input("users-store",      "data"),
+        Input("users-pagination", "active_page"),
+        Input("users-search",     "value"),
+        Input("users-page-size",  "value"),
+    )
+    def render_users_page(users_data, active_page, search_term, page_size):
+        """Filter, slice, and render one page of the users table.
+
+        Args:
+            users_data: Full list of user dicts from ``users-store``.
+            active_page: Current pagination page (1-indexed).
+            search_term: Debounced search text (name, email or role).
+            page_size: Number of rows per page as a string (e.g. ``"10"``).
+
+        Returns:
+            Tuple of (table component, pagination max_value, count text).
+        """
+        PAGE_SIZE = int(page_size or 10)
+        users     = users_data or []
+
+        # Apply search filter
+        q = (search_term or "").strip().lower()
+        if q:
+            users = [
+                u for u in users
+                if q in (u.get("full_name") or "").lower()
+                or q in (u.get("email") or "").lower()
+                or q in (u.get("role") or "").lower()
+            ]
+
+        total = len(users)
+        if total == 0:
+            msg = "No matching users found." if q else "No user accounts found."
+            return html.P(msg, className="text-muted"), 1, ""
+        max_pages = max(1, math.ceil(total / PAGE_SIZE))
+        page      = min(active_page or 1, max_pages)
+        start     = (page - 1) * PAGE_SIZE
+        count_txt = f"Showing {start + 1}–{min(start + PAGE_SIZE, total)} of {total} users"
+        return _build_users_table(users[start: start + PAGE_SIZE]), max_pages, count_txt
+
+    @app.callback(
+        Output("audit-data-store", "data"),
         Input("admin-tabs", "active_tab"),
         Input("url", "pathname"),
         State("auth-token-store", "data"),
@@ -1738,10 +1988,10 @@ def register_callbacks(app) -> None:
         stored_token: Optional[str],
         url_search: Optional[str],
     ):
-        """Fetch the audit log from the backend API and render the table.
+        """Fetch the audit log from the backend API and store the raw event list.
 
         Fires when the admin page is visited or when the user switches to
-        the Audit Log tab.
+        the Audit Log tab.  Rendering is handled by ``render_audit_page``.
 
         Args:
             active_tab: ID of the currently selected tab.
@@ -1750,20 +2000,62 @@ def register_callbacks(app) -> None:
             url_search: URL query string for token fallback.
 
         Returns:
-            Audit log table component.
+            List of audit event dicts, or an empty list on error or wrong tab.
         """
         if pathname != "/admin/users" or active_tab != "audit-tab":
             return no_update
 
         token = _resolve_token(stored_token, url_search)
-        resp = _api_call("get", "/admin/audit-log", token)
-        if resp is None:
-            return html.P("Could not reach backend.", className="text-danger")
-        if not resp.ok:
-            return html.P(f"Error {resp.status_code}.", className="text-danger")
+        resp  = _api_call("get", "/admin/audit-log", token)
+        if resp is None or not resp.ok:
+            return []
 
-        events = resp.json().get("events", [])
-        return _build_audit_table(events)
+        return resp.json().get("events", [])
+
+    @app.callback(
+        Output("audit-log-container", "children"),
+        Output("audit-pagination",    "max_value"),
+        Output("audit-count-text",    "children"),
+        Input("audit-data-store",  "data"),
+        Input("audit-pagination",  "active_page"),
+        Input("audit-search",      "value"),
+        Input("audit-page-size",   "value"),
+    )
+    def render_audit_page(audit_data, active_page, search_term, page_size):
+        """Filter, slice, and render one page of the audit log table.
+
+        Args:
+            audit_data: Full list of audit event dicts from ``audit-data-store``.
+            active_page: Current pagination page (1-indexed).
+            search_term: Debounced search text (event type, actor/target ID, details).
+            page_size: Number of rows per page as a string (e.g. ``"10"``).
+
+        Returns:
+            Tuple of (table component, pagination max_value, count text).
+        """
+        PAGE_SIZE = int(page_size or 10)
+        events    = audit_data or []
+
+        # Apply search filter
+        q = (search_term or "").strip().lower()
+        if q:
+            events = [
+                e for e in events
+                if q in (e.get("event_type") or "").lower()
+                or q in (e.get("actor_user_id") or "").lower()
+                or q in (e.get("target_user_id") or "").lower()
+                or q in (e.get("metadata") or "").lower()
+            ]
+
+        total = len(events)
+        if total == 0:
+            msg = "No matching events found." if q else "No audit events found."
+            return html.P(msg, className="text-muted"), 1, ""
+        max_pages = max(1, math.ceil(total / PAGE_SIZE))
+        page      = min(active_page or 1, max_pages)
+        start     = (page - 1) * PAGE_SIZE
+        count_txt = f"Showing {start + 1}–{min(start + PAGE_SIZE, total)} of {total} events"
+        return _build_audit_table(events[start: start + PAGE_SIZE]), max_pages, count_txt
 
     @app.callback(
         Output("user-modal", "is_open"),
@@ -1805,6 +2097,7 @@ def register_callbacks(app) -> None:
             store data, and error message.
         """
         triggered = ctx.triggered_id
+        triggered_value = ctx.triggered[0]["value"] if ctx.triggered else None
 
         # ── Cancel ────────────────────────────────────────────────────────
         if triggered == "modal-cancel-btn":
@@ -1827,6 +2120,15 @@ def register_callbacks(app) -> None:
 
         # ── Edit user ─────────────────────────────────────────────────────
         if isinstance(triggered, dict) and triggered.get("type") == "edit-user-btn":
+            # triggered_value is None when Dash fires due to DOM injection
+            # (pattern-match re-fires when Edit buttons are added to the layout)
+            # rather than an actual user click.  Skip in that case.
+            if not triggered_value:
+                return (
+                    no_update, no_update, no_update, no_update,
+                    no_update, no_update, no_update, no_update,
+                    no_update, no_update,
+                )
             user_id = triggered["index"]
             user = next(
                 (u for u in (users_data or []) if u.get("user_id") == user_id),
@@ -1916,6 +2218,16 @@ def register_callbacks(app) -> None:
             return True, no_update, "Full name is required.", no_update
         if not (email and email.strip()):
             return True, no_update, "Email is required.", no_update
+        if not _is_valid_email(email.strip()):
+            return True, no_update, "Enter a valid email address.", no_update
+
+        # XSS / injection safety checks
+        err = _check_input_safety(full_name.strip(), "Full name")
+        if err:
+            return True, no_update, err, no_update
+        err = _check_input_safety(email.strip(), "Email", max_len=254)
+        if err:
+            return True, no_update, err, no_update
 
         mode = (modal_data or {}).get("mode", "add")
         token = _resolve_token(stored_token, url_search)

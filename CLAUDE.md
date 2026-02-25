@@ -154,6 +154,24 @@ print(list_available_stocks.invoke({}))
 "
 ```
 
+### Install the pre-commit hook (one-time setup)
+```bash
+cp hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+```
+
+Runs on every commit. Operates only on staged modified/created files (`git diff --cached --diff-filter=ACM`). Four checks:
+1. **Code quality** — bare `print()` (blocks), missing Google docstrings (warning), naming, OOP, XSS/SQL injection; auto-fixed via Claude when `ANTHROPIC_API_KEY` is set
+2. **Meta-files** — CLAUDE.md, PROGRESS.md, README.md updated if stale; single Claude call
+3. **Docs** — affected `docs/` pages patched when their source files are staged
+4. **Changelog** — `docs/dev/changelog.md` H2 date headings verified descending; auto-reordered (no API)
+
+Environment variables: `SKIP_PRE_COMMIT=1` (bypass all), `SKIP_CLAUDE_CHECKS=1` (static-only, no API).
+
+To test without committing:
+```bash
+bash hooks/pre-commit
+```
+
 ### Install the pre-push hook (one-time setup)
 ```bash
 cp hooks/pre-push .git/hooks/pre-push && chmod +x .git/hooks/pre-push
@@ -427,13 +445,32 @@ Dashboard URL: `http://127.0.0.1:8050`. No API keys required — reads local par
 
 | Callback | Inputs | Outputs |
 |----------|--------|---------|
-| `refresh_stock_cards` | `registry-refresh.n_intervals`, `url.pathname` | `stock-cards-container.children`, `home-registry-dropdown.options` |
+| `refresh_stock_cards` | `registry-refresh.n_intervals`, `url.pathname` | `stock-raw-data-store.data`, `home-registry-dropdown.options` |
+| `update_market_filter` | `filter-india-btn.n_clicks`, `filter-us-btn.n_clicks` | `market-filter-store.data`, button colors, `home-pagination.active_page` |
+| `render_home_cards` | `stock-raw-data-store.data`, `market-filter-store.data`, `home-pagination.active_page`, `home-page-size.value` | `stock-cards-container.children`, pagination `max_value`, count text |
+| `render_users_page` | `users-store.data`, `users-pagination.active_page`, `users-search.value`, `users-page-size.value` | users table, pagination `max_value`, count text |
+| `render_audit_page` | `audit-data-store.data`, `audit-pagination.active_page`, `audit-search.value`, `audit-page-size.value` | audit table, pagination `max_value`, count text |
 | `navigate_to_analysis` | `search-btn.n_clicks`, `home-registry-dropdown.value` | `url.pathname`, `nav-ticker-store.data` |
 | `sync_analysis_ticker` | `url.search`, `url.pathname` | `analysis-ticker-dropdown.value` |
 | `update_analysis_chart` | ticker, date-range slider, overlay toggles | `analysis-chart.figure`, `analysis-stats-row.children` |
 | `update_forecast_chart` | ticker, horizon radio, refresh store | forecast chart, target cards, accuracy row |
 | `run_new_analysis` | `run-analysis-btn.n_clicks` | status alert, refresh store, accuracy row |
 | `update_compare` | `compare-ticker-dropdown.value` | perf chart, metrics table, heatmap |
+
+### Home Page — Market Filter + Pagination (added Feb 25, 2026)
+
+- `_get_market(ticker)` in `callbacks.py`: returns `'india'` for `.NS`/`.BO` tickers, `'us'` otherwise
+- **Data/render split**: `refresh_stock_cards` stores raw serialisable dicts in `dcc.Store(id="stock-raw-data-store")`; `render_home_cards` reads the store, filters by market, paginates, builds card components
+- Default market: India (`.NS`/`.BO`); UI shows "🇮🇳 India" / "🇺🇸 US" `dbc.ButtonGroup`
+- Page size: 12 default; `dbc.Select(id="home-page-size")` with options 10/25/50/100
+- Pagination footer sits above the fixed Next.js FAB + Plotly watermark (`paddingBottom: "5rem"` on `#page-content`)
+
+### Admin — Users + Audit Log Pagination (added Feb 25, 2026)
+
+- `load_users_table` → `users-store.data` (raw list); `render_users_page` → sliced table + count text
+- `load_audit_log` → `audit-data-store.data` (raw list); `render_audit_page` → sliced table + count text
+- Search: `dbc.Input(debounce=True)` above each table; users search filters name/email/role; audit search filters event_type/actor/target/metadata
+- Page size: `dbc.Select` (10/25/50/100) beside each paginator; filter or size change resets to page 1
 
 ---
 

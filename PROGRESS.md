@@ -2,6 +2,56 @@
 
 ---
 
+# Session: Feb 25, 2026 — Dashboard pagination, market filter, and pre-commit hook
+
+## What We Built
+
+Three UX improvements to the dashboard and a new pre-commit quality gate.
+
+### 1. Home page market filter + pagination
+
+- Added India 🇮🇳 / US 🇺🇸 `dbc.ButtonGroup` above the stock cards grid; defaults to India
+- `_get_market(ticker)` helper: `.NS`/`.BO` → `'india'`, else `'us'`
+- Rewrote `refresh_stock_cards` to output raw dicts to `dcc.Store(id="stock-raw-data-store")` instead of Dash components — enables client-side filter + paginate
+- New `render_home_cards` callback: filters by market, paginates with configurable page size
+- Page-size `dbc.Select` (10 / 25 / 50 / 100) next to each pagination row
+- Count text ("Showing 1–12 of 47") shown left-aligned beside each paginator
+
+### 2. Admin pagination + search
+
+- Users table: `dcc.Store(id="users-store")` + `render_users_page` callback; `dbc.Input(id="users-search", debounce=True)` filters by name/email/role
+- Audit log: `dcc.Store(id="audit-data-store")` + `render_audit_page` callback; search filters by event_type/actor/target/metadata
+- Both tables use configurable page size; reset-to-page-1 callbacks fire on filter or size change
+
+### 3. Pagination footer / FAB overlap fix
+
+- Added `style={"paddingBottom": "5rem"}` (80 px) to `html.Div(id="page-content")` in `dashboard/app.py`
+- Prevents the pagination rows from hiding behind the Next.js bottom-right navigation FAB and the Plotly watermark
+
+### 4. Pre-commit hook (`hooks/pre-commit` + `hooks/pre_commit_checks.py`)
+
+- **Bash entry point** (`hooks/pre-commit`): checks `SKIP_PRE_COMMIT=1`, validates `demoenv`, counts staged files, delegates to Python script
+- **Python quality gate** (`hooks/pre_commit_checks.py`): `PreCommitChecker` class, 4 checks, operates only on `git diff --cached --name-only --diff-filter=ACM` (staged modified/created files)
+  1. **Static analysis** — AST walk for bare `print()` (error/blocks), missing docstrings (warning), naming conventions (warning), mutable module-level globals (warning), XSS/SQL-injection patterns (error/blocks); auto-fix via Claude API when `ANTHROPIC_API_KEY` is set; fixed files re-staged
+  2. **Meta-file freshness** — CLAUDE.md, PROGRESS.md, README.md reviewed against staged diff; auto-updated and re-staged if stale; single Claude call
+  3. **Docs freshness** — `_DOCS_MAP` maps source files to `docs/` pages; affected pages patched via Claude; re-staged
+  4. **Changelog order** — `docs/dev/changelog.md` H2 date headings verified descending; reordered automatically without any API call
+- Environment variables: `SKIP_PRE_COMMIT=1` (bypass all), `SKIP_CLAUDE_CHECKS=1` (static-only, no API), `ANTHROPIC_API_KEY` (enables auto-fix + doc updates)
+- Install: `cp hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit` (done this session)
+- Installed and executable: `hooks/pre-commit`, `hooks/pre_commit_checks.py`
+
+### Files changed
+
+| File | Change |
+|---|---|
+| `dashboard/layouts.py` | Market filter buttons, pagination rows with count text + page-size select, search inputs, `dcc.Store` additions |
+| `dashboard/callbacks.py` | `_get_market()`, rewritten `refresh_stock_cards`, 7 new callbacks (filter, render×3, reset×3) |
+| `dashboard/app.py` | `paddingBottom: "5rem"` on `#page-content` |
+| `hooks/pre-commit` | New — bash entry point for pre-commit quality gate |
+| `hooks/pre_commit_checks.py` | New — full Python implementation (~400 lines) |
+
+---
+
 # Session: Feb 25, 2026 — Auth deployment fixes (JWT env propagation + dashboard dotenv)
 
 ## What We Fixed

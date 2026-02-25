@@ -51,11 +51,11 @@
   },
   "TCS.NS": {
     "ticker": "TCS.NS",
-    "last_fetch_date": "2026-02-24",
-    "total_rows": 2471,
+    "last_fetch_date": "2026-02-25",
+    "total_rows": 2472,
     "date_range": {
       "start": "2016-02-23",
-      "end": "2026-02-23"
+      "end": "2026-02-24"
     },
     "file_path": "/Users/abhaysingh/Documents/ai-agent-ui/data/raw/TCS.NS_raw.parquet"
   },
@@ -88,5 +88,25 @@
       "end": "2026-02-24"
     },
     "file_path": "/Users/abhaysingh/Documents/ai-agent-ui/data/raw/BEL.NS_raw.parquet"
+  },
+  "JBCHEPHARM.NS": {
+    "ticker": "JBCHEPHARM.NS",
+    "last_fetch_date": "2026-02-25",
+    "total_rows": 2471,
+    "date_range": {
+      "start": "2016-02-25",
+      "end": "2026-02-25"
+    },
+    "file_path": "/Users/abhaysingh/Documents/ai-agent-ui/data/raw/JBCHEPHARM.NS_raw.parquet"
+  },
+  "HDFCBANK.NS": {
+    "ticker": "HDFCBANK.NS",
+    "last_fetch_date": "2026-02-25",
+    "total_rows": 2471,
+    "date_range": {
+      "start": "2016-02-25",
+      "end": "2026-02-25"
+    },
+    "file_path": "/Users/abhaysingh/Documents/ai-agent-ui/data/raw/HDFCBANK.NS_raw.parquet"
   }
 }

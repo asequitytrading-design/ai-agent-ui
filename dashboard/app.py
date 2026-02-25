@@ -142,9 +142,12 @@ app.layout = html.Div(
         NAVBAR,
 
         # Page content — swapped by the display_page callback below
+        # Extra bottom padding keeps content clear of the fixed Next.js nav FAB
+        # and the Plotly watermark that both sit in the bottom corners.
         html.Div(
             id="page-content",
             className="container-fluid px-4 py-3",
+            style={"paddingBottom": "5rem"},
         ),
 
         # Auto-refresh interval: rebuilds Home stock cards every 5 minutes

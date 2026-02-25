@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# hooks/pre-commit
+#
+# Pre-commit quality gate for ai-agent-ui.
+#
+# Runs on every commit.  Checks are performed only on modified or newly
+# created files (git diff --cached --diff-filter=ACM).
+#
+# Checks (in order):
+#   1. Code quality  — bare print(), Google docstrings, naming conventions,
+#                      OOP patterns, XSS + SQL-injection risks.
+#                      Issues are auto-fixed via Claude when ANTHROPIC_API_KEY
+#                      is set; fixed files are re-staged transparently.
+#   2. Meta-files    — CLAUDE.md, PROGRESS.md, and README.md are reviewed
+#                      against the staged diff and updated if stale.
+#   3. Docs          — Relevant docs/ pages are patched when their source
+#                      files are staged.
+#   4. Changelog     — docs/dev/changelog.md H2 date headings are verified
+#                      to be in descending order (newest first); reordered
+#                      automatically if needed.  Always runs; no API required.
+#
+# Environment variables:
+#   SKIP_PRE_COMMIT=1       bypass the entire hook
+#   SKIP_CLAUDE_CHECKS=1    run only static checks (no API calls)
+#   ANTHROPIC_API_KEY=<k>   enables Claude-powered auto-fix and doc updates
+#
+# Install (one-time):
+#   cp hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+#
+# Test without committing:
+#   bash hooks/pre-commit
+
+set -uo pipefail
+
+# ── Skip flag ─────────────────────────────────────────────────────────────────
+if [[ "${SKIP_PRE_COMMIT:-0}" == "1" ]]; then
+    echo "[pre-commit] SKIP_PRE_COMMIT=1 — skipping all checks."
+    exit 0
+fi
+
+PROJECT_ROOT="$(git rev-parse --show-toplevel)"
+PYTHON="$PROJECT_ROOT/backend/demoenv/bin/python"
+HOOK_SCRIPT="$PROJECT_ROOT/hooks/pre_commit_checks.py"
+
+# ── Sanity checks ──────────────────────────────────────────────────────────────
+if [[ ! -x "$PYTHON" ]]; then
+    echo "[pre-commit] WARNING: demoenv not found at $PYTHON — skipping checks."
+    echo "[pre-commit]   Run: cd backend && python -m venv demoenv && pip install -r requirements.txt"
+    exit 0
+fi
+
+if [[ ! -f "$HOOK_SCRIPT" ]]; then
+    echo "[pre-commit] ERROR: $HOOK_SCRIPT missing. Re-copy hooks/pre-commit and hooks/pre_commit_checks.py."
+    exit 1
+fi
+
+# ── Only run when there are staged changes ────────────────────────────────────
+STAGED_COUNT="$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null | wc -l | tr -d ' ')"
+if [[ "$STAGED_COUNT" -eq 0 ]]; then
+    exit 0
+fi
+
+# ── Banner ─────────────────────────────────────────────────────────────────────
+echo ""
+echo "╔══════════════════════════════════════════════════════════════════╗"
+echo "║             PRE-COMMIT QUALITY GATE                             ║"
+echo "╚══════════════════════════════════════════════════════════════════╝"
+echo ""
+
+# ── Run the Python quality gate ───────────────────────────────────────────────
+"$PYTHON" "$HOOK_SCRIPT"
+EXIT_CODE=$?
+
+echo ""
+if [[ $EXIT_CODE -ne 0 ]]; then
+    echo "╔══════════════════════════════════════════════════════════════════╗"
+    echo "║  COMMIT BLOCKED — unfixable violations found (see above).       ║"
+    echo "║  Fix manually and re-stage, or use SKIP_PRE_COMMIT=1 to bypass. ║"
+    echo "╚══════════════════════════════════════════════════════════════════╝"
+    echo ""
+fi
+
+exit $EXIT_CODE

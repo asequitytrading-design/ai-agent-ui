@@ -152,7 +152,48 @@ def home_layout() -> html.Div:
 
         # ── Stock cards ───────────────────────────────────────────────────
         html.H5("Saved Stocks", className="text-muted mb-3"),
+
+        # Market filter buttons
+        dbc.Row(
+            dbc.Col(
+                dbc.ButtonGroup([
+                    dbc.Button("🇮🇳 India", id="filter-india-btn", color="primary",          size="sm"),
+                    dbc.Button("🇺🇸 US",    id="filter-us-btn",    color="outline-secondary", size="sm"),
+                ], className="mb-3"),
+            )
+        ),
+
         dbc.Row(id="stock-cards-container"),
+
+        # Pagination row
+        dbc.Row([
+            dbc.Col(html.Small(id="home-count-text", className="text-muted"), width="auto", className="my-auto"),
+            dbc.Col(
+                dbc.Pagination(id="home-pagination", max_value=1, active_page=1,
+                               fully_expanded=False, size="sm", className="justify-content-end mb-0"),
+                className="d-flex justify-content-end my-auto",
+            ),
+            dbc.Col(
+                dbc.Select(
+                    id="home-page-size",
+                    options=[
+                        {"label": "10 / page",  "value": "10"},
+                        {"label": "25 / page",  "value": "25"},
+                        {"label": "50 / page",  "value": "50"},
+                        {"label": "100 / page", "value": "100"},
+                    ],
+                    value="10",
+                    size="sm",
+                    style={"width": "120px"},
+                ),
+                width="auto",
+                className="my-auto",
+            ),
+        ], className="mt-3 align-items-center"),
+
+        # Stores
+        dcc.Store(id="stock-raw-data-store"),
+        dcc.Store(id="market-filter-store", data="india"),
     ])
 
 
@@ -446,12 +487,47 @@ def admin_users_layout() -> html.Div:
                             # Status message from save/delete operations
                             html.Div(id="users-action-status", className="mb-3"),
 
+                            # Search filter
+                            dbc.Input(
+                                id="users-search",
+                                placeholder="Search by name, email or role…",
+                                debounce=True,
+                                size="sm",
+                                className="mb-3",
+                            ),
+
                             dcc.Loading(
                                 id="loading-users",
                                 type="circle",
                                 color="#4f46e5",
                                 children=html.Div(id="users-table-container"),
                             ),
+
+                            # Users pagination row
+                            dbc.Row([
+                                dbc.Col(html.Small(id="users-count-text", className="text-muted"), width="auto", className="my-auto"),
+                                dbc.Col(
+                                    dbc.Pagination(id="users-pagination", max_value=1, active_page=1,
+                                                   fully_expanded=False, size="sm", className="justify-content-end mb-0"),
+                                    className="d-flex justify-content-end my-auto",
+                                ),
+                                dbc.Col(
+                                    dbc.Select(
+                                        id="users-page-size",
+                                        options=[
+                                            {"label": "10 / page",  "value": "10"},
+                                            {"label": "25 / page",  "value": "25"},
+                                            {"label": "50 / page",  "value": "50"},
+                                            {"label": "100 / page", "value": "100"},
+                                        ],
+                                        value="10",
+                                        size="sm",
+                                        style={"width": "120px"},
+                                    ),
+                                    width="auto",
+                                    className="my-auto",
+                                ),
+                            ], className="mt-2 align-items-center"),
                         ]),
                     ],
                 ),
@@ -463,12 +539,48 @@ def admin_users_layout() -> html.Div:
                     children=[
                         html.Div(className="mt-3", children=[
                             html.H5("Audit Log", className="text-muted mb-3"),
+
+                            # Search filter
+                            dbc.Input(
+                                id="audit-search",
+                                placeholder="Search by event type, actor ID or details…",
+                                debounce=True,
+                                size="sm",
+                                className="mb-3",
+                            ),
+
                             dcc.Loading(
                                 id="loading-audit",
                                 type="circle",
                                 color="#4f46e5",
                                 children=html.Div(id="audit-log-container"),
                             ),
+
+                            # Audit pagination row
+                            dbc.Row([
+                                dbc.Col(html.Small(id="audit-count-text", className="text-muted"), width="auto", className="my-auto"),
+                                dbc.Col(
+                                    dbc.Pagination(id="audit-pagination", max_value=1, active_page=1,
+                                                   fully_expanded=False, size="sm", className="justify-content-end mb-0"),
+                                    className="d-flex justify-content-end my-auto",
+                                ),
+                                dbc.Col(
+                                    dbc.Select(
+                                        id="audit-page-size",
+                                        options=[
+                                            {"label": "10 / page",  "value": "10"},
+                                            {"label": "25 / page",  "value": "25"},
+                                            {"label": "50 / page",  "value": "50"},
+                                            {"label": "100 / page", "value": "100"},
+                                        ],
+                                        value="10",
+                                        size="sm",
+                                        style={"width": "120px"},
+                                    ),
+                                    width="auto",
+                                    className="my-auto",
+                                ),
+                            ], className="mt-2 align-items-center"),
                         ]),
                     ],
                 ),
@@ -580,4 +692,5 @@ def admin_users_layout() -> html.Div:
         dcc.Store(id="users-store", data=[]),
         dcc.Store(id="user-modal-store", data=None),
         dcc.Store(id="users-refresh-store", data=0),
+        dcc.Store(id="audit-data-store", data=None),
     ])
