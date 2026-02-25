@@ -37,6 +37,21 @@ Each card shows:
 
 A search box and dropdown let you jump directly to the Analysis page for any ticker. Cards refresh automatically every 5 minutes via a `dcc.Interval`.
 
+#### Market filter
+
+Two toggle buttons above the cards filter by market:
+
+| Button | Tickers shown |
+|--------|--------------|
+| 🇮🇳 India | Tickers ending in `.NS` (NSE) or `.BO` (BSE) |
+| 🇺🇸 US | All other tickers |
+
+The filter defaults to **India**. Switching markets resets the page to 1.
+
+#### Pagination
+
+Cards are paginated at **12 per page** (configurable via a page-size dropdown: 10 / 25 / 50 / 100). A count label ("Showing 1–12 of 47") is displayed to the left of the pagination control. The pagination row is positioned above the fixed navigation FAB to avoid overlap.
+
 ---
 
 ### Analysis `/analysis`
@@ -171,6 +186,12 @@ data/metadata/{TICKER}_info.json      ──► Company name on Home cards
 
 **`allow_duplicate=True` on forecast-accuracy-row** — two callbacks write to `forecast-accuracy-row.children`: `update_forecast_chart` (placeholder text) and `run_new_analysis` (real MAE/RMSE/MAPE metrics). Dash requires `allow_duplicate=True` on the second callback's output.
 
+**Data/render split for Home cards** — `refresh_stock_cards` stores raw serialisable dicts (ticker, prices, sentiment, market) in a `dcc.Store`. A separate `render_home_cards` callback reads the store, filters by market, and paginates — making the filter and page controls fully client-side without re-fetching Yahoo Finance data.
+
+**`allow_duplicate=True` on `home-pagination.active_page`** — both `update_market_filter` (resets to 1 on market switch) and `reset_home_page_on_size_change` (resets to 1 on page-size change) write to this output. Dash requires `allow_duplicate=True` on the second callback.
+
+**`paddingBottom: "5rem"` on `#page-content`** — the Next.js SPA renders a fixed FAB in the bottom-right corner of the browser viewport at `bottom-6 right-6 z-50`. Adding 80 px of bottom padding to the Dash page container keeps pagination controls visible and clickable above both the FAB and the Plotly watermark.
+
 ---
 
 ## Authentication
@@ -210,14 +231,22 @@ Accessible from the **Admin** link in the NAVBAR (only rendered for superusers).
 
 | Feature | Description |
 |---|---|
-| User table | DataTable of all accounts with role badge (superuser / general) and status badge (Active / Deactivated) |
+| Search input | Debounced text filter — matches name, email, or role |
+| User table | Paginated (10 / page, configurable) with role badge and status badge |
 | Add User button | Opens modal → `POST /users` |
 | Edit button | Per-row modal pre-filled with user data → `PATCH /users/{id}` |
 | Deactivate / Reactivate | Per-row toggle → `DELETE /users/{id}` (deactivate) or `PATCH` with `is_active: true` (reactivate) |
+| Page-size dropdown | Choose 10 / 25 / 50 / 100 rows per page |
 
 **Audit Log tab:**
 
-Full event table: timestamp, event type, actor user ID, target user ID, metadata JSON. Events are sorted newest-first.
+| Feature | Description |
+|---|---|
+| Search input | Debounced text filter — matches event type, actor, target, or metadata |
+| Audit table | Paginated (10 / page, configurable): timestamp, event type, actor, target, metadata JSON |
+| Page-size dropdown | Choose 10 / 25 / 50 / 100 rows per page |
+
+Entries are sorted newest-first.
 
 ### Change Password modal
 

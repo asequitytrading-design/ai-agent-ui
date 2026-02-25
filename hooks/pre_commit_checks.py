@@ -65,6 +65,31 @@ from typing import Any, Dict, List, Optional, Tuple
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
+
+def _load_dotenv_into_environ() -> None:
+    """Load key=value pairs from .env files into os.environ (without overwriting).
+
+    Reads the project-root ``.env`` and ``backend/.env`` files at startup so
+    that variables like ``ANTHROPIC_API_KEY`` are available even when not
+    explicitly exported in the shell.  Existing env vars always take precedence.
+    """
+    for env_file in (_PROJECT_ROOT / ".env", _PROJECT_ROOT / "backend" / ".env"):
+        if not env_file.exists():
+            continue
+        with open(env_file, encoding="utf-8") as fh:
+            for raw_line in fh:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                key = key.strip()
+                val = val.strip().strip("'\"")
+                if key and key not in os.environ:
+                    os.environ[key] = val
+
+
+_load_dotenv_into_environ()
+
 # ---------------------------------------------------------------------------
 # ANSI colour helpers
 # ---------------------------------------------------------------------------

@@ -10,7 +10,7 @@ A fullstack agentic chat application powered by LangChain, FastAPI, and Next.js.
 |---------|-------|------|---------|
 | **Frontend** | Next.js 16 + React 19 + Tailwind 4 | `3000` | Chat UI + SPA shell (login, chat, docs, dashboard, admin) |
 | **Backend** | FastAPI + LangChain + Groq | `8181` | Agentic loop + REST API + Auth endpoints |
-| **Dashboard** | Plotly Dash + Dash Bootstrap (FLATLY) | `8050` | Stock analysis dashboard + Admin UI |
+| **Dashboard** | Plotly Dash + Dash Bootstrap (FLATLY) | `8050` | Stock analysis dashboard (Home / Analysis / Forecast / Compare) + Admin UI (Users + Audit Log) |
 | **Docs** | MkDocs Material | `8000` | Project documentation |
 
 ---
@@ -233,6 +233,11 @@ ai-agent-ui/
 │   ├── dependencies.py       # FastAPI dependency functions
 │   └── api.py                # create_auth_router() — 12 endpoints
 │
+├── hooks/
+│   ├── pre-commit            # Bash entry — quality gate on every commit
+│   ├── pre_commit_checks.py  # Python impl: static analysis, meta-files, docs, changelog
+│   └── pre-push              # Bash entry — blocks pushes with print()/failing mkdocs build
+│
 ├── scripts/
 │   └── seed_admin.py         # Bootstrap first superuser from env vars
 │
@@ -272,6 +277,8 @@ ai-agent-ui/
 │   ├── layouts.py            # Page layout factories + NAVBAR
 │   ├── callbacks.py          # All interactive callbacks + auth guards + admin UI
 │   └── assets/custom.css     # Light theme styles
+│                             # Home: India/US market filter, 12/page card pagination
+│                             # Admin: paginated users + audit tables with search
 │
 ├── data/
 │   ├── raw/                  # OHLCV parquet (gitignored)
@@ -364,6 +371,23 @@ All backend variables live in `backend/.env` (gitignored).
 1. Subclass `BaseAgent` in `backend/agents/my_agent.py` — only implement `_build_llm()`.
 2. Register it in `ChatServer._register_agents()`.
 3. Add the agent ID to the `AGENTS` array in `frontend/app/page.tsx`.
+
+### Install the pre-commit hook (one-time)
+
+```bash
+cp hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+```
+
+Runs on every `git commit` against **staged files only**. Four checks:
+
+| # | Check | API required? |
+|---|-------|--------------|
+| 1 | Bare `print()`, missing Google docstrings, naming, OOP, XSS/SQL injection — **auto-fixed** via Claude | Yes (auto-fix) |
+| 2 | `CLAUDE.md`, `PROGRESS.md`, `README.md` freshness — **auto-updated** | Yes |
+| 3 | Docs pages freshness — **auto-updated** | Yes |
+| 4 | `docs/dev/changelog.md` descending date order — **auto-reordered** | No |
+
+Set `ANTHROPIC_API_KEY` in `backend/.env` to enable checks 1–3. Skip entirely with `SKIP_PRE_COMMIT=1`.
 
 ### Switch to Claude Sonnet 4.6
 
