@@ -261,6 +261,68 @@ Dash 2+ requires `allow_duplicate=True` on any output that appears in more than 
 
 ---
 
+## Authentication
+
+### Apache Iceberg + SQLite over a traditional database
+
+User and audit data could have been stored in SQLite directly (via `sqlite3` or SQLAlchemy), PostgreSQL, or a document store. Iceberg was chosen because:
+
+- The project already uses Parquet files (via PyArrow) for stock data — the Iceberg + SQLite catalog requires no additional infrastructure and reuses the same PyArrow dependency.
+- Iceberg's copy-on-write semantics make the user table updatable without raw SQL, keeping the storage layer consistent with the rest of the data layer.
+- A SQLite-backed SqlCatalog requires no separate server, matching the single-machine development model.
+
+The tradeoff: Iceberg is heavier than a plain SQLite table for a small number of users, and the copy-on-write update pattern (read full table → mutate → overwrite) is slower than an indexed SQL `UPDATE`. Acceptable for a development/MVP deployment.
+
+### JWT HS256 over asymmetric signing (RS256)
+
+HS256 (HMAC-SHA256 with a shared secret) was chosen over RS256 (RSA with a public/private key pair) because:
+
+- There is only one server — no need to distribute a public key to multiple verifiers.
+- HS256 is simpler to set up (a single `JWT_SECRET_KEY` env var vs generating and managing a key pair).
+- `python-jose` supports both; switching to RS256 later requires only changing the `algorithms` parameter.
+
+The minimum key length is enforced at 32 characters (256 bits) by `AuthService.__init__`.
+
+### bcrypt via passlib, pinned to bcrypt==4.0.1
+
+`passlib[bcrypt]` was chosen for password hashing because it is the standard Python bcrypt wrapper with a well-understood API. The passlib 1.7.4 + bcrypt 5.x combination is incompatible (bcrypt 5.0 changed its internal API in a way that breaks passlib's version-detection routine for passwords > 72 bytes). `bcrypt==4.0.1` is pinned in `requirements.txt`.
+
+Cost factor is the default (12), which gives ~250 ms per hash on a modern CPU — long enough to make brute force impractical, short enough not to noticeably affect login latency.
+
+### In-memory refresh-token deny-list
+
+Logout and token rotation revoke refresh tokens by adding their `jti` (JWT ID) to a `set` inside the `AuthService` singleton. This is simpler than a database deny-list and has O(1) lookup. The limitation is that the deny-list is cleared on process restart — any revoked tokens issued before the restart become valid again until they naturally expire (up to 7 days). This is acceptable for an MVP single-server deployment.
+
+### Token propagation to Dash via query parameter
+
+The Dash dashboard runs in a separate process on a different port. Cookies are not shared across origins; `localStorage` and `postMessage` are inaccessible across iframe origins in the browser. Appending `?token=<jwt>` to the iframe `src` is the simplest mechanism that works across origins:
+
+- Next.js computes the URL client-side (no server round-trip).
+- Dash receives the token as a standard URL parameter.
+- The `store_token_from_url` callback saves it to `dcc.Store(storage_type="local")` on first load, so subsequent in-dashboard navigation does not need the parameter.
+
+The tradeoff is that the token appears in the browser's URL bar and server access logs. For a local development tool behind a private network this is acceptable. A production deployment should prefer a short-lived session cookie or a server-side token exchange endpoint.
+
+### apiFetch as a drop-in fetch wrapper
+
+Rather than a custom React hook or a dedicated API client class, authentication is handled by `apiFetch` — a function with the exact same signature as the native `fetch` API. This means:
+
+- Zero migration cost: every `fetch(url, opts)` call becomes `apiFetch(url, opts)`.
+- No new abstractions to learn for contributors.
+- Auto-refresh logic lives in one place and is invisible to callers.
+
+The alternative (a React context + hook) would have been more idiomatic for a large React app but adds boilerplate that is not justified for a single-file SPA.
+
+### Pydantic-to-os.environ bridge in main.py
+
+`auth/dependencies.py` reads `JWT_SECRET_KEY` from `os.environ` directly (to keep `auth/` independent of `backend/config.py`). Pydantic's `BaseSettings` reads `backend/.env` into model fields but does not write back to `os.environ`. The module-level block in `main.py` that copies settings fields into `os.environ` (only if not already set) bridges this gap without changing the `auth/` package or requiring a shell export on every startup. Explicit env var exports always take precedence.
+
+### Dashboard _load_dotenv() instead of relying on shell exports
+
+The Dash process is launched by `run.sh` with `exec` — it inherits only the shell's environment at start time. Adding a `_load_dotenv()` call at the top of `dashboard/app.py` mirrors exactly what `scripts/seed_admin.py` does and makes the dashboard self-contained: as long as `backend/.env` exists, the dashboard will find `JWT_SECRET_KEY` regardless of how it was started (run.sh, manual, gunicorn).
+
+---
+
 ## Version Control
 
 ### Virtualenv excluded from git

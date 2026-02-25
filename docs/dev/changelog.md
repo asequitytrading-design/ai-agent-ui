@@ -26,7 +26,7 @@ UK stocks `£`, EU stocks `€`, etc.
 |------|--------|
 | `dashboard/callbacks.py` | Added `_currency_symbol()` and `_get_currency()` helpers; `_build_stats_cards` / `_build_target_cards` / `_build_accuracy_row` / `_build_forecast_fig` / `refresh_stock_cards` all use dynamic symbol; `_build_target_cards` and `_build_accuracy_row` gained `ticker` parameter |
 
-**Commit:** *(this session)*
+**Commit:** `5c017f2` — *fix: dynamic currency symbols for multi-market stocks*
 
 ---
 
@@ -34,7 +34,7 @@ UK stocks `£`, EU stocks `€`, etc.
 
 ### Streaming, request timeout, iframe cross-origin, and dashboard light theme
 
-Four independent improvements committed as a single session.
+Four independent improvements.
 
 **Backend:**
 
@@ -59,7 +59,7 @@ Four independent improvements committed as a single session.
 |------|--------|
 | `frontend/app/page.tsx` | `axios.post` → `fetch()` + `ReadableStream`; `TypingDots` → `StatusBadge`; `statusLine` state; `iframeLoading`/`iframeError` state; spinner + error banner on iframe; "Open in new tab ↗" in header; `switchView` resets iframe states; `handleInternalLink` resets iframe states |
 
-**Commit:** *(this session)*
+**Commit:** `be09863` — *feat: streaming, request timeout, iframe cross-origin, and dashboard light theme*
 
 ---
 
@@ -94,7 +94,7 @@ Eight improvements across frontend and backend committed as a single session.
 | `handleInternalLink()` | Sets `view` + `iframeUrl` when a dashboard/docs link in chat is clicked |
 | Internal link routing in `MarkdownContent` | `onInternalLink` prop; `a` renderer renders `<button>` for internal links, `<a target="_blank">` for external |
 
-**Commit:** *(this session)*
+**Commit:** `c570a98` — *feat: SPA navigation, session persistence, iteration cap, and env config*
 
 ---
 
@@ -261,8 +261,121 @@ Built the complete application from scratch in a single session.
 
 ---
 
+## Feb 25, 2026 (continued — deployment fixes)
+
+### Auth deployment fixes: JWT env propagation + dashboard dotenv loader
+
+Two runtime bugs discovered and fixed after first-deploy of the auth module.
+
+**Bug 1 — `JWT_SECRET_KEY` not visible to `auth/dependencies.py`**
+
+`auth/dependencies.py` reads `JWT_SECRET_KEY` directly from `os.environ`. Pydantic `Settings` reads `backend/.env` but does **not** write values back to `os.environ`. Without an explicit shell export the backend crashed on every auth request.
+
+| File | Change |
+|------|--------|
+| `backend/main.py` | Added module-level block after `settings = get_settings()` that copies `jwt_secret_key`, `access_token_expire_minutes`, and `refresh_token_expire_days` from the Pydantic model into `os.environ` (only if not already set) |
+
+**Bug 2 — Dashboard showed "Authentication required" for valid tokens**
+
+The Dash process is separate from the backend. `_validate_token()` in `dashboard/callbacks.py` reads `JWT_SECRET_KEY` from `os.environ`. The dashboard process never loaded `backend/.env`, so the secret was always empty and every token failed validation.
+
+| File | Change |
+|------|--------|
+| `dashboard/app.py` | Added `_load_dotenv()` helper (same pattern as `scripts/seed_admin.py`) executed at module import time; reads `<project-root>/.env` and `backend/.env` into `os.environ` before any Dash or callback imports |
+
+**Commits:** `4d4bb84` — *feat: complete auth module with JWT, RBAC, admin UI, and deployment fixes*
+
+---
+
+## Feb 25, 2026
+
+### Auth module — Phases 1–6 (JWT, RBAC, admin UI, seed script)
+
+Complete JWT-based authentication and role-based access control (RBAC) added across all three surfaces.
+
+**New files:**
+
+| File | Description |
+|------|-------------|
+| `auth/__init__.py` | Package marker |
+| `auth/create_tables.py` | Idempotent Iceberg table init (`auth.users` + `auth.audit_log`) |
+| `auth/repository.py` | `IcebergUserRepository` — full CRUD + audit log append |
+| `auth/service.py` | `AuthService` — bcrypt hashing, JWT HS256 create/decode, in-memory deny-list |
+| `auth/models.py` | Pydantic request/response models for all auth + user endpoints |
+| `auth/dependencies.py` | FastAPI dependency functions: `get_current_user`, `superuser_only`, `get_auth_service` |
+| `auth/api.py` | `create_auth_router()` — 12 REST endpoints |
+| `scripts/seed_admin.py` | Idempotent superuser bootstrap from `ADMIN_EMAIL` + `ADMIN_PASSWORD` env vars |
+| `.pyiceberg.yaml.example` | Committed reference for Iceberg catalog config |
+| `docs/backend/auth.md` | Full auth documentation page |
+| `frontend/lib/auth.ts` | Token helpers: `getAccessToken`, `setTokens`, `clearTokens`, `isTokenExpired`, `getRoleFromToken`, `refreshAccessToken` |
+| `frontend/lib/apiFetch.ts` | Drop-in authenticated `fetch` wrapper — injects Bearer token, auto-refreshes on expiry, redirects to `/login` on 401 |
+| `frontend/app/login/page.tsx` | Login page — email + password form, redirect-if-already-authed guard |
+
+**Modified files:**
+
+| File | Change |
+|------|--------|
+| `backend/config.py` | Added `jwt_secret_key`, `access_token_expire_minutes`, `refresh_token_expire_days` to `Settings` |
+| `backend/main.py` | Project root added to `sys.path`; `create_auth_router()` mounted via `app.include_router()` |
+| `backend/requirements.txt` | Added `pyiceberg[sql-sqlite]`, `python-jose[cryptography]`, `passlib[bcrypt]`, `bcrypt==4.0.1`, `email-validator`, `python-multipart` |
+| `dashboard/app.py` | Imported auth helpers; added `dcc.Store(id="auth-token-store")`; `/admin/users` route; global change-password modal to layout |
+| `dashboard/callbacks.py` | Added `_validate_token()`, `_unauth_notice()`, `_admin_forbidden()`, `_resolve_token()`, `_api_call()`, `store_token_from_url` callback, `display_page` auth guard, 7 admin callbacks |
+| `dashboard/layouts.py` | Added `admin_users_layout()`; updated NAVBAR with "Admin" link + "Change Password" button |
+| `frontend/app/page.tsx` | Auth guard on mount; `apiFetch` replaces `fetch`; logout button; `"admin"` view type; Admin nav item (superuser-only); `iframeSrc` appends `?token=<jwt>` |
+| `run.sh` | Added `_init_auth()` — runs `create_tables.py` + `seed_admin.py` on first `./run.sh start` |
+| `mkdocs.yml` | Added "Auth & Users: backend/auth.md" to Backend nav |
+| `.gitignore` | Added `data/iceberg/`, `.pyiceberg.yaml` |
+
+**New API endpoints:**
+
+| Method | Path | Auth |
+|--------|------|------|
+| `POST` | `/auth/login` | Public |
+| `POST` | `/auth/login/form` | Public (OAuth2 form) |
+| `POST` | `/auth/refresh` | Refresh token |
+| `POST` | `/auth/logout` | Access token |
+| `POST` | `/auth/password-reset/request` | Access token |
+| `POST` | `/auth/password-reset/confirm` | Access token |
+| `GET` | `/users` | Superuser |
+| `POST` | `/users` | Superuser |
+| `GET` | `/users/{user_id}` | Superuser |
+| `PATCH` | `/users/{user_id}` | Superuser |
+| `DELETE` | `/users/{user_id}` | Superuser |
+| `GET` | `/admin/audit-log` | Superuser |
+
+**Commits:** `4d4bb84` — *feat: complete auth module with JWT, RBAC, admin UI, and deployment fixes*
+
+---
+
+## Feb 24, 2026 (continued — currency fix)
+
+### Dynamic currency symbols for multi-market stocks
+
+Replaced all hard-coded `$` (USD) price symbols with dynamic currency symbols
+loaded from `data/metadata/{TICKER}_info.json`. Indian stocks now show `₹`,
+UK stocks `£`, EU stocks `€`, etc.
+
+**Backend:**
+
+| File | Change |
+|------|--------|
+| `backend/tools/price_analysis_tool.py` | Added `import json`, `_DATA_METADATA` path, `_currency_symbol()` and `_load_currency()` helpers; 5 report-string `$` → `{sym}` |
+| `backend/tools/forecasting_tool.py` | Same helpers added; 2 chart annotation `$` → `{sym}`; 5 report-string `$` → `{sym}`; `yaxis_title` → dynamic currency code |
+| `backend/tools/stock_data_tool.py` | Same helpers added; dividend report `$` → dynamic symbol |
+
+**Dashboard:**
+
+| File | Change |
+|------|--------|
+| `dashboard/callbacks.py` | Added `_currency_symbol()` and `_get_currency()` helpers; `_build_stats_cards` / `_build_target_cards` / `_build_accuracy_row` / `_build_forecast_fig` / `refresh_stock_cards` all use dynamic symbol; `_build_target_cards` and `_build_accuracy_row` gained `ticker` parameter |
+
+**Commit:** `5c017f2` — *fix: dynamic currency symbols for multi-market stocks*
+
+---
+
 ## Known Issues / Pending Work
 
 | Issue | Priority | Notes |
 |-------|----------|-------|
 | Anthropic API not working | High | Switch back once access is fixed — see [How to Run](how-to-run.md) |
+| SerpAPI key required for web search | Medium | Free tier (100/month) at serpapi.com |

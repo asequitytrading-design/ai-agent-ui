@@ -14,14 +14,36 @@
 
 ---
 
+## First-Time Setup
+
+Before running for the first time, create `backend/.env` with your API keys and a JWT secret:
+
+```bash
+# Generate a secure JWT secret
+python -c "import secrets; print(secrets.token_hex(32))"
+
+# Create backend/.env  (never commit this file)
+cat > backend/.env <<EOF
+GROQ_API_KEY=gsk_...
+SERPAPI_API_KEY=abc123...
+JWT_SECRET_KEY=<paste-output-above>
+ADMIN_EMAIL=admin@example.com
+ADMIN_PASSWORD=Admin1234
+EOF
+
+# Copy the frontend env template
+cp frontend/.env.local.example frontend/.env.local
+```
+
+`./run.sh start` will automatically create the Iceberg tables and seed the superuser on first run (detected by the absence of `data/iceberg/catalog.db`).
+
+---
+
 ## All Services at Once (Recommended)
 
 `run.sh` in the project root starts, stops, and monitors all four services.
 
 ```bash
-export GROQ_API_KEY=gsk_...
-export SERPAPI_API_KEY=abc123...
-
 ./run.sh start      # launch all four services in the background
 ./run.sh status     # show PID + URL for each service
 ./run.sh stop       # stop everything
@@ -63,24 +85,36 @@ You should see `(demoenv)` in your shell prompt.
 
 ### 2. Set environment variables
 
-```bash
-export GROQ_API_KEY=gsk_...
-export SERPAPI_API_KEY=abc123...
-```
-
-Alternatively, create `backend/.env` (never commit this file):
+Create `backend/.env` (never commit this file):
 
 ```dotenv
+# Required
 GROQ_API_KEY=gsk_...
+JWT_SECRET_KEY=<min-32-random-chars>
+
+# Required on first run only (used by seed_admin.py)
+ADMIN_EMAIL=admin@example.com
+ADMIN_PASSWORD=Admin1234
+
+# Optional
 SERPAPI_API_KEY=abc123...
+ACCESS_TOKEN_EXPIRE_MINUTES=60
+REFRESH_TOKEN_EXPIRE_DAYS=7
 LOG_LEVEL=DEBUG
 LOG_TO_FILE=true
 ```
 
-Optional variables and their defaults:
+All variables and their defaults:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `GROQ_API_KEY` | — | Required for chat |
+| `JWT_SECRET_KEY` | — | Required for auth — min 32 chars |
+| `ADMIN_EMAIL` | — | First-run seed only |
+| `ADMIN_PASSWORD` | — | First-run seed only |
+| `SERPAPI_API_KEY` | — | Required for `search_web` tool |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | `60` | JWT access token TTL |
+| `REFRESH_TOKEN_EXPIRE_DAYS` | `7` | JWT refresh token TTL |
 | `LOG_LEVEL` | `DEBUG` | Minimum log severity |
 | `LOG_TO_FILE` | `true` | Write logs to `backend/logs/agent.log` |
 
@@ -132,10 +166,13 @@ Open [http://localhost:3000](http://localhost:3000) in your browser. You should 
 
 ## Verify End-to-End
 
-1. Type a message in the chat UI, e.g. *"What time is it?"*
-2. The typing indicator (three bouncing dots) should appear.
-3. The backend executes the agentic loop, calls the `get_current_time` tool, and returns the result.
-4. The assistant's response appears as a chat bubble.
+1. Open [http://localhost:3000](http://localhost:3000) — you will be redirected to `/login`.
+2. Log in with the `ADMIN_EMAIL` / `ADMIN_PASSWORD` you set in `backend/.env`.
+3. After login you land on the chat UI.
+4. Type *"What time is it?"* — the streaming status badge (`Thinking...`) should appear.
+5. The backend executes the agentic loop, calls `get_current_time`, and streams the result.
+6. The assistant's response appears as a chat bubble rendered in Markdown.
+7. Open the nav menu (bottom-right ⊞) — Chat / Docs / Dashboard / Admin (superuser only).
 
 Check the backend terminal for log output showing the full loop:
 
