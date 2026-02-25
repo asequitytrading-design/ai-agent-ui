@@ -9,9 +9,14 @@ The frontend is a Next.js 16 application with a single `page.tsx` component that
 ```
 frontend/
 ├── app/
-│   ├── page.tsx              # Entire SPA — chat, docs, dashboard views
+│   ├── page.tsx              # Entire SPA — chat, docs, dashboard, admin views
+│   ├── login/
+│   │   └── page.tsx          # Login page — email + password form
 │   ├── layout.tsx            # Root layout (html + body tags, font setup)
 │   └── globals.css           # Tailwind CSS imports + base styles
+├── lib/
+│   ├── auth.ts               # JWT token helpers (getAccessToken, setTokens, …)
+│   └── apiFetch.ts           # Authenticated fetch wrapper (auto-refresh + 401 redirect)
 ├── public/                   # Static SVG assets (Next.js defaults)
 ├── .env.local                # Runtime env vars (gitignored)
 ├── .env.local.example        # Committed reference copy
@@ -43,7 +48,7 @@ All three are used at runtime in the browser (they're embedded in the client bun
 ### Types
 
 ```typescript
-type View = "chat" | "docs" | "dashboard";
+type View = "chat" | "docs" | "dashboard" | "admin";
 
 interface Message {
   role: "user" | "assistant";
@@ -78,6 +83,12 @@ const menuRef        = useRef<HTMLDivElement>(null);   // click-outside detectio
 ### Effects
 
 ```typescript
+// Auth guard — redirect to /login if no valid token
+useEffect(() => {
+  const token = getAccessToken();
+  if (!token || isTokenExpired(token)) router.replace("/login");
+}, []);
+
 // Auto-scroll to latest message
 useEffect(() => {
   messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -165,15 +176,54 @@ The `<iframe>` also carries a `sandbox` attribute permitting scripts, same-origi
 
 ---
 
+## Authentication
+
+### Auth guard
+
+On every mount, `page.tsx` checks for a valid, unexpired access token. If none exists, the user is redirected to `/login` immediately. A loading spinner is shown until the guard resolves, preventing a flash of the chat UI.
+
+### Header controls
+
+When `view === "chat"`, the header shows:
+
+- **Agent selector** — toggle between General and Stock Analysis
+- **Logout button** — calls `clearTokens()` + `router.replace("/login")`
+- **Clear button** — clears the active agent's chat history (only shown when messages exist)
+
+### Admin nav item
+
+The navigation menu includes an **Admin** item visible only to superusers. The role is decoded from the stored JWT with `getRoleFromToken()` — no extra API call required.
+
+Clicking Admin sets `view = "admin"` and loads `DASHBOARD_URL/admin/users?token=<jwt>` in the iframe.
+
+### Token propagation to iframes
+
+When rendering a dashboard or admin iframe, the current access token is appended as a query parameter:
+
+```typescript
+const iframeSrc = (() => {
+  const base = iframeUrl ?? defaultUrl;
+  const token = getAccessToken();
+  if (!token) return base;
+  const sep = base.includes("?") ? "&" : "?";
+  return `${base}${sep}token=${encodeURIComponent(token)}`;
+})();
+```
+
+The Dash app receives the token via `?token=`, stores it in `dcc.Store`, and validates it on every page render. Docs iframes do not require a token.
+
+---
+
 ## Navigation Menu
 
-A fixed-position FAB button sits at `bottom-6 right-6`. Clicking it toggles a popup with three items:
+A fixed-position FAB button sits at `bottom-6 right-6`. Clicking it toggles a popup with four items (Admin is hidden for non-superusers):
 
 | Item | Icon | Action |
 |------|------|--------|
 | Chat | Message bubble | `switchView("chat")` |
 | Docs | File icon | `switchView("docs")` — loads MkDocs |
 | Dashboard | Grid icon | `switchView("dashboard")` — loads Dash |
+| Admin | Shield icon | `switchView("admin")` — loads `/admin/users` (superusers only) |
 
 The active view is highlighted with an indigo background and a small dot indicator. The menu closes when an item is clicked or when the user clicks outside.
 

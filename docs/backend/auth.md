@@ -326,6 +326,112 @@ REFRESH_TOKEN_EXPIRE_DAYS=7
 
 ---
 
+## Frontend Login Flow
+
+### File structure
+
+```
+frontend/
+├── app/
+│   ├── login/
+│   │   └── page.tsx      # Login page — email + password form
+│   └── page.tsx          # Main SPA — auth guard + logout + Admin nav item
+└── lib/
+    ├── auth.ts            # Token helpers (localStorage ↔ JWT)
+    └── apiFetch.ts        # Authenticated fetch wrapper (auto-refresh)
+```
+
+### Login page — `frontend/app/login/page.tsx`
+
+Renders a centered email + password form.
+
+- On mount: if a **valid, unexpired** access token already exists, redirects immediately to `/` (covers browser back-button scenarios).
+- On submit: calls `POST /auth/login` with `{ email, password }`.
+  - **Success** → calls `setTokens(access, refresh)` and redirects to `/`.
+  - **Failure** → shows generic "Invalid email or password" — never reveals which field was wrong.
+
+### Token helpers — `frontend/lib/auth.ts`
+
+| Function | Description |
+|---|---|
+| `getAccessToken()` | Read access token from `localStorage` |
+| `getRefreshToken()` | Read refresh token from `localStorage` |
+| `setTokens(access, refresh)` | Write both tokens to `localStorage` |
+| `clearTokens()` | Remove both tokens (logout) |
+| `isTokenExpired(token)` | Decode base64 JWT payload, check `exp` with 30 s clock-skew buffer |
+| `getRoleFromToken()` | Decode `role` claim from the stored access token |
+| `refreshAccessToken()` | Call `POST /auth/refresh`; store new pair on success, clear on failure |
+
+JWT expiry is decoded client-side from the base64 payload — no library required.
+
+### Authenticated fetch — `frontend/lib/apiFetch.ts`
+
+`apiFetch` is a drop-in replacement for the native `fetch` API with the same signature:
+
+```typescript
+async function apiFetch(url: string, options?: RequestInit): Promise<Response>
+```
+
+Before each request it:
+
+1. Checks whether the stored access token is expired.
+2. If expired, calls `refreshAccessToken()` to obtain a fresh pair.
+3. Injects `Authorization: Bearer <access_token>` into the request headers.
+4. On `401` response — calls `clearTokens()` and redirects to `/login`.
+
+### Auth guard in `page.tsx`
+
+A `useEffect` runs once on mount:
+
+```typescript
+useEffect(() => {
+  const token = getAccessToken();
+  if (!token || isTokenExpired(token)) {
+    router.replace("/login");
+  }
+}, []);
+```
+
+The component renders a loading spinner until the guard resolves, preventing the chat UI from flashing before the redirect.
+
+### Session lifecycle
+
+```
+User visits /
+    │
+    ▼
+Auth guard (mount effect)
+    │
+    ├── token missing or expired ──► redirect to /login
+    │
+    └── token valid ──► render chat UI
+                              │
+                              ▼
+                  User sends message
+                              │
+                              ▼
+                  apiFetch POST /chat/stream
+                  ├── token valid      ──► normal request
+                  └── token expired    ──► POST /auth/refresh ──► retry request
+                                              │
+                                              └── refresh fails ──► /login
+                              │
+                              ▼
+                  Logout button clicked
+                  clearTokens() + router.replace("/login")
+```
+
+### Password change flow
+
+Accessible from the "Change Password" button in the dashboard NAVBAR (Dash):
+
+1. User clicks **Change Password** → modal opens.
+2. Modal calls `POST /auth/password-reset/request` with `{ email }` → returns a `reset_token`.
+3. Modal immediately calls `POST /auth/password-reset/confirm` with `{ reset_token, new_password }`.
+4. On success: modal closes; token is single-use and expires in 30 minutes.
+
+---
+
 ## Dashboard Integration
 
 The Plotly Dash dashboard validates the JWT on every page load.  The token is

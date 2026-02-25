@@ -173,6 +173,81 @@ data/metadata/{TICKER}_info.json      ──► Company name on Home cards
 
 ---
 
+## Authentication
+
+The dashboard requires a valid JWT on every page load. The token is passed from the Next.js frontend via a `?token=<jwt>` query parameter and persisted in a `dcc.Store` so it survives in-dashboard navigation.
+
+### Token flow
+
+```
+Next.js iframeSrc
+    │  appends ?token=<access_token>
+    ▼
+Dash URL bar (?token=eyJ...)
+    │
+    ├── store_token_from_url callback
+    │       extracts ?token= → writes to auth-token-store (localStorage)
+    │
+    └── display_page callback
+            reads token from URL param (preferred) or auth-token-store
+            calls _validate_token(token)
+                ├── valid   → render requested page
+                └── invalid → _unauth_notice() ("Authentication required" screen)
+```
+
+### Page-level access control
+
+| Route | Access |
+|---|---|
+| `/`, `/analysis`, `/forecast`, `/compare` | Any authenticated user |
+| `/admin/users` | Superuser only — others see `_admin_forbidden()` notice |
+
+### Admin page — `/admin/users`
+
+Accessible from the **Admin** link in the NAVBAR (only rendered for superusers).
+
+**Users tab:**
+
+| Feature | Description |
+|---|---|
+| User table | DataTable of all accounts with role badge (superuser / general) and status badge (Active / Deactivated) |
+| Add User button | Opens modal → `POST /users` |
+| Edit button | Per-row modal pre-filled with user data → `PATCH /users/{id}` |
+| Deactivate / Reactivate | Per-row toggle → `DELETE /users/{id}` (deactivate) or `PATCH` with `is_active: true` (reactivate) |
+
+**Audit Log tab:**
+
+Full event table: timestamp, event type, actor user ID, target user ID, metadata JSON. Events are sorted newest-first.
+
+### Change Password modal
+
+Available from the **Change Password** button in the NAVBAR on any page. Two-step flow:
+
+1. `POST /auth/password-reset/request` with `{ email }` → returns a single-use reset token.
+2. `POST /auth/password-reset/confirm` with `{ reset_token, new_password }` → applies the new password.
+
+Password must be ≥ 8 characters and contain at least one digit. The modal shows inline error messages for validation failures and API errors.
+
+### `_api_call` helper
+
+All admin callbacks use `_api_call(method, path, token, json_body)` to make authenticated HTTP requests to the FastAPI backend:
+
+```python
+def _api_call(method, path, token, json_body=None):
+    url = f"{BACKEND_URL}{path}"
+    headers = {"Authorization": f"Bearer {token}"}
+    resp = requests.request(method, url, json=json_body, headers=headers, timeout=10)
+    return resp
+```
+
+`BACKEND_URL` defaults to `http://127.0.0.1:8181` and can be overridden via the `BACKEND_URL` environment variable.
+
+### Environment loading
+
+`dashboard/app.py` includes a `_load_dotenv()` helper that reads `backend/.env` into `os.environ` at module import time (before any callbacks run). This ensures `JWT_SECRET_KEY` is available to `_validate_token()` even when the dashboard process was started without the variable explicitly exported in the shell.
+
+---
+
 ## Deployment (gunicorn)
 
 The `server` attribute in `app.py` exposes the underlying Flask WSGI object:
