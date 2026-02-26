@@ -32,7 +32,9 @@ export default function LoginPage() {
     fetch(`${BACKEND_URL}/auth/oauth/providers`)
       .then((r) => r.json())
       .then((data: { providers?: string[] }) => {
-        setOauthProviders(data.providers ?? []);
+        setOauthProviders(
+          (data.providers ?? []).filter((p) => p !== "facebook")
+        );
       })
       .catch(() => {
         // Backend unreachable — hide SSO buttons gracefully.
