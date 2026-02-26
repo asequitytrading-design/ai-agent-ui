@@ -14,8 +14,12 @@ Models
 - :class:`UserResponse` — public user representation (no password hash)
 - :class:`PasswordResetRequestBody` — initiates a self-service password reset
 - :class:`PasswordResetConfirmBody` — completes a self-service password reset
+- :class:`OAuthProvider` — enum of supported OAuth providers
+- :class:`OAuthAuthorizeResponse` — response from ``GET /auth/oauth/{provider}/authorize``
+- :class:`OAuthCallbackRequest` — request body for ``POST /auth/oauth/callback``
 """
 
+from enum import Enum
 from typing import Optional
 
 from pydantic import BaseModel, EmailStr, Field
@@ -169,3 +173,55 @@ class LogoutRequest(BaseModel):
     """
 
     refresh_token: str
+
+
+# ---------------------------------------------------------------------------
+# SSO / OAuth2 models
+# ---------------------------------------------------------------------------
+
+
+class OAuthProvider(str, Enum):
+    """Supported OAuth2 SSO providers.
+
+    Attributes:
+        google: Google OAuth2 (OpenID Connect).
+        facebook: Facebook OAuth2 (Graph API).
+    """
+
+    google = "google"
+    facebook = "facebook"
+
+
+class OAuthAuthorizeResponse(BaseModel):
+    """Response body for ``GET /auth/oauth/{provider}/authorize``.
+
+    Attributes:
+        state: CSRF state token generated server-side.  The frontend must
+            store this and pass it back in :class:`OAuthCallbackRequest`.
+        authorize_url: Full provider consent URL to redirect the browser to.
+    """
+
+    state: str
+    authorize_url: str
+
+
+class OAuthCallbackRequest(BaseModel):
+    """Request body for ``POST /auth/oauth/callback``.
+
+    Sent by the frontend callback page after the provider redirects back
+    with an authorization code.
+
+    Attributes:
+        provider: The OAuth provider that issued the code.
+        code: Authorization code from the provider's redirect.
+        state: The CSRF state token originally returned by
+            ``GET /auth/oauth/{provider}/authorize``.
+        code_verifier: PKCE code verifier stored in ``sessionStorage``
+            during the authorize step.  Required for Google; optional
+            (and ignored) for Facebook.
+    """
+
+    provider: OAuthProvider
+    code: str
+    state: str
+    code_verifier: Optional[str] = None

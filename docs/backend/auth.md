@@ -75,7 +75,7 @@ The warehouse lives at `data/iceberg/warehouse/` and is gitignored.  The catalog
 | Access | `sub`, `email`, `role`, `type="access"`, `jti`, `iat`, `exp` | 60 min (configurable) |
 | Refresh | `sub`, `type="refresh"`, `jti`, `iat`, `exp` | 7 days (configurable) |
 
-Refresh tokens are rotated on every `/auth/refresh` call — the old token is immediately revoked.  Logout adds the JTI to an in-memory deny-list (cleared on restart; acceptable for single-server MVP).
+Refresh tokens are rotated on every `/auth/refresh` call — the old token is immediately revoked.  Logout adds the JTI to an in‑memory deny‑list (cleared on restart; acceptable for single‑server MVP).
 
 ### Roles
 
@@ -120,7 +120,7 @@ Content-Type: application/json
 
 #### `POST /auth/login/form`
 
-OAuth2 form-based login (used by the OpenAPI "Authorize" button at `/docs`).  Accepts `application/x-www-form-urlencoded` with `username` (email) and `password`.
+OAuth2 form‑based login (used by the OpenAPI "Authorize" button at `/docs`).  Accepts `application/x-www-form-urlencoded` with `username` (email) and `password`.
 
 ---
 
@@ -151,7 +151,7 @@ Authorization: Bearer <access_token>
 
 #### `POST /auth/password-reset/request`
 
-Generate a single-use 30-minute password reset token for the authenticated user.  The caller may only reset their own password.
+Generate a single‑use 30‑minute password reset token for the authenticated user.  The caller may only reset their own password.
 
 ```http
 Authorization: Bearer <access_token>
@@ -168,7 +168,7 @@ Authorization: Bearer <access_token>
 
 #### `POST /auth/password-reset/confirm`
 
-Apply a new password using the reset token from the previous step.  The token is single-use.
+Apply a new password using the reset token from the previous step.  The token is single‑use.
 
 ```http
 Authorization: Bearer <access_token>
@@ -241,9 +241,9 @@ Update a user's details.  All fields are optional; only supplied fields are chan
 
 #### `DELETE /users/{user_id}`
 
-Soft-delete a user (`is_active = false`).  Superusers cannot delete themselves.
+Soft‑delete a user (`is_active = false`).  Superusers cannot delete themselves.
 
-**Error codes:** `400` self-delete attempted, `404` user not found.
+**Error codes:** `400` self‑delete attempted, `404` user not found.
 
 ---
 
@@ -251,7 +251,7 @@ Soft-delete a user (`is_active = false`).  Superusers cannot delete themselves.
 
 #### `GET /admin/audit-log`
 
-Return all audit log events, sorted newest-first.
+Return all audit log events, sorted newest‑first.
 
 **Response 200:**
 ```json
@@ -273,6 +273,48 @@ Return all audit log events, sorted newest-first.
 
 ---
 
+### OAuth / SSO
+
+#### `GET /auth/oauth/providers`
+
+Returns a list of enabled OAuth providers (e.g., `google`, `facebook`).
+
+```json
+["google", "facebook"]
+```
+
+---
+
+#### `GET /auth/oauth/{provider}/authorize?code_challenge=<hash>`
+
+Creates a one‑time state value, stores it in an in‑memory cache (10‑minute TTL), and returns the provider‑specific consent URL.
+
+```json
+{
+  "state": "abcd1234",
+  "authorize_url": "https://accounts.google.com/o/oauth2/v2/auth?..."
+}
+```
+
+---
+
+#### `POST /auth/oauth/callback`
+
+Exchanges the provider’s authorization `code` (and PKCE `code_verifier` for Google) for a JWT access/refresh pair and upserts the user in `auth.users`.
+
+```json
+{
+  "provider": "google",
+  "code": "4/0AY0e...",
+  "state": "abcd1234",
+  "code_verifier": "random-string"  // optional for Facebook
+}
+```
+
+**Response 200:** same shape as `/auth/login` (`access_token`, `refresh_token`, `token_type`).
+
+---
+
 ## Pydantic Models
 
 Defined in `auth/models.py`:
@@ -280,7 +322,7 @@ Defined in `auth/models.py`:
 | Model | Used by |
 |---|---|
 | `LoginRequest` | `POST /auth/login` body |
-| `TokenResponse` | All token-returning endpoints |
+| `TokenResponse` | All token‑returning endpoints |
 | `RefreshRequest` | `POST /auth/refresh` body |
 | `LogoutRequest` | `POST /auth/logout` body |
 | `PasswordResetRequestBody` | `POST /auth/password-reset/request` body |
@@ -288,7 +330,10 @@ Defined in `auth/models.py`:
 | `UserCreateRequest` | `POST /users` body |
 | `UserUpdateRequest` | `PATCH /users/{id}` body |
 | `UserContext` | Injected into routes by `get_current_user` dependency |
-| `UserResponse` | All user-returning endpoints (no sensitive fields) |
+| `UserResponse` | All user‑returning endpoints (no sensitive fields) |
+| `OAuthProvider` (enum) | OAuth provider identifier (`google`, `facebook`) |
+| `OAuthAuthorizeResponse` | `GET /auth/oauth/{provider}/authorize` response |
+| `OAuthCallbackRequest` | `POST /auth/oauth/callback` body |
 
 ---
 
@@ -320,9 +365,37 @@ JWT_SECRET_KEY=<min-32-random-chars>
 # Optional (shown with defaults)
 ACCESS_TOKEN_EXPIRE_MINUTES=60
 REFRESH_TOKEN_EXPIRE_DAYS=7
+
+# OAuth / SSO (new)
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+FACEBOOK_APP_ID=...
+FACEBOOK_APP_SECRET=...
+OAUTH_REDIRECT_URI=http://localhost:3000/auth/oauth/callback
 ```
 
-`backend/config.py` `Settings` reads all three fields automatically.
+`backend/config.py` `Settings` reads all of the above automatically.
+
+---
+
+## Migration
+
+A one‑time Iceberg schema migration adds three nullable columns to `auth.users`:
+
+| Column | Type | Notes |
+|---|---|---|
+| `oauth_provider` | StringType (nullable) | `"google"` / `"facebook"` / `None` |
+| `oauth_sub` | StringType (nullable) | Provider‑specific user ID |
+| `profile_picture_url` | StringType (nullable) | Refreshed on each SSO login |
+
+Run the migration after deploying the new code:
+
+```bash
+cd ai-agent-ui && source backend/demoenv/bin/activate
+python auth/migrate_users_table.py
+```
+
+The script is idempotent – re‑running it will report the columns as already existing.
 
 ---
 
@@ -334,154 +407,11 @@ REFRESH_TOKEN_EXPIRE_DAYS=7
 frontend/
 ├── app/
 │   ├── login/
-│   │   └── page.tsx      # Login page — email + password form
+│   │   └── page.tsx      # Login page — email + password form + SSO buttons
 │   └── page.tsx          # Main SPA — auth guard + logout + Admin nav item
 └── lib/
-    ├── auth.ts            # Token helpers (localStorage ↔ JWT)
-    └── apiFetch.ts        # Authenticated fetch wrapper (auto-refresh)
+    ├── auth.ts            # Core auth helpers (login, refresh, logout)
+    └── oauth.ts           # PKCE helpers + sessionStorage helpers for SSO
 ```
 
-### Login page — `frontend/app/login/page.tsx`
-
-Renders a centered email + password form.
-
-- On mount: if a **valid, unexpired** access token already exists, redirects immediately to `/` (covers browser back-button scenarios).
-- On submit: calls `POST /auth/login` with `{ email, password }`.
-  - **Success** → calls `setTokens(access, refresh)` and redirects to `/`.
-  - **Failure** → shows generic "Invalid email or password" — never reveals which field was wrong.
-
-### Token helpers — `frontend/lib/auth.ts`
-
-| Function | Description |
-|---|---|
-| `getAccessToken()` | Read access token from `localStorage` |
-| `getRefreshToken()` | Read refresh token from `localStorage` |
-| `setTokens(access, refresh)` | Write both tokens to `localStorage` |
-| `clearTokens()` | Remove both tokens (logout) |
-| `isTokenExpired(token)` | Decode base64 JWT payload, check `exp` with 30 s clock-skew buffer |
-| `getRoleFromToken()` | Decode `role` claim from the stored access token |
-| `refreshAccessToken()` | Call `POST /auth/refresh`; store new pair on success, clear on failure |
-
-JWT expiry is decoded client-side from the base64 payload — no library required.
-
-### Authenticated fetch — `frontend/lib/apiFetch.ts`
-
-`apiFetch` is a drop-in replacement for the native `fetch` API with the same signature:
-
-```typescript
-async function apiFetch(url: string, options?: RequestInit): Promise<Response>
-```
-
-Before each request it:
-
-1. Checks whether the stored access token is expired.
-2. If expired, calls `refreshAccessToken()` to obtain a fresh pair.
-3. Injects `Authorization: Bearer <access_token>` into the request headers.
-4. On `401` response — calls `clearTokens()` and redirects to `/login`.
-
-### Auth guard in `page.tsx`
-
-A `useEffect` runs once on mount:
-
-```typescript
-useEffect(() => {
-  const token = getAccessToken();
-  if (!token || isTokenExpired(token)) {
-    router.replace("/login");
-  }
-}, []);
-```
-
-The component renders a loading spinner until the guard resolves, preventing the chat UI from flashing before the redirect.
-
-### Session lifecycle
-
-```
-User visits /
-    │
-    ▼
-Auth guard (mount effect)
-    │
-    ├── token missing or expired ──► redirect to /login
-    │
-    └── token valid ──► render chat UI
-                              │
-                              ▼
-                  User sends message
-                              │
-                              ▼
-                  apiFetch POST /chat/stream
-                  ├── token valid      ──► normal request
-                  └── token expired    ──► POST /auth/refresh ──► retry request
-                                              │
-                                              └── refresh fails ──► /login
-                              │
-                              ▼
-                  Logout button clicked
-                  clearTokens() + router.replace("/login")
-```
-
-### Password change flow
-
-Accessible from the "Change Password" button in the dashboard NAVBAR (Dash):
-
-1. User clicks **Change Password** → modal opens.
-2. Modal calls `POST /auth/password-reset/request` with `{ email }` → returns a `reset_token`.
-3. Modal immediately calls `POST /auth/password-reset/confirm` with `{ reset_token, new_password }`.
-4. On success: modal closes; token is single-use and expires in 30 minutes.
-
----
-
-## Dashboard Integration
-
-The Plotly Dash dashboard validates the JWT on every page load.  The token is
-propagated from Next.js via a `?token=<jwt>` query parameter when the iframe URL
-is set, and persisted in `dcc.Store(id="auth-token-store", storage_type="local")`.
-
-| Callback | Guard |
-|---|---|
-| `store_token_from_url` | Extracts `?token=` and saves to localStorage |
-| `display_page` | Calls `_validate_token()` before rendering any page |
-| `/admin/users` route | Checks `role == "superuser"` before calling `admin_users_layout()` |
-| All admin callbacks | Resolve token via `_resolve_token(stored, url_search)` |
-
-The `_api_call(method, path, token, json_body)` helper in `dashboard/callbacks.py`
-sends authenticated requests to the FastAPI backend (`BACKEND_URL` env var,
-default `http://127.0.0.1:8181`).
-
-### Environment loading in the dashboard process
-
-The Dash dashboard is a **separate process** from the FastAPI backend.
-`dashboard/app.py` includes a `_load_dotenv()` helper (executed at module import
-time) that reads `backend/.env` into `os.environ` before any callbacks run.  This
-ensures `JWT_SECRET_KEY` is available to `_validate_token()` even when it is not
-explicitly exported in the shell.  Env vars already present in the shell always
-take precedence.
-
----
-
-## Admin UI — `/admin/users`
-
-Accessible from the "Admin" link in the dashboard NAVBAR (superusers only;
-general users see a 403 notice).  The Next.js sidebar also shows the Admin
-nav item only for superusers (role decoded from the JWT with `getRoleFromToken()`).
-
-| Feature | Description |
-|---|---|
-| **Users tab** | DataTable of all accounts with role/status badges |
-| **Add User** | Modal form → `POST /users` |
-| **Edit** | Per-row modal pre-filled with user data → `PATCH /users/{id}` |
-| **Deactivate / Reactivate** | Per-row toggle → `DELETE /users/{id}` or `PATCH` with `is_active: true` |
-| **Audit Log tab** | Full event table (type, actor, target, metadata) |
-| **Change Password** | NAVBAR button → global modal → `/auth/password-reset/*` flow |
-
----
-
-## Security Notes
-
-- `.env` is in `.gitignore` — never commit secrets.
-- `data/iceberg/` is in `.gitignore` — the catalog and warehouse are local-only.
-- `JWT_SECRET_KEY` must be ≥ 32 random characters (enforced by `AuthService.__init__`).
-- Passwords never appear in log output — only hashes are stored and compared.
-- Password reset tokens are single-use and expire in 30 minutes.
-- All admin endpoints enforce `superuser_only` — a `general` user gets HTTP 403.
+The login page now fetches `/auth/oauth/providers` and renders a Google and/or Facebook button when the corresponding provider is enabled. Clicking a button triggers the PKCE flow, stores the temporary verifier in `sessionStorage`, and redirects the user to the provider consent screen. After consent, the callback page (`frontend/app/auth/oauth/callback/page.tsx`) completes the exchange and stores the JWT pair.

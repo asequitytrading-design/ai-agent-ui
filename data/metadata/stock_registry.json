@@ -108,5 +108,15 @@
       "end": "2026-02-25"
     },
     "file_path": "/Users/abhaysingh/Documents/ai-agent-ui/data/raw/HDFCBANK.NS_raw.parquet"
+  },
+  "SBIN.NS": {
+    "ticker": "SBIN.NS",
+    "last_fetch_date": "2026-02-26",
+    "total_rows": 2471,
+    "date_range": {
+      "start": "2016-02-26",
+      "end": "2026-02-26"
+    },
+    "file_path": "/Users/abhaysingh/Documents/ai-agent-ui/data/raw/SBIN.NS_raw.parquet"
   }
 }

@@ -11,6 +11,17 @@
  * - `auth_refresh_token` — long-lived JWT (7 days)
  */
 
+// Re-export PKCE helpers so callers can import everything auth-related
+// from a single module.
+export {
+  clearOAuthSession,
+  generateCodeChallenge,
+  generateCodeVerifier,
+  getStoredProvider,
+  getStoredVerifier,
+  storeOAuthSession,
+} from "@/lib/oauth";
+
 const ACCESS_KEY = "auth_access_token";
 const REFRESH_KEY = "auth_refresh_token";
 

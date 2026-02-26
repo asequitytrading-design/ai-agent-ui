@@ -51,6 +51,17 @@ class Settings(BaseSettings):
             Defaults to ``60``.
         refresh_token_expire_days: Lifetime of a refresh token in days.
             Defaults to ``7``.
+        google_client_id: OAuth 2.0 client ID from Google Cloud Console.
+            Maps to ``GOOGLE_CLIENT_ID``.  Leave empty to disable Google SSO.
+        google_client_secret: OAuth 2.0 client secret from Google Cloud Console.
+            Maps to ``GOOGLE_CLIENT_SECRET``.
+        facebook_app_id: App ID from Facebook Developers portal.
+            Maps to ``FACEBOOK_APP_ID``.  Leave empty to disable Facebook SSO.
+        facebook_app_secret: App secret from Facebook Developers portal.
+            Maps to ``FACEBOOK_APP_SECRET``.
+        oauth_redirect_uri: The redirect URI registered with each OAuth provider.
+            Must match exactly.  Defaults to
+            ``"http://localhost:3000/auth/oauth/callback"``.
     """
 
     groq_api_key: str = ""
@@ -66,6 +77,17 @@ class Settings(BaseSettings):
     jwt_secret_key: str = ""
     access_token_expire_minutes: int = 60
     refresh_token_expire_days: int = 7
+
+    # SSO / OAuth2 settings.
+    # Google: obtain from https://console.cloud.google.com — create an OAuth 2.0
+    #   Web Application client.  Add the redirect URI below as an authorised URI.
+    # Facebook: obtain from https://developers.facebook.com — create a Consumer
+    #   app with the Facebook Login product.
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    facebook_app_id: str = ""
+    facebook_app_secret: str = ""
+    oauth_redirect_uri: str = "http://localhost:3000/auth/oauth/callback"
 
     # Read from .env in the working directory; silently skip if absent.
     # Real environment variables always take precedence over .env values.

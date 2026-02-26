@@ -2,6 +2,107 @@
 
 ---
 
+# Session: Feb 26, 2026 — Google + Facebook SSO (OAuth2 PKCE)
+
+## What We Built
+
+Full SSO integration on top of the existing JWT auth, following `sso_plan.md`.
+Google is live (credentials already in `backend/.env`).
+Facebook code is fully implemented; credentials are placeholder — will be
+wired up once the user provides real Facebook Developer credentials.
+
+### Backend changes
+
+**`auth/oauth_service.py`** (new)
+- `OAuthService` class with in-memory CSRF state store (10-min TTL, lazy cleanup)
+- `generate_authorize_url(provider, code_challenge)` — builds consent URL + registers state
+- `validate_state(state, provider)` — single-use consumption with expiry check
+- `exchange_google_code(code, code_verifier)` — PKCE token exchange; decodes `id_token` with PyJWT (no sig verification, trust HTTPS)
+- `exchange_facebook_code(code)` — two-step Graph API exchange (access token → `/me` profile)
+
+**`auth/migrate_users_table.py`** (new)
+- Idempotent Iceberg schema migration — adds `oauth_provider`, `oauth_sub`, `profile_picture_url` to `auth.users`
+- Run once: `python auth/migrate_users_table.py`
+
+**`auth/create_tables.py`** — extended `_users_schema()` with 3 new nullable fields (field IDs 12–14) so fresh installs include them
+
+**`auth/repository.py`**
+- Updated `_USERS_PA_SCHEMA` with 3 new nullable string fields
+- Updated `create()` to include `oauth_provider`, `oauth_sub`, `profile_picture_url`
+- Added `get_by_oauth_sub(provider, oauth_sub)` — full-scan lookup
+- Added `get_or_create_by_oauth(...)` — three-way upsert (sub match → email match → create new)
+
+**`auth/models.py`**
+- `OAuthProvider` enum (`google`, `facebook`)
+- `OAuthAuthorizeResponse` — `{state, authorize_url}`
+- `OAuthCallbackRequest` — `{provider, code, state, code_verifier?}`
+
+**`auth/api.py`** — 3 new endpoints (15 total):
+- `GET /auth/oauth/providers`
+- `GET /auth/oauth/{provider}/authorize?code_challenge=<hash>`
+- `POST /auth/oauth/callback`
+- `_get_oauth_svc()` singleton via `@lru_cache`
+
+**`backend/config.py`** — 5 new settings: `google_client_id`, `google_client_secret`, `facebook_app_id`, `facebook_app_secret`, `oauth_redirect_uri`
+
+**`PyJWT`** installed into `demoenv`; `requirements.txt` frozen.
+
+### Frontend changes
+
+**`frontend/lib/oauth.ts`** (new)
+- `generateCodeVerifier(length)` — random base64url string
+- `generateCodeChallenge(verifier)` — async SHA-256 via `crypto.subtle`
+- `storeOAuthSession(provider, verifier)` / `getStoredProvider()` / `getStoredVerifier()` / `clearOAuthSession()` — sessionStorage helpers
+
+**`frontend/app/auth/oauth/callback/page.tsx`** (new)
+- Reads `code` + `state` from URL; `code_verifier` + `provider` from sessionStorage
+- POSTs to `/auth/oauth/callback`; stores JWT pair; redirects to `/`
+- Shows spinner while loading, error banner on failure
+
+**`frontend/app/login/page.tsx`**
+- Fetches `/auth/oauth/providers` on mount; shows SSO buttons only when providers are enabled
+- `handleOAuthLogin(provider)` — generates verifier/challenge, fetches authorize URL, stores session, redirects
+- Google SVG logo and Facebook SVG logo inline (no external assets)
+
+**`frontend/lib/auth.ts`** — re-exports all PKCE helpers from `oauth.ts`
+
+### Docs / config
+
+- `docs/backend/oauth.md` (new) — full SSO documentation (flow diagram, endpoints, schema, edge cases, config)
+- `mkdocs.yml` — "OAuth / SSO" added under Backend nav
+- `mkdocs build` exits 0 ✓
+
+### Migration
+
+Migration ran successfully:
+```
++ Added column: oauth_provider
++ Added column: oauth_sub
++ Added column: profile_picture_url
+Migration complete
+```
+Verified idempotent (second run shows "already exists" for all 3 columns).
+
+## Facebook bypass note
+
+Facebook code is fully implemented but credentials in `backend/.env` are still
+`<your-app-id>` / `<your-app-secret>`.  Since `facebook_app_id` is non-empty,
+the Facebook button will render.  Clicking it will redirect to a broken Facebook
+URL — the flow will complete once real credentials are added via:
+```
+FACEBOOK_APP_ID=<real-id>
+FACEBOOK_APP_SECRET=<real-secret>
+```
+
+## Pending (user action required)
+
+- [ ] Register `http://localhost:3000/auth/oauth/callback` as authorised
+  redirect URI in Google Cloud Console (if not already done)
+- [ ] Obtain real Facebook credentials and update `backend/.env`
+- [ ] Run `./run.sh restart` to pick up new env vars / code
+
+---
+
 # Session: Feb 25, 2026 — Dashboard pagination, market filter, and pre-commit hook
 
 ## What We Built

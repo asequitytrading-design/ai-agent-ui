@@ -44,6 +44,12 @@ Users (superuser only)
 Admin (superuser only)
 ~~~~~~~~~~~~~~~~~~~~~~
 ``GET /admin/audit-log``    — List all audit log events, newest first.
+
+OAuth / SSO
+~~~~~~~~~~~
+``GET  /auth/oauth/providers``              — List enabled OAuth providers.
+``GET  /auth/oauth/{provider}/authorize``   — Build consent URL + issue state.
+``POST /auth/oauth/callback``               — Exchange code for our JWT pair.
 """
 
 import logging
@@ -59,6 +65,9 @@ from auth.dependencies import get_auth_service, get_current_user, superuser_only
 from auth.models import (
     LoginRequest,
     LogoutRequest,
+    OAuthAuthorizeResponse,
+    OAuthCallbackRequest,
+    OAuthProvider,
     PasswordResetConfirmBody,
     PasswordResetRequestBody,
     RefreshRequest,
@@ -68,14 +77,15 @@ from auth.models import (
     UserResponse,
     UserUpdateRequest,
 )
+from auth.oauth_service import OAuthService
 from auth.repository import IcebergUserRepository
 from auth.service import AuthService
 
-logger = logging.getLogger(__name__)
+_logger = logging.getLogger(__name__)  # module-level logger (shared)
 
 
 # ---------------------------------------------------------------------------
-# Repository singleton
+# Singleton helpers
 # ---------------------------------------------------------------------------
 
 @lru_cache(maxsize=1)
@@ -90,6 +100,22 @@ def _get_repo() -> IcebergUserRepository:
         The cached :class:`~auth.repository.IcebergUserRepository` instance.
     """
     return IcebergUserRepository()
+
+
+@lru_cache(maxsize=1)
+def _get_oauth_svc() -> OAuthService:
+    """Return the application-wide :class:`~auth.oauth_service.OAuthService`.
+
+    The service holds the in-memory OAuth state store, so it must be a
+    singleton to ensure state persists between the ``/authorize`` redirect
+    and the ``/callback`` exchange.
+
+    Returns:
+        The cached :class:`~auth.oauth_service.OAuthService` instance.
+    """
+    from config import get_settings
+
+    return OAuthService(get_settings())
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +171,7 @@ def _require_active_user(user: Optional[Dict[str, Any]], email: str) -> Dict[str
         HTTPException: 401 with ``"Invalid credentials"`` detail.
     """
     if user is None or not user.get("is_active", False):
-        logger.warning("Login failed for email=%s (not found or inactive).", email)
+        _logger.warning("Login failed for email=%s (not found or inactive).", email)
         raise HTTPException(status_code=401, detail="Invalid credentials")
     return user
 
@@ -199,7 +225,7 @@ def create_auth_router() -> APIRouter:
         user = _require_active_user(user, str(body.email))
 
         if not service.verify_password(body.password, user["hashed_password"]):
-            logger.warning("Login failed for email=%s (wrong password).", body.email)
+            _logger.warning("Login failed for email=%s (wrong password).", body.email)
             raise HTTPException(status_code=401, detail="Invalid credentials")
 
         # Update last_login_at
@@ -216,7 +242,7 @@ def create_auth_router() -> APIRouter:
             role=user["role"],
         )
         refresh = service.create_refresh_token(user_id=user["user_id"])
-        logger.info("User logged in: user_id=%s", user["user_id"])
+        _logger.info("User logged in: user_id=%s", user["user_id"])
         return TokenResponse(access_token=access, refresh_token=refresh)
 
     # ------------------------------------------------------------------
@@ -302,7 +328,7 @@ def create_auth_router() -> APIRouter:
             role=user["role"],
         )
         new_refresh = service.create_refresh_token(user_id=user["user_id"])
-        logger.info("Token refreshed for user_id=%s", user_id)
+        _logger.info("Token refreshed for user_id=%s", user_id)
         return TokenResponse(access_token=access, refresh_token=new_refresh)
 
     # ------------------------------------------------------------------
@@ -329,7 +355,7 @@ def create_auth_router() -> APIRouter:
             A dict ``{"detail": "Logged out successfully"}``.
         """
         service.revoke_refresh_token(body.refresh_token)
-        logger.info("User logged out: user_id=%s", current_user.user_id)
+        _logger.info("User logged out: user_id=%s", current_user.user_id)
         return {"detail": "Logged out successfully"}
 
     # ------------------------------------------------------------------
@@ -389,7 +415,7 @@ def create_auth_router() -> APIRouter:
             target_user_id=current_user.user_id,
             metadata={"stage": "request"},
         )
-        logger.info("Password reset requested by user_id=%s", current_user.user_id)
+        _logger.info("Password reset requested by user_id=%s", current_user.user_id)
         # NOTE: return token in response for development; send by email in production.
         return {
             "detail": "Password reset token generated (development: token included in response).",
@@ -457,7 +483,7 @@ def create_auth_router() -> APIRouter:
             target_user_id=current_user.user_id,
             metadata={"stage": "confirm"},
         )
-        logger.info("Password reset completed for user_id=%s", current_user.user_id)
+        _logger.info("Password reset completed for user_id=%s", current_user.user_id)
         return {"detail": "Password updated successfully"}
 
     # ------------------------------------------------------------------
@@ -529,7 +555,7 @@ def create_auth_router() -> APIRouter:
             target_user_id=user["user_id"],
             metadata={"email": user["email"], "role": user["role"]},
         )
-        logger.info(
+        _logger.info(
             "User created: user_id=%s by superuser=%s", user["user_id"], caller.user_id
         )
         return _user_to_response(user)
@@ -614,7 +640,7 @@ def create_auth_router() -> APIRouter:
             target_user_id=user_id,
             metadata={"fields_changed": list(updates.keys())},
         )
-        logger.info(
+        _logger.info(
             "User updated: user_id=%s fields=%s by superuser=%s",
             user_id,
             list(updates.keys()),
@@ -658,10 +684,190 @@ def create_auth_router() -> APIRouter:
             actor_user_id=caller.user_id,
             target_user_id=user_id,
         )
-        logger.info(
+        _logger.info(
             "User soft-deleted: user_id=%s by superuser=%s", user_id, caller.user_id
         )
         return {"detail": "User deactivated"}
+
+    # ------------------------------------------------------------------
+    # GET /auth/oauth/providers
+    # ------------------------------------------------------------------
+
+    @router.get("/auth/oauth/providers", tags=["oauth"])
+    def list_oauth_providers() -> Dict[str, List[str]]:
+        """List OAuth providers that are currently enabled.
+
+        A provider is considered enabled when its client ID / app ID is
+        configured in :class:`~config.Settings`.  The frontend uses this
+        endpoint to show or hide the SSO buttons dynamically.
+
+        Returns:
+            A dict ``{"providers": ["google", "facebook"]}`` listing only
+            providers with non-empty credentials.
+        """
+        from config import get_settings
+
+        settings = get_settings()
+        providers: List[str] = []
+        if settings.google_client_id:
+            providers.append(OAuthProvider.google.value)
+        if settings.facebook_app_id:
+            providers.append(OAuthProvider.facebook.value)
+        return {"providers": providers}
+
+    # ------------------------------------------------------------------
+    # GET /auth/oauth/{provider}/authorize
+    # ------------------------------------------------------------------
+
+    @router.get("/auth/oauth/{provider}/authorize", response_model=OAuthAuthorizeResponse, tags=["oauth"])
+    def oauth_authorize(
+        provider: str,
+        code_challenge: str,
+    ) -> OAuthAuthorizeResponse:
+        """Generate a provider consent URL and a server-side CSRF state token.
+
+        The frontend should:
+        1. Generate a ``code_verifier`` locally (see ``frontend/lib/oauth.ts``).
+        2. Compute ``code_challenge = base64url(SHA-256(verifier))``.
+        3. Call this endpoint with the ``code_challenge`` query parameter.
+        4. Store ``code_verifier`` and ``state`` in ``sessionStorage``.
+        5. Redirect the browser to ``authorize_url``.
+
+        Args:
+            provider: OAuth provider — ``"google"`` or ``"facebook"``.
+            code_challenge: PKCE challenge (base64url SHA-256 of the verifier).
+
+        Returns:
+            :class:`~auth.models.OAuthAuthorizeResponse` with ``state`` and
+            ``authorize_url``.
+
+        Raises:
+            HTTPException: 400 if *provider* is not supported.
+            HTTPException: 503 if the provider's credentials are not
+                configured.
+        """
+        try:
+            provider_enum = OAuthProvider(provider)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Unsupported OAuth provider: '{provider}'")
+
+        from config import get_settings
+
+        settings = get_settings()
+        if provider_enum == OAuthProvider.google and not settings.google_client_id:
+            raise HTTPException(status_code=503, detail="Google SSO is not configured.")
+        if provider_enum == OAuthProvider.facebook and not settings.facebook_app_id:
+            raise HTTPException(status_code=503, detail="Facebook SSO is not configured.")
+
+        oauth_svc = _get_oauth_svc()
+        try:
+            state, authorize_url = oauth_svc.generate_authorize_url(
+                provider_enum.value, code_challenge
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        _logger.info("OAuth authorize: provider=%s", provider)
+        return OAuthAuthorizeResponse(state=state, authorize_url=authorize_url)
+
+    # ------------------------------------------------------------------
+    # POST /auth/oauth/callback
+    # ------------------------------------------------------------------
+
+    @router.post("/auth/oauth/callback", response_model=TokenResponse, tags=["oauth"])
+    def oauth_callback(
+        body: OAuthCallbackRequest,
+        service: AuthService = Depends(get_auth_service),
+    ) -> TokenResponse:
+        """Exchange an OAuth authorization code for our own JWT pair.
+
+        Called by the frontend callback page after the provider redirects
+        back with ``?code=...&state=...`` query parameters.
+
+        Steps performed:
+        1. Validate the CSRF state token (single-use, 10-minute TTL).
+        2. Exchange the authorization code with the provider.
+        3. Upsert the user via
+           :meth:`~auth.repository.IcebergUserRepository.get_or_create_by_oauth`.
+        4. Issue an access + refresh token pair.
+        5. Record an ``OAUTH_LOGIN`` audit event.
+
+        Args:
+            body: :class:`~auth.models.OAuthCallbackRequest` with
+                ``provider``, ``code``, ``state``, and optionally
+                ``code_verifier``.
+            service: Injected :class:`~auth.service.AuthService`.
+
+        Returns:
+            A :class:`~auth.models.TokenResponse` (same shape as
+            ``POST /auth/login``).
+
+        Raises:
+            HTTPException: 400 if the state is invalid or expired.
+            HTTPException: 400 if the provider rejects the code exchange.
+            HTTPException: 403 if the resulting user account is deactivated.
+        """
+        oauth_svc = _get_oauth_svc()
+        repo = _get_repo()
+
+        # 1. Validate state (CSRF protection).
+        if not oauth_svc.validate_state(body.state, body.provider.value):
+            _logger.warning("Invalid OAuth state token: provider=%s", body.provider)
+            raise HTTPException(status_code=400, detail="Invalid or expired OAuth state token.")
+
+        # 2. Exchange code with the provider.
+        try:
+            if body.provider == OAuthProvider.google:
+                verifier = body.code_verifier or ""
+                user_info = oauth_svc.exchange_google_code(body.code, verifier)
+            else:
+                user_info = oauth_svc.exchange_facebook_code(body.code)
+        except Exception as exc:
+            _logger.error("OAuth code exchange failed: provider=%s error=%s", body.provider, exc)
+            raise HTTPException(
+                status_code=400,
+                detail=f"OAuth token exchange failed: {exc}",
+            )
+
+        # 3. Upsert user in our database.
+        user = repo.get_or_create_by_oauth(
+            provider=user_info["provider"],
+            oauth_sub=user_info["sub"],
+            email=user_info["email"],
+            full_name=user_info["full_name"],
+            picture_url=user_info.get("picture"),
+        )
+
+        if not user.get("is_active", False):
+            raise HTTPException(status_code=403, detail="Account is deactivated.")
+
+        # Update last_login_at (already done inside get_or_create_by_oauth for
+        # existing users, but ensure it for newly created accounts too).
+        repo.update(user["user_id"], {"last_login_at": datetime.utcnow()})
+
+        # 4. Issue our JWT pair.
+        access = service.create_access_token(
+            user_id=user["user_id"],
+            email=user["email"],
+            role=user["role"],
+        )
+        refresh = service.create_refresh_token(user_id=user["user_id"])
+
+        # 5. Audit event.
+        repo.append_audit_event(
+            "OAUTH_LOGIN",
+            actor_user_id=user["user_id"],
+            target_user_id=user["user_id"],
+            metadata={"provider": body.provider.value, "email": user["email"]},
+        )
+
+        _logger.info(
+            "OAuth login: user_id=%s provider=%s email=%s",
+            user["user_id"],
+            body.provider,
+            user["email"],
+        )
+        return TokenResponse(access_token=access, refresh_token=refresh)
 
     # ------------------------------------------------------------------
     # GET /admin/audit-log  (superuser only)

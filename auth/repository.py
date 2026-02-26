@@ -31,12 +31,13 @@ import logging
 import math
 import os
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import pyarrow as pa
 
-logger = logging.getLogger(__name__)
+# Module-level logger (mutable, but safe for use across the module)
+_logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Table identifiers — must match auth/create_tables.py
@@ -51,6 +52,7 @@ _AUDIT_LOG_TABLE = f"{_NAMESPACE}.audit_log"
 # PyIceberg TimestampType maps to pa.timestamp("us") — microsecond precision,
 # no explicit timezone.  We always treat stored values as UTC.
 # ---------------------------------------------------------------------------
+
 
 def _now_utc() -> datetime:
     """Return the current UTC datetime as a *naive* datetime (no tzinfo).
@@ -120,8 +122,10 @@ def _from_ts(val: Any) -> Optional[datetime]:
 # pa.timestamp("us") matches PyIceberg's TimestampType (microseconds, no tz).
 # ---------------------------------------------------------------------------
 
+# Immutable schema constant for the users table
 _TS = pa.timestamp("us")
 
+# Immutable schema constant for the users table
 _USERS_PA_SCHEMA = pa.schema(
     [
         pa.field("user_id", pa.string(), nullable=False),
@@ -135,9 +139,14 @@ _USERS_PA_SCHEMA = pa.schema(
         pa.field("last_login_at", _TS, nullable=True),
         pa.field("password_reset_token", pa.string(), nullable=True),
         pa.field("password_reset_expiry", _TS, nullable=True),
+        # SSO columns — nullable for email-only accounts.
+        pa.field("oauth_provider", pa.string(), nullable=True),
+        pa.field("oauth_sub", pa.string(), nullable=True),
+        pa.field("profile_picture_url", pa.string(), nullable=True),
     ]
 )
 
+# Immutable schema constant for the audit log table
 _AUDIT_PA_SCHEMA = pa.schema(
     [
         pa.field("event_id", pa.string(), nullable=False),
@@ -224,7 +233,7 @@ class IcebergUserRepository:
 
             try:
                 self._catalog = load_catalog("local")
-                logger.debug("Iceberg catalog loaded.")
+                _logger.debug("Iceberg catalog loaded.")
             except Exception as exc:
                 raise RuntimeError(
                     "Failed to load Iceberg catalog. "
@@ -288,7 +297,7 @@ class IcebergUserRepository:
                 return None
             return _row_to_dict(rows[0])
         except Exception as exc:
-            logger.warning("get_by_email scan failed, falling back to full scan: %s", exc)
+            _logger.warning("get_by_email scan failed, falling back to full scan: %s", exc)
             for row in self._scan_all_users():
                 if row.get("email") == email:
                     return row
@@ -319,7 +328,7 @@ class IcebergUserRepository:
                 return None
             return _row_to_dict(rows[0])
         except Exception as exc:
-            logger.warning("get_by_id scan failed, falling back to full scan: %s", exc)
+            _logger.warning("get_by_id scan failed, falling back to full scan: %s", exc)
             for row in self._scan_all_users():
                 if row.get("user_id") == user_id:
                     return row
@@ -381,6 +390,10 @@ class IcebergUserRepository:
             "last_login_at": _to_ts(user_data.get("last_login_at")),
             "password_reset_token": user_data.get("password_reset_token"),
             "password_reset_expiry": _to_ts(user_data.get("password_reset_expiry")),
+            # SSO fields — None for email-only accounts.
+            "oauth_provider": user_data.get("oauth_provider"),
+            "oauth_sub": user_data.get("oauth_sub"),
+            "profile_picture_url": user_data.get("profile_picture_url"),
         }
 
         arrow_table = pa.table(
@@ -389,7 +402,7 @@ class IcebergUserRepository:
         )
         table = self._users_table()
         table.append(arrow_table)
-        logger.info("Created user user_id=%s email=%s", row["user_id"], row["email"])
+        _logger.info("Created user user_id=%s email=%s", row["user_id"], row["email"])
 
         # Return Python-native dict with timezone-aware datetime objects
         stored = dict(row)
@@ -446,10 +459,121 @@ class IcebergUserRepository:
         # Overwrite table (copy-on-write)
         new_arrow = pa.Table.from_pandas(df, schema=_USERS_PA_SCHEMA, preserve_index=False)
         table.overwrite(new_arrow)
-        logger.info("Updated user user_id=%s fields=%s", user_id, list(updates.keys()))
+        _logger.info("Updated user user_id=%s fields=%s", user_id, list(updates.keys()))
 
         updated_row = df[mask].iloc[0].to_dict()
         return _row_to_dict(updated_row)
+
+    # ------------------------------------------------------------------
+    # OAuth helpers
+    # ------------------------------------------------------------------
+
+    def get_by_oauth_sub(self, provider: str, oauth_sub: str) -> Optional[Dict[str, Any]]:
+        """Fetch a user matched by OAuth provider + provider-specific subject ID.
+
+        Args:
+            provider: The OAuth provider name, e.g. ``"google"`` or
+                ``"facebook"``.
+            oauth_sub: The provider's unique user ID (``sub`` claim from
+                Google's ``id_token``, or Facebook Graph API ``id``).
+
+        Returns:
+            A user dict if a matching account is found, otherwise ``None``.
+
+        Example:
+            >>> repo = IcebergUserRepository()
+            >>> user = repo.get_by_oauth_sub("google", "1234567890")
+            >>> user is None or isinstance(user, dict)
+            True
+        """
+        for row in self._scan_all_users():
+            if row.get("oauth_provider") == provider and row.get("oauth_sub") == oauth_sub:
+                return row
+        return None
+
+    def get_or_create_by_oauth(
+        self,
+        provider: str,
+        oauth_sub: str,
+        email: str,
+        full_name: str,
+        picture_url: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Return an existing user or create a new SSO-only account.
+
+        Lookup order:
+        1. Match on ``(oauth_sub, oauth_provider)`` — returning SSO user.
+        2. Match on ``email`` — existing email account; link the OAuth
+           provider to it on first SSO login.
+        3. No match — create a new account with a sentinel password hash
+           that always fails bcrypt verification.
+
+        The ``profile_picture_url`` and ``last_login_at`` are refreshed on
+        every successful SSO login regardless of which lookup branch matched.
+
+        Args:
+            provider: OAuth provider name (``"google"`` or ``"facebook"``).
+            oauth_sub: Provider-specific unique user ID.
+            email: Email address returned by the provider.
+            full_name: Display name returned by the provider.
+            picture_url: Avatar URL from the provider, or ``None``.
+
+        Returns:
+            The full user dict after upsert.
+
+        Example:
+            >>> repo = IcebergUserRepository()
+            >>> # repo.get_or_create_by_oauth("google", "sub", "a@b.com", "A B")
+        """
+        import secrets as _secrets
+
+        now = _now_utc()
+
+        # 1. Match on (oauth_sub, oauth_provider) — returning user.
+        existing = self.get_by_oauth_sub(provider, oauth_sub)
+        if existing is not None:
+            self.update(
+                existing["user_id"],
+                {
+                    "profile_picture_url": picture_url,
+                    "last_login_at": now,
+                },
+            )
+            refreshed = self.get_by_id(existing["user_id"])
+            return refreshed or existing
+
+        # 2. Match on email — link OAuth to an existing email account.
+        by_email = self.get_by_email(email)
+        if by_email is not None:
+            self.update(
+                by_email["user_id"],
+                {
+                    "oauth_provider": provider,
+                    "oauth_sub": oauth_sub,
+                    "profile_picture_url": picture_url,
+                    "last_login_at": now,
+                },
+            )
+            refreshed = self.get_by_id(by_email["user_id"])
+            return refreshed or by_email
+
+        # 3. No match — create a new SSO-only account.
+        sentinel = f"!sso_only_{_secrets.token_hex(32)}"
+        new_user = self.create(
+            {
+                "email": email,
+                "hashed_password": sentinel,
+                "full_name": full_name,
+                "role": "general",
+                "oauth_provider": provider,
+                "oauth_sub": oauth_sub,
+                "profile_picture_url": picture_url,
+            }
+        )
+        _logger.info(
+            "Created SSO account: user_id=%s provider=%s", new_user["user_id"], provider
+        )
+        return new_user
 
     def delete(self, user_id: str) -> None:
         """Soft-delete a user by setting ``is_active = False``.
@@ -469,7 +593,7 @@ class IcebergUserRepository:
             >>> # repo.delete("some-uuid")  # doctest: +SKIP
         """
         self.update(user_id, {"is_active": False})
-        logger.info("Soft-deleted user user_id=%s", user_id)
+        _logger.info("Soft-deleted user user_id=%s", user_id)
 
     # ------------------------------------------------------------------
     # Audit log
@@ -508,7 +632,7 @@ class IcebergUserRepository:
             schema=_AUDIT_PA_SCHEMA,
         )
         self._audit_table().append(arrow_table)
-        logger.debug(
+        _logger.debug(
             "Audit event type=%s actor=%s target=%s",
             event_type,
             actor_user_id,
@@ -536,7 +660,8 @@ class IcebergUserRepository:
             d["event_timestamp"] = _from_ts(d.get("event_timestamp"))
             result.append(d)
         result.sort(
-            key=lambda r: r.get("event_timestamp") or datetime(1970, 1, 1, tzinfo=timezone.utc),
+            key=lambda r: r.get("event_timestamp")
+            or datetime(1970, 1, 1, tzinfo=timezone.utc),
             reverse=True,
         )
         return result

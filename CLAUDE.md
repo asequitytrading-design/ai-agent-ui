@@ -654,6 +654,68 @@ into `os.environ` at startup.
 
 ---
 
+## SSO / OAuth2 (added Feb 26, 2026)
+
+Google + Facebook OAuth2 PKCE on top of the existing JWT auth.
+
+### New files
+
+| File | Purpose |
+|------|---------|
+| `auth/oauth_service.py` | `OAuthService` — state store, PKCE authorize URL, code exchange |
+| `auth/migrate_users_table.py` | Idempotent Iceberg schema migration (adds 3 OAuth columns) |
+| `frontend/lib/oauth.ts` | PKCE helpers + sessionStorage helpers |
+| `frontend/app/auth/oauth/callback/page.tsx` | OAuth callback page |
+| `docs/backend/oauth.md` | SSO documentation |
+
+### New columns in `auth.users`
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `oauth_provider` | StringType (nullable) | `"google"` / `"facebook"` / `None` |
+| `oauth_sub` | StringType (nullable) | Provider-specific user ID |
+| `profile_picture_url` | StringType (nullable) | Refreshed on each SSO login |
+
+### New API endpoints (total: 15)
+
+- `GET /auth/oauth/providers` — list enabled providers
+- `GET /auth/oauth/{provider}/authorize?code_challenge=<hash>` — get consent URL + state
+- `POST /auth/oauth/callback` — exchange code → JWT pair
+
+### Upsert logic (`get_or_create_by_oauth`)
+
+1. Match on `(oauth_sub, oauth_provider)` — returning user
+2. Match on email — link provider to existing email account
+3. No match — create new account, `role="general"`, sentinel `hashed_password`
+
+### PKCE flow
+
+- `code_verifier` lives only in `sessionStorage`; never sent to provider
+- `code_challenge = base64url(SHA-256(verifier))` sent to `/authorize`
+- Backend sends verifier to Google token endpoint; Google validates internally
+- Facebook doesn't support PKCE — verifier unused in FB exchange
+
+### SSO settings (in `backend/.env`)
+
+```
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+FACEBOOK_APP_ID=...
+FACEBOOK_APP_SECRET=...
+OAUTH_REDIRECT_URI=http://localhost:3000/auth/oauth/callback
+```
+
+Google credentials are configured; Facebook credentials are placeholders.
+
+### Run migration once per deployment
+
+```bash
+cd ai-agent-ui && source backend/demoenv/bin/activate
+python auth/migrate_users_table.py
+```
+
+---
+
 ## Known Limitations / TODOs
 
 - **Anthropic API not working** — currently on Groq as a workaround; switch back when resolved (see 2-line change in `agents/general_agent.py` and `agents/stock_agent.py` → `_build_llm()` above)
