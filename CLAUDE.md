@@ -4,6 +4,40 @@ Project context for Claude Code. Read this before making any changes.
 
 ---
 
+## Claude Code Session Rules (ALWAYS FOLLOW — NO EXCEPTIONS)
+
+Before making **any** changes to files in this project, follow these steps in order every session:
+
+### Step 1 — Get on the latest dev branch
+```bash
+git fetch origin
+git checkout dev
+git pull origin dev
+```
+
+### Step 2 — Create a feature branch off dev
+Format: `feature/<short-description>`
+
+```bash
+git checkout -b feature/<short-description>
+```
+
+Examples: `feature/add-login-page`, `feature/fix-auth-bug`, `feature/stock-analysis-widget`
+
+### Step 3 — Confirm active branch before touching any file
+```bash
+git branch --show-current
+```
+
+### Rules
+- **NEVER** make changes directly on `dev`, `qa`, `release`, or `main`
+- **NEVER** skip branch creation — even for single-line changes
+- **ALWAYS** branch off `dev`, not `main` or any other branch
+- If a `feature/*` branch already exists for the task, check it out instead of creating a new one
+- After changes are committed, remind the user to raise a PR: `feature/*` → `dev`
+
+---
+
 ## What This Project Is
 
 A fullstack agentic chat application:
