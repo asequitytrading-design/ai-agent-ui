@@ -76,6 +76,7 @@ from dashboard.layouts import (
     compare_layout,
     forecast_layout,
     home_layout,
+    insights_layout,
 )
 
 # ---------------------------------------------------------------------------
@@ -265,6 +266,8 @@ def display_page(
         return forecast_layout()
     if pathname == "/compare":
         return compare_layout()
+    if pathname == "/insights":
+        return insights_layout()
     if pathname == "/admin/users":
         payload = _validate_token(token)
         if payload is None or payload.get("role") != "superuser":

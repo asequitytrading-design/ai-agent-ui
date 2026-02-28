@@ -25,6 +25,7 @@ Typical usage (via LangChain tool call)::
 
 import json
 import logging
+import sys
 from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
@@ -46,6 +47,40 @@ _DATA_RAW = _PROJECT_ROOT / "data" / "raw"
 _DATA_PROCESSED = _PROJECT_ROOT / "data" / "processed"
 _DATA_METADATA = _PROJECT_ROOT / "data" / "metadata"
 _REGISTRY_PATH = _DATA_METADATA / "stock_registry.json"
+
+# ---------------------------------------------------------------------------
+# Iceberg repository — lazy singleton (non-blocking; disabled if unavailable)
+# ---------------------------------------------------------------------------
+
+_STOCK_REPO = None
+_STOCK_REPO_INIT_ATTEMPTED = False
+
+
+def _get_repo():
+    """Return the module-level :class:`~stocks.repository.StockRepository` singleton.
+
+    Initialised on first call.  Returns ``None`` (silently) when PyIceberg is
+    unavailable or the catalog has not been created yet — callers must guard
+    with ``if repo is not None``.
+
+    Returns:
+        :class:`~stocks.repository.StockRepository` instance or ``None``.
+    """
+    global _STOCK_REPO, _STOCK_REPO_INIT_ATTEMPTED
+    if _STOCK_REPO_INIT_ATTEMPTED:
+        return _STOCK_REPO
+    _STOCK_REPO_INIT_ATTEMPTED = True
+    try:
+        _root = str(_PROJECT_ROOT)
+        if _root not in sys.path:
+            sys.path.insert(0, _root)
+        from stocks.repository import StockRepository  # noqa: PLC0415
+        _STOCK_REPO = StockRepository()
+        logger.debug("StockRepository initialised for dual-write")
+    except Exception as _e:
+        logger.warning("StockRepository unavailable (Iceberg write disabled): %s", _e)
+    return _STOCK_REPO
+
 
 # ---------------------------------------------------------------------------
 # Private helper functions (not exposed as tools)
@@ -151,6 +186,21 @@ def _update_registry(ticker: str, df: pd.DataFrame, file_path: Path) -> None:
         "file_path": str(file_path),
     }
     _save_registry(registry)
+    # Iceberg dual-write (non-blocking)
+    try:
+        repo = _get_repo()
+        if repo is not None:
+            market = "india" if ticker.upper().endswith((".NS", ".BO")) else "us"
+            repo.upsert_registry(
+                ticker=ticker,
+                last_fetch_date=date.today(),
+                total_rows=len(df),
+                date_range_start=df.index.min().date(),
+                date_range_end=df.index.max().date(),
+                market=market,
+            )
+    except Exception as _e:
+        logger.warning("Iceberg registry upsert failed for %s: %s", ticker, _e)
 
 
 # ---------------------------------------------------------------------------
@@ -206,6 +256,13 @@ def fetch_stock_data(ticker: str, period: str = "10y") -> str:
             df.index = pd.to_datetime(df.index).tz_localize(None)
             df.to_parquet(file_path, engine="pyarrow", index=True)
             _update_registry(ticker, df, file_path)
+            # Iceberg dual-write
+            try:
+                repo = _get_repo()
+                if repo is not None:
+                    repo.insert_ohlcv(ticker, df)
+            except Exception as _e:
+                logger.warning("Iceberg OHLCV insert failed for %s: %s", ticker, _e)
 
             msg = (
                 f"Full fetch completed for {ticker}: {len(df)} rows saved. "
@@ -254,6 +311,13 @@ def fetch_stock_data(ticker: str, period: str = "10y") -> str:
         combined.sort_index(inplace=True)
         combined.to_parquet(file_path, engine="pyarrow", index=True)
         _update_registry(ticker, combined, file_path)
+        # Iceberg dual-write — only new rows (StockRepository deduplicates by date)
+        try:
+            repo = _get_repo()
+            if repo is not None:
+                repo.insert_ohlcv(ticker, new_df)
+        except Exception as _e:
+            logger.warning("Iceberg OHLCV delta-write failed for %s: %s", ticker, _e)
 
         msg = (
             f"Delta fetch for {ticker}: {len(new_df)} new rows added "
@@ -323,6 +387,13 @@ def get_stock_info(ticker: str) -> str:
         _DATA_METADATA.mkdir(parents=True, exist_ok=True)
         with open(cache_path, "w") as f:
             json.dump({**result, "_fetched_date": str(date.today())}, f, indent=2)
+        # Iceberg dual-write — pass raw info dict for extended fields (beta, dividendYield, etc.)
+        try:
+            repo = _get_repo()
+            if repo is not None:
+                repo.insert_company_info(ticker, info)
+        except Exception as _e:
+            logger.warning("Iceberg company_info insert failed for %s: %s", ticker, _e)
 
         logger.info("Stock info fetched and cached for %s", ticker)
         return json.dumps(result, indent=2)
@@ -467,6 +538,13 @@ def get_dividend_history(ticker: str) -> str:
 
         out_path = _DATA_PROCESSED / f"{ticker}_dividends.parquet"
         df.to_parquet(out_path, engine="pyarrow", index=False)
+        # Iceberg dual-write
+        try:
+            repo = _get_repo()
+            if repo is not None:
+                repo.insert_dividends(ticker, df, currency=_load_currency(ticker))
+        except Exception as _e:
+            logger.warning("Iceberg dividends insert failed for %s: %s", ticker, _e)
 
         msg = (
             f"Dividend history for {ticker}: {len(df)} payments. "

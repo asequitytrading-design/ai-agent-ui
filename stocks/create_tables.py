@@ -1,0 +1,408 @@
+"""One-time Iceberg table initialisation for the stocks namespace.
+
+Creates all 8 Iceberg tables in the ``stocks`` namespace using the shared
+SQLite catalog (``data/iceberg/catalog.db``).  The script is idempotent —
+if tables already exist it exits without error.
+
+Usage::
+
+    cd ai-agent-ui
+    source backend/demoenv/bin/activate
+    python stocks/create_tables.py
+
+The catalog is configured via ``.pyiceberg.yaml`` in the project root.
+Both ``data/iceberg/catalog.db`` and ``data/iceberg/warehouse/`` are
+created automatically if they do not already exist.
+
+Tables created
+--------------
+- ``stocks.registry``
+- ``stocks.company_info``
+- ``stocks.ohlcv``
+- ``stocks.dividends``
+- ``stocks.technical_indicators``
+- ``stocks.analysis_summary``
+- ``stocks.forecast_runs``
+- ``stocks.forecasts``
+"""
+
+import logging
+import os
+
+from pyiceberg.catalog.sql import SqlCatalog
+from pyiceberg.partitioning import PartitionField, PartitionSpec
+from pyiceberg.schema import Schema
+from pyiceberg.transforms import IdentityTransform
+from pyiceberg.types import (
+    DateType,
+    DoubleType,
+    IntegerType,
+    LongType,
+    NestedField,
+    StringType,
+    TimestampType,
+)
+
+_logger = logging.getLogger(__name__)
+
+_NAMESPACE = "stocks"
+
+# Table identifiers
+_REGISTRY_TABLE = f"{_NAMESPACE}.registry"
+_COMPANY_INFO_TABLE = f"{_NAMESPACE}.company_info"
+_OHLCV_TABLE = f"{_NAMESPACE}.ohlcv"
+_DIVIDENDS_TABLE = f"{_NAMESPACE}.dividends"
+_TECHNICAL_INDICATORS_TABLE = f"{_NAMESPACE}.technical_indicators"
+_ANALYSIS_SUMMARY_TABLE = f"{_NAMESPACE}.analysis_summary"
+_FORECAST_RUNS_TABLE = f"{_NAMESPACE}.forecast_runs"
+_FORECASTS_TABLE = f"{_NAMESPACE}.forecasts"
+
+
+def _get_catalog() -> SqlCatalog:
+    """Load the local Iceberg SqlCatalog from ``.pyiceberg.yaml``.
+
+    Returns:
+        SqlCatalog: A configured Iceberg catalog instance.
+
+    Raises:
+        RuntimeError: If the catalog cannot be loaded.
+    """
+    from pyiceberg.catalog import load_catalog
+
+    try:
+        return load_catalog("local")
+    except Exception as exc:
+        raise RuntimeError(
+            "Failed to load Iceberg catalog. "
+            "Check that .pyiceberg.yaml exists in the project root."
+        ) from exc
+
+
+def _registry_schema() -> Schema:
+    """Return the Iceberg schema for ``stocks.registry``.
+
+    Returns:
+        Schema: One row per ticker; tracks fetch metadata and date ranges.
+    """
+    return Schema(
+        NestedField(field_id=1, name="ticker", field_type=StringType(), required=False),
+        NestedField(field_id=2, name="last_fetch_date", field_type=DateType(), required=False),
+        NestedField(field_id=3, name="total_rows", field_type=LongType(), required=False),
+        NestedField(field_id=4, name="date_range_start", field_type=DateType(), required=False),
+        NestedField(field_id=5, name="date_range_end", field_type=DateType(), required=False),
+        NestedField(field_id=6, name="market", field_type=StringType(), required=False),
+        NestedField(field_id=7, name="created_at", field_type=TimestampType(), required=False),
+        NestedField(field_id=8, name="updated_at", field_type=TimestampType(), required=False),
+    )
+
+
+def _company_info_schema() -> Schema:
+    """Return the Iceberg schema for ``stocks.company_info``.
+
+    Returns:
+        Schema: Append-only company metadata snapshots; query latest by fetched_at DESC.
+    """
+    return Schema(
+        NestedField(field_id=1, name="info_id", field_type=StringType(), required=False),
+        NestedField(field_id=2, name="ticker", field_type=StringType(), required=False),
+        NestedField(field_id=3, name="company_name", field_type=StringType(), required=False),
+        NestedField(field_id=4, name="sector", field_type=StringType(), required=False),
+        NestedField(field_id=5, name="industry", field_type=StringType(), required=False),
+        NestedField(field_id=6, name="market_cap", field_type=LongType(), required=False),
+        NestedField(field_id=7, name="pe_ratio", field_type=DoubleType(), required=False),
+        NestedField(field_id=8, name="week_52_high", field_type=DoubleType(), required=False),
+        NestedField(field_id=9, name="week_52_low", field_type=DoubleType(), required=False),
+        NestedField(field_id=10, name="current_price", field_type=DoubleType(), required=False),
+        NestedField(field_id=11, name="currency", field_type=StringType(), required=False),
+        NestedField(field_id=12, name="fetched_at", field_type=TimestampType(), required=False),
+        # Extended fundamentals (Phase 3 extension)
+        NestedField(field_id=13, name="exchange", field_type=StringType(), required=False),
+        NestedField(field_id=14, name="country", field_type=StringType(), required=False),
+        NestedField(field_id=15, name="employees", field_type=LongType(), required=False),
+        NestedField(field_id=16, name="dividend_yield", field_type=DoubleType(), required=False),
+        NestedField(field_id=17, name="beta", field_type=DoubleType(), required=False),
+        NestedField(field_id=18, name="book_value", field_type=DoubleType(), required=False),
+        NestedField(field_id=19, name="price_to_book", field_type=DoubleType(), required=False),
+        NestedField(field_id=20, name="earnings_growth", field_type=DoubleType(), required=False),
+        NestedField(field_id=21, name="revenue_growth", field_type=DoubleType(), required=False),
+        NestedField(field_id=22, name="profit_margins", field_type=DoubleType(), required=False),
+        NestedField(field_id=23, name="avg_volume", field_type=LongType(), required=False),
+        NestedField(field_id=24, name="float_shares", field_type=LongType(), required=False),
+        NestedField(field_id=25, name="short_ratio", field_type=DoubleType(), required=False),
+        NestedField(field_id=26, name="analyst_target", field_type=DoubleType(), required=False),
+        NestedField(field_id=27, name="recommendation", field_type=DoubleType(), required=False),
+    )
+
+
+def _ohlcv_schema() -> Schema:
+    """Return the Iceberg schema for ``stocks.ohlcv``.
+
+    Returns:
+        Schema: OHLCV price history; composite key (ticker, date); partitioned by ticker.
+    """
+    return Schema(
+        NestedField(field_id=1, name="ticker", field_type=StringType(), required=False),
+        NestedField(field_id=2, name="date", field_type=DateType(), required=False),
+        NestedField(field_id=3, name="open", field_type=DoubleType(), required=False),
+        NestedField(field_id=4, name="high", field_type=DoubleType(), required=False),
+        NestedField(field_id=5, name="low", field_type=DoubleType(), required=False),
+        NestedField(field_id=6, name="close", field_type=DoubleType(), required=False),
+        NestedField(field_id=7, name="adj_close", field_type=DoubleType(), required=False),
+        NestedField(field_id=8, name="volume", field_type=LongType(), required=False),
+        NestedField(field_id=9, name="fetched_at", field_type=TimestampType(), required=False),
+    )
+
+
+def _dividends_schema() -> Schema:
+    """Return the Iceberg schema for ``stocks.dividends``.
+
+    Returns:
+        Schema: Dividend payments; composite key (ticker, ex_date).
+    """
+    return Schema(
+        NestedField(field_id=1, name="ticker", field_type=StringType(), required=False),
+        NestedField(field_id=2, name="ex_date", field_type=DateType(), required=False),
+        NestedField(field_id=3, name="dividend_amount", field_type=DoubleType(), required=False),
+        NestedField(field_id=4, name="currency", field_type=StringType(), required=False),
+        NestedField(field_id=5, name="fetched_at", field_type=TimestampType(), required=False),
+    )
+
+
+def _technical_indicators_schema() -> Schema:
+    """Return the Iceberg schema for ``stocks.technical_indicators``.
+
+    Returns:
+        Schema: Computed technical indicators; 1:1 with ohlcv (ticker, date); partitioned by ticker.
+    """
+    return Schema(
+        NestedField(field_id=1, name="ticker", field_type=StringType(), required=False),
+        NestedField(field_id=2, name="date", field_type=DateType(), required=False),
+        NestedField(field_id=3, name="sma_50", field_type=DoubleType(), required=False),
+        NestedField(field_id=4, name="sma_200", field_type=DoubleType(), required=False),
+        NestedField(field_id=5, name="ema_20", field_type=DoubleType(), required=False),
+        NestedField(field_id=6, name="rsi_14", field_type=DoubleType(), required=False),
+        NestedField(field_id=7, name="macd", field_type=DoubleType(), required=False),
+        NestedField(field_id=8, name="macd_signal", field_type=DoubleType(), required=False),
+        NestedField(field_id=9, name="macd_hist", field_type=DoubleType(), required=False),
+        NestedField(field_id=10, name="bb_upper", field_type=DoubleType(), required=False),
+        NestedField(field_id=11, name="bb_middle", field_type=DoubleType(), required=False),
+        NestedField(field_id=12, name="bb_lower", field_type=DoubleType(), required=False),
+        NestedField(field_id=13, name="atr_14", field_type=DoubleType(), required=False),
+        NestedField(field_id=14, name="daily_return", field_type=DoubleType(), required=False),
+        NestedField(field_id=15, name="computed_at", field_type=TimestampType(), required=False),
+    )
+
+
+def _analysis_summary_schema() -> Schema:
+    """Return the Iceberg schema for ``stocks.analysis_summary``.
+
+    Returns:
+        Schema: Daily analysis snapshots; structured replacement for flat text cache files.
+    """
+    return Schema(
+        NestedField(field_id=1, name="summary_id", field_type=StringType(), required=False),
+        NestedField(field_id=2, name="ticker", field_type=StringType(), required=False),
+        NestedField(field_id=3, name="analysis_date", field_type=DateType(), required=False),
+        NestedField(field_id=4, name="bull_phase_pct", field_type=DoubleType(), required=False),
+        NestedField(field_id=5, name="bear_phase_pct", field_type=DoubleType(), required=False),
+        NestedField(field_id=6, name="max_drawdown_pct", field_type=DoubleType(), required=False),
+        NestedField(field_id=7, name="max_drawdown_duration_days", field_type=LongType(), required=False),
+        NestedField(field_id=8, name="annualized_volatility_pct", field_type=DoubleType(), required=False),
+        NestedField(field_id=9, name="annualized_return_pct", field_type=DoubleType(), required=False),
+        NestedField(field_id=10, name="sharpe_ratio", field_type=DoubleType(), required=False),
+        NestedField(field_id=11, name="all_time_high", field_type=DoubleType(), required=False),
+        NestedField(field_id=12, name="all_time_high_date", field_type=DateType(), required=False),
+        NestedField(field_id=13, name="all_time_low", field_type=DoubleType(), required=False),
+        NestedField(field_id=14, name="all_time_low_date", field_type=DateType(), required=False),
+        NestedField(field_id=15, name="support_levels", field_type=StringType(), required=False),
+        NestedField(field_id=16, name="resistance_levels", field_type=StringType(), required=False),
+        NestedField(field_id=17, name="sma_50_signal", field_type=StringType(), required=False),
+        NestedField(field_id=18, name="sma_200_signal", field_type=StringType(), required=False),
+        NestedField(field_id=19, name="rsi_signal", field_type=StringType(), required=False),
+        NestedField(field_id=20, name="macd_signal_text", field_type=StringType(), required=False),
+        NestedField(field_id=21, name="best_month", field_type=StringType(), required=False),
+        NestedField(field_id=22, name="worst_month", field_type=StringType(), required=False),
+        NestedField(field_id=23, name="best_year", field_type=StringType(), required=False),
+        NestedField(field_id=24, name="worst_year", field_type=StringType(), required=False),
+        NestedField(field_id=25, name="computed_at", field_type=TimestampType(), required=False),
+    )
+
+
+def _forecast_runs_schema() -> Schema:
+    """Return the Iceberg schema for ``stocks.forecast_runs``.
+
+    Returns:
+        Schema: One row per Prophet run; stores targets at 3/6/9 months plus accuracy metrics.
+    """
+    return Schema(
+        NestedField(field_id=1, name="run_id", field_type=StringType(), required=False),
+        NestedField(field_id=2, name="ticker", field_type=StringType(), required=False),
+        NestedField(field_id=3, name="horizon_months", field_type=IntegerType(), required=False),
+        NestedField(field_id=4, name="run_date", field_type=DateType(), required=False),
+        NestedField(field_id=5, name="sentiment", field_type=StringType(), required=False),
+        NestedField(field_id=6, name="current_price_at_run", field_type=DoubleType(), required=False),
+        NestedField(field_id=7, name="target_3m_date", field_type=DateType(), required=False),
+        NestedField(field_id=8, name="target_3m_price", field_type=DoubleType(), required=False),
+        NestedField(field_id=9, name="target_3m_pct_change", field_type=DoubleType(), required=False),
+        NestedField(field_id=10, name="target_3m_lower", field_type=DoubleType(), required=False),
+        NestedField(field_id=11, name="target_3m_upper", field_type=DoubleType(), required=False),
+        NestedField(field_id=12, name="target_6m_date", field_type=DateType(), required=False),
+        NestedField(field_id=13, name="target_6m_price", field_type=DoubleType(), required=False),
+        NestedField(field_id=14, name="target_6m_pct_change", field_type=DoubleType(), required=False),
+        NestedField(field_id=15, name="target_6m_lower", field_type=DoubleType(), required=False),
+        NestedField(field_id=16, name="target_6m_upper", field_type=DoubleType(), required=False),
+        NestedField(field_id=17, name="target_9m_date", field_type=DateType(), required=False),
+        NestedField(field_id=18, name="target_9m_price", field_type=DoubleType(), required=False),
+        NestedField(field_id=19, name="target_9m_pct_change", field_type=DoubleType(), required=False),
+        NestedField(field_id=20, name="target_9m_lower", field_type=DoubleType(), required=False),
+        NestedField(field_id=21, name="target_9m_upper", field_type=DoubleType(), required=False),
+        NestedField(field_id=22, name="mae", field_type=DoubleType(), required=False),
+        NestedField(field_id=23, name="rmse", field_type=DoubleType(), required=False),
+        NestedField(field_id=24, name="mape", field_type=DoubleType(), required=False),
+        NestedField(field_id=25, name="computed_at", field_type=TimestampType(), required=False),
+    )
+
+
+def _forecasts_schema() -> Schema:
+    """Return the Iceberg schema for ``stocks.forecasts``.
+
+    Returns:
+        Schema: Full Prophet output series; partitioned by (ticker, horizon_months).
+    """
+    return Schema(
+        NestedField(field_id=1, name="ticker", field_type=StringType(), required=False),
+        NestedField(field_id=2, name="horizon_months", field_type=IntegerType(), required=False),
+        NestedField(field_id=3, name="run_date", field_type=DateType(), required=False),
+        NestedField(field_id=4, name="forecast_date", field_type=DateType(), required=False),
+        NestedField(field_id=5, name="predicted_price", field_type=DoubleType(), required=False),
+        NestedField(field_id=6, name="lower_bound", field_type=DoubleType(), required=False),
+        NestedField(field_id=7, name="upper_bound", field_type=DoubleType(), required=False),
+    )
+
+
+def _ticker_partition_spec(schema: Schema) -> PartitionSpec:
+    """Return a partition spec that partitions by the ``ticker`` field.
+
+    Args:
+        schema: The Iceberg schema containing a ``ticker`` field.
+
+    Returns:
+        PartitionSpec: Identity partition on ``ticker``.
+    """
+    ticker_field_id = schema.find_field("ticker").field_id
+    return PartitionSpec(
+        PartitionField(
+            source_id=ticker_field_id,
+            field_id=1000,
+            transform=IdentityTransform(),
+            name="ticker",
+        )
+    )
+
+
+def _ticker_horizon_partition_spec(schema: Schema) -> PartitionSpec:
+    """Return a partition spec that partitions by ``ticker`` and ``horizon_months``.
+
+    Args:
+        schema: The Iceberg schema containing ``ticker`` and ``horizon_months`` fields.
+
+    Returns:
+        PartitionSpec: Identity partition on ticker then horizon_months.
+    """
+    ticker_fid = schema.find_field("ticker").field_id
+    horizon_fid = schema.find_field("horizon_months").field_id
+    return PartitionSpec(
+        PartitionField(
+            source_id=ticker_fid,
+            field_id=1000,
+            transform=IdentityTransform(),
+            name="ticker",
+        ),
+        PartitionField(
+            source_id=horizon_fid,
+            field_id=1001,
+            transform=IdentityTransform(),
+            name="horizon_months",
+        ),
+    )
+
+
+def _create_table(catalog: SqlCatalog, identifier: str, schema: Schema,
+                  partition_spec: PartitionSpec) -> None:
+    """Create a single Iceberg table, skipping if it already exists.
+
+    Args:
+        catalog: The Iceberg catalog to use.
+        identifier: Fully qualified table name (e.g. ``"stocks.ohlcv"``).
+        schema: The Iceberg schema for the table.
+        partition_spec: Partition specification for the table.
+    """
+    try:
+        catalog.create_table(
+            identifier=identifier,
+            schema=schema,
+            partition_spec=partition_spec,
+        )
+        _logger.info("Created Iceberg table '%s'.", identifier)
+    except Exception:
+        _logger.info("Table '%s' already exists — skipping.", identifier)
+
+
+def create_tables() -> None:
+    """Create all 8 ``stocks`` Iceberg tables.
+
+    This function is idempotent — calling it on an already-initialised
+    catalog simply logs and returns.  Creates the ``stocks`` namespace
+    first if it does not exist.
+
+    Raises:
+        RuntimeError: If the catalog cannot be loaded.
+
+    Example:
+        >>> create_tables()  # doctest: +SKIP
+    """
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+    )
+
+    catalog = _get_catalog()
+
+    # Create namespace
+    try:
+        catalog.create_namespace(_NAMESPACE)
+        _logger.info("Created Iceberg namespace '%s'.", _NAMESPACE)
+    except Exception:
+        _logger.info("Namespace '%s' already exists — skipping.", _NAMESPACE)
+
+    # No-partition tables
+    empty_spec = PartitionSpec()
+
+    _create_table(catalog, _REGISTRY_TABLE, _registry_schema(), empty_spec)
+    _create_table(catalog, _COMPANY_INFO_TABLE, _company_info_schema(), empty_spec)
+    _create_table(catalog, _DIVIDENDS_TABLE, _dividends_schema(), empty_spec)
+    _create_table(catalog, _ANALYSIS_SUMMARY_TABLE, _analysis_summary_schema(), empty_spec)
+    _create_table(catalog, _FORECAST_RUNS_TABLE, _forecast_runs_schema(), empty_spec)
+
+    # Partitioned tables
+    ohlcv_schema = _ohlcv_schema()
+    _create_table(catalog, _OHLCV_TABLE, ohlcv_schema,
+                  _ticker_partition_spec(ohlcv_schema))
+
+    ti_schema = _technical_indicators_schema()
+    _create_table(catalog, _TECHNICAL_INDICATORS_TABLE, ti_schema,
+                  _ticker_partition_spec(ti_schema))
+
+    forecasts_schema = _forecasts_schema()
+    _create_table(catalog, _FORECASTS_TABLE, forecasts_schema,
+                  _ticker_horizon_partition_spec(forecasts_schema))
+
+    _logger.info("Stocks Iceberg table initialisation complete.")
+
+
+if __name__ == "__main__":
+    import os
+
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    os.chdir(project_root)
+    create_tables()

@@ -27,6 +27,7 @@ Typical usage (via LangChain tool call)::
 import json
 import logging
 import math
+import sys
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Optional
@@ -50,6 +51,38 @@ _DATA_FORECASTS = _PROJECT_ROOT / "data" / "forecasts"
 _DATA_METADATA = _PROJECT_ROOT / "data" / "metadata"
 _CHARTS_FORECASTS = _PROJECT_ROOT / "charts" / "forecasts"
 _CACHE_DIR = _PROJECT_ROOT / "data" / "cache"
+
+# ---------------------------------------------------------------------------
+# Iceberg repository — lazy singleton (non-blocking; disabled if unavailable)
+# ---------------------------------------------------------------------------
+
+_STOCK_REPO = None
+_STOCK_REPO_INIT_ATTEMPTED = False
+
+
+def _get_repo():
+    """Return the module-level :class:`~stocks.repository.StockRepository` singleton.
+
+    Returns ``None`` silently when PyIceberg is unavailable.
+
+    Returns:
+        :class:`~stocks.repository.StockRepository` instance or ``None``.
+    """
+    global _STOCK_REPO, _STOCK_REPO_INIT_ATTEMPTED
+    if _STOCK_REPO_INIT_ATTEMPTED:
+        return _STOCK_REPO
+    _STOCK_REPO_INIT_ATTEMPTED = True
+    try:
+        _root = str(_PROJECT_ROOT)
+        if _root not in sys.path:
+            sys.path.insert(0, _root)
+        from stocks.repository import StockRepository  # noqa: PLC0415
+        _STOCK_REPO = StockRepository()
+        logger.debug("StockRepository initialised for dual-write (forecasting_tool)")
+    except Exception as _e:
+        logger.warning("StockRepository unavailable (Iceberg write disabled): %s", _e)
+    return _STOCK_REPO
+
 
 # ---------------------------------------------------------------------------
 # Private helper functions
@@ -567,6 +600,33 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
         chart_path = _create_forecast_chart(
             model, forecast_df, prophet_df, ticker, current_price, summary
         )
+
+        # Iceberg dual-write: forecast run metadata + full forecast series
+        try:
+            repo = _get_repo()
+            if repo is not None:
+                _run_date = date.today()
+                _run_dict = {
+                    "run_date": _run_date,
+                    "sentiment": summary.get("sentiment"),
+                    "current_price_at_run": current_price,
+                }
+                for _m_key in ["3m", "6m", "9m"]:
+                    _t = summary.get("targets", {}).get(_m_key)
+                    if _t:
+                        _run_dict[f"target_{_m_key}_date"] = _t.get("date")
+                        _run_dict[f"target_{_m_key}_price"] = _t.get("price")
+                        _run_dict[f"target_{_m_key}_pct_change"] = _t.get("pct_change")
+                        _run_dict[f"target_{_m_key}_lower"] = _t.get("lower")
+                        _run_dict[f"target_{_m_key}_upper"] = _t.get("upper")
+                if "error" not in accuracy:
+                    _run_dict["mae"] = accuracy.get("MAE")
+                    _run_dict["rmse"] = accuracy.get("RMSE")
+                    _run_dict["mape"] = accuracy.get("MAPE_pct")
+                repo.insert_forecast_run(ticker, months, _run_dict)
+                repo.insert_forecast_series(ticker, months, _run_date, forecast_df)
+        except Exception as _e:
+            logger.warning("Iceberg forecast write failed for %s: %s", ticker, _e)
 
         # ── Format report ─────────────────────────────────────────────────
         sentiment_emoji = {
