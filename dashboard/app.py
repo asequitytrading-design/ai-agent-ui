@@ -74,8 +74,14 @@ from dashboard.layouts import (
     admin_users_layout,
     analysis_layout,
     compare_layout,
+    correlation_layout,
+    dividends_layout,
     forecast_layout,
     home_layout,
+    risk_layout,
+    screener_layout,
+    sectors_layout,
+    targets_layout,
 )
 
 # ---------------------------------------------------------------------------
@@ -265,6 +271,18 @@ def display_page(
         return forecast_layout()
     if pathname == "/compare":
         return compare_layout()
+    if pathname == "/screener":
+        return screener_layout()
+    if pathname == "/targets":
+        return targets_layout()
+    if pathname == "/dividends":
+        return dividends_layout()
+    if pathname == "/risk":
+        return risk_layout()
+    if pathname == "/sectors":
+        return sectors_layout()
+    if pathname == "/correlation":
+        return correlation_layout()
     if pathname == "/admin/users":
         payload = _validate_token(token)
         if payload is None or payload.get("role") != "superuser":

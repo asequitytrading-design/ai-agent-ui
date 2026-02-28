@@ -29,6 +29,7 @@ Typical usage (via LangChain tool call)::
 import json
 import logging
 import math
+import sys
 from datetime import date
 from pathlib import Path
 from typing import Optional
@@ -51,6 +52,38 @@ _DATA_RAW = _PROJECT_ROOT / "data" / "raw"
 _DATA_METADATA = _PROJECT_ROOT / "data" / "metadata"
 _CHARTS_ANALYSIS = _PROJECT_ROOT / "charts" / "analysis"
 _CACHE_DIR = _PROJECT_ROOT / "data" / "cache"
+
+# ---------------------------------------------------------------------------
+# Iceberg repository — lazy singleton (non-blocking; disabled if unavailable)
+# ---------------------------------------------------------------------------
+
+_STOCK_REPO = None
+_STOCK_REPO_INIT_ATTEMPTED = False
+
+
+def _get_repo():
+    """Return the module-level :class:`~stocks.repository.StockRepository` singleton.
+
+    Returns ``None`` silently when PyIceberg is unavailable.
+
+    Returns:
+        :class:`~stocks.repository.StockRepository` instance or ``None``.
+    """
+    global _STOCK_REPO, _STOCK_REPO_INIT_ATTEMPTED
+    if _STOCK_REPO_INIT_ATTEMPTED:
+        return _STOCK_REPO
+    _STOCK_REPO_INIT_ATTEMPTED = True
+    try:
+        _root = str(_PROJECT_ROOT)
+        if _root not in sys.path:
+            sys.path.insert(0, _root)
+        from stocks.repository import StockRepository  # noqa: PLC0415
+        _STOCK_REPO = StockRepository()
+        logger.debug("StockRepository initialised for dual-write (price_analysis_tool)")
+    except Exception as _e:
+        logger.warning("StockRepository unavailable (Iceberg write disabled): %s", _e)
+    return _STOCK_REPO
+
 
 # ---------------------------------------------------------------------------
 # Private helper functions
@@ -562,6 +595,24 @@ def analyse_stock_price(ticker: str) -> str:
         movement = _analyse_price_movement(df)
         stats = _generate_summary_stats(df, ticker)
         chart_path = _create_analysis_chart(df, ticker)
+
+        # Iceberg dual-write: technical indicators + analysis summary
+        try:
+            repo = _get_repo()
+            if repo is not None:
+                repo.upsert_technical_indicators(ticker, df)
+                _iceberg_summary = {
+                    **movement,
+                    **stats,
+                    # Rename macd_signal → macd_signal_text (schema key)
+                    "macd_signal_text": stats.get("macd_signal"),
+                    # Convert list fields to strings for StringType column
+                    "support_levels": str(movement.get("support_levels", [])),
+                    "resistance_levels": str(movement.get("resistance_levels", [])),
+                }
+                repo.insert_analysis_summary(ticker, _iceberg_summary)
+        except Exception as _e:
+            logger.warning("Iceberg write failed for %s analysis: %s", ticker, _e)
 
         report = (
             f"=== PRICE ANALYSIS: {ticker} ===\n\n"
