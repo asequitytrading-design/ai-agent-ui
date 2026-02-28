@@ -2503,19 +2503,35 @@ def register_callbacks(app) -> None:
 
     @app.callback(
         Output("screener-table-container", "children"),
+        Output("screener-count-text", "children"),
+        Output("screener-pagination", "max_value"),
         Input("screener-rsi-filter", "value"),
         Input("screener-market-filter", "value"),
+        Input("insights-tabs", "active_tab"),
+        Input("screener-pagination", "active_page"),
+        Input("screener-page-size", "value"),
     )
-    def update_screener(rsi_filter: str, market_filter: str) -> Any:
+    def update_screener(
+        rsi_filter: str,
+        market_filter: str,
+        active_tab: str,
+        page: Optional[int],
+        page_size_str: Optional[str],
+    ) -> Any:
         """Populate the screener table from stocks.analysis_summary.
 
         Args:
             rsi_filter: RSI filter value (``"all"``, ``"oversold"``, etc.).
             market_filter: Market filter value (``"all"``, ``"india"``, ``"us"``).
+            active_tab: Currently active Insights tab ID.
+            page: Current pagination page (1-based).
+            page_size_str: Number of rows per page as string.
 
         Returns:
-            Dash table component or an alert when no data is available.
+            Tuple of (table component, count text, pagination max_value).
         """
+        if active_tab != "screener-tab":
+            return no_update, no_update, no_update
         repo = _get_iceberg_repo()
         df = pd.DataFrame()
 
@@ -2566,10 +2582,10 @@ def register_callbacks(app) -> None:
                 df = pd.DataFrame(rows)
 
         if df.empty:
-            return dbc.Alert(
-                "No analysis data available. Analyse stocks via the chat agent first.",
-                color="warning",
-                className="mt-3",
+            return (
+                dbc.Alert("No analysis data available. Analyse stocks via the chat agent first.",
+                          color="warning", className="mt-3"),
+                "", 1,
             )
 
         # Market filter using registry
@@ -2599,7 +2615,19 @@ def register_callbacks(app) -> None:
                     df = df[sig.eq("neutral").values]
 
         if df.empty:
-            return dbc.Alert("No stocks match the selected filters.", color="info", className="mt-3")
+            return (
+                dbc.Alert("No stocks match the selected filters.", color="info", className="mt-3"),
+                "", 1,
+            )
+
+        # Pagination
+        page_size = int(page_size_str or 10)
+        page = page or 1
+        total = len(df)
+        max_pages = max(1, -(-total // page_size))
+        page = min(page, max_pages)
+        df = df.iloc[(page - 1) * page_size: page * page_size].reset_index(drop=True)
+        count_text = f"{total} stock{'s' if total != 1 else ''}"
 
         # Build display table
         cols_map = {
@@ -2652,38 +2680,58 @@ def register_callbacks(app) -> None:
                     cells.append(html.Td(str(val) if val is not None else "—"))
             rows_html.append(html.Tr(cells))
 
-        return dbc.Table(
-            [
-                html.Thead(html.Tr([html.Th(c) for c in display_df.columns])),
-                html.Tbody(rows_html),
-            ],
-            bordered=True,
-            hover=True,
-            responsive=True,
-            size="sm",
-            className="mt-2",
+        return (
+            dbc.Table(
+                [
+                    html.Thead(html.Tr([html.Th(c) for c in display_df.columns])),
+                    html.Tbody(rows_html),
+                ],
+                bordered=True,
+                hover=True,
+                responsive=True,
+                size="sm",
+                className="mt-2",
+            ),
+            count_text,
+            max_pages,
         )
 
     # ── Price Targets ─────────────────────────────────────────────────────────
 
     @app.callback(
         Output("targets-table-container", "children"),
+        Output("targets-count-text", "children"),
+        Output("targets-pagination", "max_value"),
         Input("targets-ticker-dropdown", "value"),
+        Input("insights-tabs", "active_tab"),
+        Input("targets-pagination", "active_page"),
+        Input("targets-page-size", "value"),
     )
-    def update_targets(ticker_filter: str) -> Any:
+    def update_targets(
+        ticker_filter: str,
+        active_tab: str,
+        page: Optional[int],
+        page_size_str: Optional[str],
+    ) -> Any:
         """Populate the price targets table from stocks.forecast_runs.
 
         Args:
             ticker_filter: Selected ticker or ``"all"``.
+            active_tab: Currently active Insights tab ID.
+            page: Current pagination page (1-based).
+            page_size_str: Number of rows per page as string.
 
         Returns:
-            Dash table component or an alert when no data is available.
+            Tuple of (table component, count text, pagination max_value).
         """
+        if active_tab != "targets-tab":
+            return no_update, no_update, no_update
+
         repo = _get_iceberg_repo()
         if repo is None:
             return dbc.Alert(
                 "Iceberg unavailable — cannot load price targets.", color="warning"
-            )
+            ), "", 1
 
         try:
             from stocks.repository import StockRepository as _SR  # noqa: F401
@@ -2692,13 +2740,13 @@ def register_callbacks(app) -> None:
             tbl = catalog.load_table("stocks.forecast_runs")
             df = tbl.scan().to_pandas()
         except Exception as exc:
-            return dbc.Alert(f"Could not load forecast_runs: {exc}", color="danger")
+            return dbc.Alert(f"Could not load forecast_runs: {exc}", color="danger"), "", 1
 
         if df.empty:
-            return dbc.Alert(
-                "No forecast data available. Run backfill or use the forecast tool first.",
-                color="warning",
-                className="mt-3",
+            return (
+                dbc.Alert("No forecast data available. Use the forecast tool first.",
+                          color="warning", className="mt-3"),
+                "", 1,
             )
 
         # Keep latest run per (ticker, horizon_months)
@@ -2712,7 +2760,16 @@ def register_callbacks(app) -> None:
             df = df[df["ticker"] == ticker_filter.upper()]
 
         if df.empty:
-            return dbc.Alert(f"No forecast data for {ticker_filter}.", color="info")
+            return dbc.Alert(f"No forecast data for {ticker_filter}.", color="info"), "", 1
+
+        # Pagination
+        page_size = int(page_size_str or 10)
+        page = page or 1
+        total = len(df)
+        max_pages = max(1, -(-total // page_size))
+        page = min(page, max_pages)
+        df = df.iloc[(page - 1) * page_size: page * page_size].reset_index(drop=True)
+        count_text = f"{total} forecast{'s' if total != 1 else ''}"
 
         rows_html = []
         for _, row in df.iterrows():
@@ -2745,41 +2802,61 @@ def register_callbacks(app) -> None:
                 html.Td(html.Span(sentiment, className=sentiment_badge)),
             ]))
 
-        return dbc.Table(
-            [
-                html.Thead(html.Tr([
-                    html.Th("Ticker"), html.Th("Horizon"), html.Th("Run Date"),
-                    html.Th("Price at Run"),
-                    html.Th("3m Target"), html.Th("6m Target"), html.Th("9m Target"),
-                    html.Th("Sentiment"),
-                ])),
-                html.Tbody(rows_html),
-            ],
-            bordered=True,
-            hover=True,
-            responsive=True,
-            size="sm",
-            className="mt-2",
+        return (
+            dbc.Table(
+                [
+                    html.Thead(html.Tr([
+                        html.Th("Ticker"), html.Th("Horizon"), html.Th("Run Date"),
+                        html.Th("Price at Run"),
+                        html.Th("3m Target"), html.Th("6m Target"), html.Th("9m Target"),
+                        html.Th("Sentiment"),
+                    ])),
+                    html.Tbody(rows_html),
+                ],
+                bordered=True,
+                hover=True,
+                responsive=True,
+                size="sm",
+                className="mt-2",
+            ),
+            count_text,
+            max_pages,
         )
 
     # ── Dividends ─────────────────────────────────────────────────────────────
 
     @app.callback(
         Output("dividends-table-container", "children"),
+        Output("dividends-count-text", "children"),
+        Output("dividends-pagination", "max_value"),
         Input("dividends-ticker-dropdown", "value"),
+        Input("insights-tabs", "active_tab"),
+        Input("dividends-pagination", "active_page"),
+        Input("dividends-page-size", "value"),
     )
-    def update_dividends(ticker_filter: str) -> Any:
+    def update_dividends(
+        ticker_filter: str,
+        active_tab: str,
+        page: Optional[int],
+        page_size_str: Optional[str],
+    ) -> Any:
         """Populate the dividends table from stocks.dividends.
 
         Args:
             ticker_filter: Selected ticker or ``"all"``.
+            active_tab: Currently active Insights tab ID.
+            page: Current pagination page (1-based).
+            page_size_str: Number of rows per page as string.
 
         Returns:
-            Dash table component or an alert when no data is available.
+            Tuple of (table component, count text, pagination max_value).
         """
+        if active_tab != "dividends-tab":
+            return no_update, no_update, no_update
+
         repo = _get_iceberg_repo()
         if repo is None:
-            return dbc.Alert("Iceberg unavailable.", color="warning")
+            return dbc.Alert("Iceberg unavailable.", color="warning"), "", 1
 
         if ticker_filter and ticker_filter != "all":
             df = repo.get_dividends(ticker_filter.upper())
@@ -2787,14 +2864,23 @@ def register_callbacks(app) -> None:
             df = repo._table_to_df("stocks.dividends")
 
         if df.empty:
-            return dbc.Alert(
-                "No dividend data available. Run backfill or use the dividend tool first.",
-                color="warning",
-                className="mt-3",
+            return (
+                dbc.Alert("No dividend data available. Use the dividend tool first.",
+                          color="warning", className="mt-3"),
+                "", 1,
             )
 
         # Sort most-recent first
         df = df.sort_values("ex_date", ascending=False).reset_index(drop=True)
+
+        # Pagination
+        page_size = int(page_size_str or 10)
+        page = page or 1
+        total = len(df)
+        max_pages = max(1, -(-total // page_size))
+        page = min(page, max_pages)
+        page_df = df.iloc[(page - 1) * page_size: page * page_size]
+        count_text = f"{total} payment{'s' if total != 1 else ''}"
 
         sym_map = {
             "USD": "$", "INR": "₹", "GBP": "£", "EUR": "€",
@@ -2802,7 +2888,7 @@ def register_callbacks(app) -> None:
         }
 
         rows_html = []
-        for _, row in df.head(500).iterrows():
+        for _, row in page_df.iterrows():
             currency = str(row.get("currency", "USD") or "USD")
             sym = sym_map.get(currency.upper(), currency)
             amount = row.get("dividend_amount")
@@ -2814,47 +2900,67 @@ def register_callbacks(app) -> None:
                 html.Td(currency),
             ]))
 
-        return dbc.Table(
-            [
-                html.Thead(html.Tr([
-                    html.Th("Ticker"), html.Th("Ex-Date"),
-                    html.Th("Amount"), html.Th("Currency"),
-                ])),
-                html.Tbody(rows_html),
-            ],
-            bordered=True,
-            hover=True,
-            responsive=True,
-            size="sm",
-            className="mt-2",
+        return (
+            dbc.Table(
+                [
+                    html.Thead(html.Tr([
+                        html.Th("Ticker"), html.Th("Ex-Date"),
+                        html.Th("Amount"), html.Th("Currency"),
+                    ])),
+                    html.Tbody(rows_html),
+                ],
+                bordered=True,
+                hover=True,
+                responsive=True,
+                size="sm",
+                className="mt-2",
+            ),
+            count_text,
+            max_pages,
         )
 
     # ── Risk Metrics ──────────────────────────────────────────────────────────
 
     @app.callback(
         Output("risk-table-container", "children"),
+        Output("risk-count-text", "children"),
+        Output("risk-pagination", "max_value"),
         Input("risk-sort-by", "value"),
+        Input("insights-tabs", "active_tab"),
+        Input("risk-pagination", "active_page"),
+        Input("risk-page-size", "value"),
     )
-    def update_risk(sort_col: str) -> Any:
+    def update_risk(
+        sort_col: str,
+        active_tab: str,
+        page: Optional[int],
+        page_size_str: Optional[str],
+    ) -> Any:
         """Populate the risk metrics table from stocks.analysis_summary.
 
         Args:
             sort_col: Column name to sort by (descending for Sharpe/return;
                 ascending for drawdown/volatility).
+            active_tab: Currently active Insights tab ID.
+            page: Current pagination page (1-based).
+            page_size_str: Number of rows per page as string.
 
         Returns:
-            Dash table component or an alert when no data is available.
+            Tuple of (table component, count text, pagination max_value).
         """
+        if active_tab != "risk-tab":
+            return no_update, no_update, no_update
+
         repo = _get_iceberg_repo()
         df = pd.DataFrame()
         if repo is not None:
             df = repo.get_all_latest_analysis_summary()
 
         if df.empty:
-            return dbc.Alert(
-                "No risk data available. Run backfill or analyse stocks first.",
-                color="warning",
-                className="mt-3",
+            return (
+                dbc.Alert("No risk data available. Analyse stocks first.",
+                          color="warning", className="mt-3"),
+                "", 1,
             )
 
         display_cols = [
@@ -2871,7 +2977,7 @@ def register_callbacks(app) -> None:
         if sort_col in display_df.columns:
             display_df = display_df.sort_values(
                 sort_col, ascending=ascending, na_position="last"
-            )
+            ).reset_index(drop=True)
 
         col_labels = {
             "ticker": "Ticker",
@@ -2883,6 +2989,16 @@ def register_callbacks(app) -> None:
             "bull_phase_pct": "Bull %",
             "bear_phase_pct": "Bear %",
         }
+
+        # Pagination (apply before renaming columns)
+        page_size = int(page_size_str or 10)
+        page = page or 1
+        total = len(display_df)
+        max_pages = max(1, -(-total // page_size))
+        page = min(page, max_pages)
+        display_df = display_df.iloc[(page - 1) * page_size: page * page_size]
+        count_text = f"{total} stock{'s' if total != 1 else ''}"
+
         display_df.columns = [col_labels.get(c, c) for c in display_df.columns]
 
         for num_col in ["Ann. Return %", "Volatility %", "Sharpe", "Max DD %", "Bull %", "Bear %"]:
@@ -2896,16 +3012,20 @@ def register_callbacks(app) -> None:
             for _, row in display_df.iterrows()
         ]
 
-        return dbc.Table(
-            [
-                html.Thead(html.Tr([html.Th(c) for c in display_df.columns])),
-                html.Tbody(rows_html),
-            ],
-            bordered=True,
-            hover=True,
-            responsive=True,
-            size="sm",
-            className="mt-2",
+        return (
+            dbc.Table(
+                [
+                    html.Thead(html.Tr([html.Th(c) for c in display_df.columns])),
+                    html.Tbody(rows_html),
+                ],
+                bordered=True,
+                hover=True,
+                responsive=True,
+                size="sm",
+                className="mt-2",
+            ),
+            count_text,
+            max_pages,
         )
 
     # ── Sectors ───────────────────────────────────────────────────────────────

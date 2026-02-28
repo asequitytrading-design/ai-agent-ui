@@ -779,6 +779,29 @@ def insights_layout() -> html.Div:
                             color="#4f46e5",
                             children=html.Div(id="screener-table-container"),
                         ),
+                        dbc.Row([
+                            dbc.Col(html.Small(id="screener-count-text", className="text-muted"), width="auto", className="my-auto"),
+                            dbc.Col(
+                                dbc.Pagination(id="screener-pagination", max_value=1, active_page=1,
+                                               fully_expanded=False, size="sm", className="justify-content-end mb-0"),
+                                className="d-flex justify-content-end my-auto",
+                            ),
+                            dbc.Col(
+                                dbc.Select(
+                                    id="screener-page-size",
+                                    options=[
+                                        {"label": "10 / page", "value": "10"},
+                                        {"label": "25 / page", "value": "25"},
+                                        {"label": "50 / page", "value": "50"},
+                                    ],
+                                    value="10",
+                                    size="sm",
+                                    style={"width": "120px"},
+                                ),
+                                width="auto",
+                                className="my-auto",
+                            ),
+                        ], className="mt-2 align-items-center"),
                     ]),
                 ]),
 
@@ -805,6 +828,29 @@ def insights_layout() -> html.Div:
                             color="#4f46e5",
                             children=html.Div(id="targets-table-container"),
                         ),
+                        dbc.Row([
+                            dbc.Col(html.Small(id="targets-count-text", className="text-muted"), width="auto", className="my-auto"),
+                            dbc.Col(
+                                dbc.Pagination(id="targets-pagination", max_value=1, active_page=1,
+                                               fully_expanded=False, size="sm", className="justify-content-end mb-0"),
+                                className="d-flex justify-content-end my-auto",
+                            ),
+                            dbc.Col(
+                                dbc.Select(
+                                    id="targets-page-size",
+                                    options=[
+                                        {"label": "10 / page", "value": "10"},
+                                        {"label": "25 / page", "value": "25"},
+                                        {"label": "50 / page", "value": "50"},
+                                    ],
+                                    value="10",
+                                    size="sm",
+                                    style={"width": "120px"},
+                                ),
+                                width="auto",
+                                className="my-auto",
+                            ),
+                        ], className="mt-2 align-items-center"),
                     ]),
                 ]),
 
@@ -831,6 +877,29 @@ def insights_layout() -> html.Div:
                             color="#4f46e5",
                             children=html.Div(id="dividends-table-container"),
                         ),
+                        dbc.Row([
+                            dbc.Col(html.Small(id="dividends-count-text", className="text-muted"), width="auto", className="my-auto"),
+                            dbc.Col(
+                                dbc.Pagination(id="dividends-pagination", max_value=1, active_page=1,
+                                               fully_expanded=False, size="sm", className="justify-content-end mb-0"),
+                                className="d-flex justify-content-end my-auto",
+                            ),
+                            dbc.Col(
+                                dbc.Select(
+                                    id="dividends-page-size",
+                                    options=[
+                                        {"label": "10 / page", "value": "10"},
+                                        {"label": "25 / page", "value": "25"},
+                                        {"label": "50 / page", "value": "50"},
+                                    ],
+                                    value="10",
+                                    size="sm",
+                                    style={"width": "120px"},
+                                ),
+                                width="auto",
+                                className="my-auto",
+                            ),
+                        ], className="mt-2 align-items-center"),
                     ]),
                 ]),
 
@@ -863,6 +932,29 @@ def insights_layout() -> html.Div:
                             color="#4f46e5",
                             children=html.Div(id="risk-table-container"),
                         ),
+                        dbc.Row([
+                            dbc.Col(html.Small(id="risk-count-text", className="text-muted"), width="auto", className="my-auto"),
+                            dbc.Col(
+                                dbc.Pagination(id="risk-pagination", max_value=1, active_page=1,
+                                               fully_expanded=False, size="sm", className="justify-content-end mb-0"),
+                                className="d-flex justify-content-end my-auto",
+                            ),
+                            dbc.Col(
+                                dbc.Select(
+                                    id="risk-page-size",
+                                    options=[
+                                        {"label": "10 / page", "value": "10"},
+                                        {"label": "25 / page", "value": "25"},
+                                        {"label": "50 / page", "value": "50"},
+                                    ],
+                                    value="10",
+                                    size="sm",
+                                    style={"width": "120px"},
+                                ),
+                                width="auto",
+                                className="my-auto",
+                            ),
+                        ], className="mt-2 align-items-center"),
                     ]),
                 ]),
 
