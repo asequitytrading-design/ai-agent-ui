@@ -1,13 +1,11 @@
 """Yahoo Finance data fetching tools for the Stock Analysis Agent.
 
 Provides LangChain ``@tool`` functions for fetching stock market data from
-Yahoo Finance, persisting it as parquet files, and maintaining a metadata
+Yahoo Finance, persisting it as parquet files, and maintaining the Iceberg
 registry for smart delta fetching.
 
 Path constants and helper functions live in :mod:`tools._stock_shared` and
-:mod:`tools._stock_registry`.  The constants are re-exported here so that
-existing ``monkeypatch.setattr(stock_data_tool, ...)`` calls continue to work
-in tests.  For new tests, prefer patching ``tools._stock_shared.<attr>``.
+:mod:`tools._stock_registry`.
 
 Typical usage::
 
@@ -26,25 +24,26 @@ import yfinance as yf
 from langchain_core.tools import tool
 
 import tools._stock_shared as _ss
-from tools._stock_shared import _currency_symbol, _load_currency, _get_repo
+from tools._stock_shared import (
+    _currency_symbol,
+    _get_repo,
+    _load_currency,
+    _parquet_path,
+    _require_repo,
+)
 from tools._stock_registry import (
-    _load_registry,
-    _save_registry,
     _check_existing_data,
+    _load_registry,
     _update_registry,
 )
 
 # Module-level logger — kept at module scope intentionally (not inside a class).
 _logger = logging.getLogger(__name__)
 
-# Re-export constants so ``monkeypatch.setattr(stock_data_tool, "_DATA_RAW", ...)`` works.
-# Sub-modules access shared state via module attrs on ``_ss`` for correct patching.
+# Re-export constants so existing monkeypatch calls still work.
 _PROJECT_ROOT = _ss._PROJECT_ROOT
 _DATA_RAW = _ss._DATA_RAW
 _DATA_PROCESSED = _ss._DATA_PROCESSED
-_DATA_METADATA = _ss._DATA_METADATA
-_REGISTRY_PATH = _ss._REGISTRY_PATH
-_STOCK_REPO = _ss._STOCK_REPO
 
 
 # ---------------------------------------------------------------------------
@@ -77,7 +76,7 @@ def fetch_stock_data(ticker: str, period: str = "10y") -> str:
 
     try:
         existing = _check_existing_data(ticker)
-        file_path = _ss._DATA_RAW / f"{ticker}_raw.parquet"
+        file_path = _parquet_path(ticker)
         _ss._DATA_RAW.mkdir(parents=True, exist_ok=True)
 
         if existing is None:
@@ -91,12 +90,8 @@ def fetch_stock_data(ticker: str, period: str = "10y") -> str:
             df.index = pd.to_datetime(df.index).tz_localize(None)
             df.to_parquet(file_path, engine="pyarrow", index=True)
             _update_registry(ticker, df, file_path)
-            try:
-                repo = _get_repo()
-                if repo is not None:
-                    repo.insert_ohlcv(ticker, df)
-            except Exception as _e:
-                _logger.error("Iceberg OHLCV insert failed for %s: %s", ticker, _e)
+            repo = _require_repo()
+            repo.insert_ohlcv(ticker, df)
             msg = (
                 f"Full fetch completed for {ticker}: {len(df)} rows saved. "
                 f"Date range: {df.index.min().date()} to {df.index.max().date()}."
@@ -130,12 +125,8 @@ def fetch_stock_data(ticker: str, period: str = "10y") -> str:
         combined.sort_index(inplace=True)
         combined.to_parquet(file_path, engine="pyarrow", index=True)
         _update_registry(ticker, combined, file_path)
-        try:
-            repo = _get_repo()
-            if repo is not None:
-                repo.insert_ohlcv(ticker, new_df)
-        except Exception as _e:
-            _logger.error("Iceberg OHLCV delta-write failed for %s: %s", ticker, _e)
+        repo = _require_repo()
+        repo.insert_ohlcv(ticker, new_df)
 
         msg = (
             f"Delta fetch for {ticker}: {len(new_df)} new rows added "
@@ -154,8 +145,7 @@ def get_stock_info(ticker: str) -> str:
     """Fetch company metadata for a stock ticker from Yahoo Finance.
 
     Retrieves company name, sector, industry, market cap, PE ratio, and
-    52-week high/low. Results are cached to
-    ``data/metadata/{TICKER}_info.json`` (refreshed once per day).
+    52-week high/low. Results are cached in Iceberg (refreshed once per day).
 
     Args:
         ticker: Stock ticker symbol, e.g. ``"AAPL"``.
@@ -170,16 +160,25 @@ def get_stock_info(ticker: str) -> str:
         True
     """
     ticker = ticker.upper().strip()
-    cache_path = _ss._DATA_METADATA / f"{ticker}_info.json"
     _logger.info("get_stock_info | ticker=%s", ticker)
 
     try:
-        if cache_path.exists():
-            with open(cache_path, "r") as f:
-                cached = json.load(f)
-            if cached.get("_fetched_date") == str(date.today()):
-                cached.pop("_fetched_date", None)
-                return json.dumps(cached, indent=2)
+        repo = _require_repo()
+        cached = repo.get_latest_company_info_if_fresh(ticker, date.today())
+        if cached is not None:
+            result = {
+                "ticker": ticker,
+                "company_name": cached.get("company_name", "N/A"),
+                "sector": cached.get("sector", "N/A"),
+                "industry": cached.get("industry", "N/A"),
+                "market_cap": cached.get("market_cap", "N/A"),
+                "pe_ratio": cached.get("pe_ratio", "N/A"),
+                "52w_high": cached.get("week_52_high", "N/A"),
+                "52w_low": cached.get("week_52_low", "N/A"),
+                "current_price": cached.get("current_price", "N/A"),
+                "currency": cached.get("currency", "USD"),
+            }
+            return json.dumps(result, indent=2, default=str)
 
         info = yf.Ticker(ticker).info
         result = {
@@ -194,15 +193,7 @@ def get_stock_info(ticker: str) -> str:
             "current_price": info.get("currentPrice", info.get("regularMarketPrice", "N/A")),
             "currency": info.get("currency", "USD"),
         }
-        _ss._DATA_METADATA.mkdir(parents=True, exist_ok=True)
-        with open(cache_path, "w") as f:
-            json.dump({**result, "_fetched_date": str(date.today())}, f, indent=2)
-        try:
-            repo = _get_repo()
-            if repo is not None:
-                repo.insert_company_info(ticker, info)
-        except Exception as _e:
-            _logger.error("Iceberg company_info insert failed for %s: %s", ticker, _e)
+        repo.insert_company_info(ticker, info)
         return json.dumps(result, indent=2)
 
     except Exception as e:
@@ -226,7 +217,7 @@ def load_stock_data(ticker: str) -> str:
         True
     """
     ticker = ticker.upper().strip()
-    file_path = _ss._DATA_RAW / f"{ticker}_raw.parquet"
+    file_path = _parquet_path(ticker)
     _logger.info("load_stock_data | ticker=%s", ticker)
 
     if not file_path.exists():
@@ -316,12 +307,8 @@ def get_dividend_history(ticker: str) -> str:
         df.columns = ["date", "dividend"]
         out_path = _ss._DATA_PROCESSED / f"{ticker}_dividends.parquet"
         df.to_parquet(out_path, engine="pyarrow", index=False)
-        try:
-            repo = _get_repo()
-            if repo is not None:
-                repo.insert_dividends(ticker, df, currency=_load_currency(ticker))
-        except Exception as _e:
-            _logger.error("Iceberg dividends insert failed for %s: %s", ticker, _e)
+        repo = _require_repo()
+        repo.insert_dividends(ticker, df, currency=_load_currency(ticker))
         curr_sym = _currency_symbol(_load_currency(ticker))
         msg = (
             f"Dividend history for {ticker}: {len(df)} payments. "
@@ -339,7 +326,7 @@ def get_dividend_history(ticker: str) -> str:
 
 @tool
 def list_available_stocks() -> str:
-    """List all stocks currently stored in the local data registry.
+    """List all stocks currently stored in the Iceberg registry.
 
     Returns:
         A formatted table string, or a message indicating the registry is empty.
@@ -352,7 +339,7 @@ def list_available_stocks() -> str:
     _logger.info("list_available_stocks called")
     registry = _load_registry()
     if not registry:
-        return "No stocks in the local registry yet. Use fetch_stock_data to download and store stock data."
+        return "No stocks in the registry yet. Use fetch_stock_data to download and store stock data."
     lines = [
         f"{'Ticker':<15} {'Rows':>6}  {'Start':>12}  {'End':>12}  {'Last Fetch':>12}",
         "-" * 65,

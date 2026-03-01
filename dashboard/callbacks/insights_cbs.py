@@ -20,11 +20,12 @@ import pandas as pd
 import plotly.graph_objects as go
 from dash import Input, Output, html, no_update
 
-from dashboard.callbacks.data_loaders import _DATA_RAW, _REGISTRY_PATH
 from dashboard.callbacks.iceberg import (
     _get_analysis_summary_cached,
+    _get_analysis_with_gaps_filled,
     _get_company_info_cached,
     _get_iceberg_repo,
+    _get_ohlcv_cached,
 )
 
 # Module-level logger; kept at module scope as a private-style name per convention.
@@ -72,51 +73,8 @@ def register(app) -> None:
         repo = _get_iceberg_repo()
         df = pd.DataFrame()
 
-        # Fix #6: use TTL-cached read to avoid repeated Iceberg scans
         if repo is not None:
-            df = _get_analysis_summary_cached(repo)
-
-        # Fallback: compute from flat parquet files if Iceberg table is empty
-        if df.empty:
-            rows = []
-            try:
-                import json as _json
-                registry = {}
-                if _REGISTRY_PATH.exists():
-                    with open(_REGISTRY_PATH) as _f:
-                        registry = _json.load(_f)
-                from price_analysis_tool import (  # noqa: PLC0415
-                    _calculate_technical_indicators,
-                    _analyse_price_movement,
-                    _generate_summary_stats,
-                )
-                for ticker in sorted(registry.keys()):
-                    parquet_path = _DATA_RAW / f"{ticker}_raw.parquet"
-                    if not parquet_path.exists():
-                        continue
-                    try:
-                        _df = pd.read_parquet(parquet_path, engine="pyarrow")
-                        _df.index = pd.to_datetime(_df.index).tz_localize(None)
-                        _df = _calculate_technical_indicators(_df)
-                        movement = _analyse_price_movement(_df)
-                        stats = _generate_summary_stats(_df, ticker)
-                        rows.append({
-                            "ticker": ticker,
-                            "current_price": stats.get("current_price"),
-                            "rsi_14": stats.get("rsi_14"),
-                            "rsi_signal": stats.get("rsi_signal"),
-                            "macd_signal_text": stats.get("macd_signal"),
-                            "sma_200_signal": stats.get("sma_200_signal"),
-                            "sharpe_ratio": movement.get("sharpe_ratio"),
-                            "annualized_return_pct": movement.get("annualized_return_pct"),
-                            "annualized_volatility_pct": movement.get("annualized_volatility_pct"),
-                        })
-                    except Exception as _e:
-                        _logger.debug("Screener fallback failed for %s: %s", ticker, _e)
-            except Exception as _e:
-                _logger.warning("Screener fallback import failed: %s", _e)
-            if rows:
-                df = pd.DataFrame(rows)
+            df = _get_analysis_with_gaps_filled(repo)
 
         if df.empty:
             return (
@@ -511,9 +469,8 @@ def register(app) -> None:
 
         repo = _get_iceberg_repo()
         df = pd.DataFrame()
-        # Fix #6: use TTL-cached read
         if repo is not None:
-            df = _get_analysis_summary_cached(repo)
+            df = _get_analysis_with_gaps_filled(repo)
 
         # Fix #16: vectorised market filter
         if not df.empty and market_filter and market_filter != "all":
@@ -625,9 +582,8 @@ def register(app) -> None:
         if repo is None:
             return empty_fig, dbc.Alert("Iceberg unavailable.", color="warning")
 
-        # Fix #6: use TTL-cached reads
         company_df = _get_company_info_cached(repo)
-        analysis_df = _get_analysis_summary_cached(repo)
+        analysis_df = _get_analysis_with_gaps_filled(repo)
 
         if company_df.empty or analysis_df.empty:
             return empty_fig, dbc.Alert(
@@ -741,19 +697,16 @@ def register(app) -> None:
                     sub = sub.sort_values("date").set_index("date")
                     close_data[ticker] = sub["close"].dropna()
 
-        # Fallback to flat parquet files
+        # Fallback: read OHLCV from Iceberg per-ticker using cached helper
         if not close_data:
             try:
-                import json as _json
-                if _REGISTRY_PATH.exists():
-                    with open(_REGISTRY_PATH) as _f:
-                        registry = _json.load(_f)
+                fallback_repo = _get_iceberg_repo()
+                if fallback_repo is not None:
+                    registry = fallback_repo.get_all_registry()
                     for ticker in sorted(registry.keys()):
-                        parquet_path = _DATA_RAW / f"{ticker}_raw.parquet"
-                        if parquet_path.exists():
-                            _df = pd.read_parquet(parquet_path, engine="pyarrow")
-                            _df.index = pd.to_datetime(_df.index).tz_localize(None)
-                            close_data[ticker] = _df["Close"].dropna()
+                        ohlcv = _get_ohlcv_cached(fallback_repo, ticker)
+                        if ohlcv is not None and not ohlcv.empty:
+                            close_data[ticker] = ohlcv["Close"].dropna()
             except Exception as _e:
                 _logger.warning("Correlation fallback failed: %s", _e)
 
