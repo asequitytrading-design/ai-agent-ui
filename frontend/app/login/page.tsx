@@ -130,14 +130,13 @@ export default function LoginPage() {
     <div className="flex min-h-screen items-center justify-center bg-gray-50 px-4 font-sans">
       <div className="w-full max-w-sm">
         {/* Logo / brand */}
-        <div className="flex flex-col items-center mb-8 gap-3">
-          <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center text-white text-xl font-bold shadow-lg select-none">
-            ✦
-          </div>
-          <div className="text-center">
-            <h1 className="text-xl font-semibold text-gray-900">AI Agent</h1>
-            <p className="text-sm text-gray-500 mt-0.5">Sign in to continue</p>
-          </div>
+        <div className="flex flex-col items-center mb-8 gap-4">
+          <img
+            src="/images/aset-logo-final.svg"
+            alt="ASET"
+            className="h-16 w-auto drop-shadow-sm"
+          />
+          <p className="text-sm text-gray-500">Sign in to continue</p>
         </div>
 
         {/* Card */}
