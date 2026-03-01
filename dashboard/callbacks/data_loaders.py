@@ -12,6 +12,7 @@ Example::
 import json
 import logging
 import sys
+import time as _time
 from pathlib import Path
 from typing import Optional
 
@@ -36,6 +37,12 @@ if str(_PROJECT_ROOT) not in sys.path:
 # Path constants (mirror backend tool constants)
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Indicator cache — 5-min TTL to avoid recomputing on every overlay/range change
+# ---------------------------------------------------------------------------
+_INDICATOR_CACHE: dict = {}   # {ticker: (df_with_indicators, expiry_monotonic)}
+_INDICATOR_TTL = 300           # seconds
+
 _DATA_RAW = _PROJECT_ROOT / "data" / "raw"
 _DATA_FORECASTS = _PROJECT_ROOT / "data" / "forecasts"
 _DATA_METADATA = _PROJECT_ROOT / "data" / "metadata"
@@ -58,27 +65,40 @@ def _load_reg_cb() -> dict:
 
         cat = load_catalog("local")
         tbl = cat.load_table("stocks.registry")
-        df = tbl.scan().to_pandas()
+        # Fix #19: project only the columns we need to reduce I/O
+        df = tbl.scan(selected_fields=(
+            "ticker", "last_fetch_date", "total_rows",
+            "date_range_start", "date_range_end",
+        )).to_pandas()
         if not df.empty:
             registry: dict = {}
-            for _, row in df.iterrows():
-                ticker = row.get("ticker", "")
+            # Fix #5: replace iterrows() with faster .values array iteration
+            _proj = [c for c in (
+                "ticker", "last_fetch_date", "total_rows",
+                "date_range_start", "date_range_end",
+            ) if c in df.columns]
+            _ci = {c: i for i, c in enumerate(_proj)}
+            _has_lfd   = "last_fetch_date"   in _ci
+            _has_tr    = "total_rows"         in _ci
+            _has_range = ("date_range_start" in _ci and "date_range_end" in _ci)
+            for row in df[_proj].values:
+                ticker = str(row[0]) if row[0] else ""
                 if not ticker:
                     continue
                 entry: dict = {"ticker": ticker}
-                if "last_fetch_date" in df.columns and row.get("last_fetch_date"):
-                    entry["last_fetch_date"] = str(row["last_fetch_date"])[:10]
-                if "total_rows" in df.columns and row.get("total_rows") is not None:
-                    entry["total_rows"] = int(row["total_rows"])
-                start = row.get("date_range_start")
-                end   = row.get("date_range_end")
-                if start and end:
-                    entry["date_range"] = {
-                        "start": str(start)[:10],
-                        "end":   str(end)[:10],
-                    }
-                raw_path = _DATA_RAW / f"{ticker}_raw.parquet"
-                entry["file_path"] = str(raw_path)
+                if _has_lfd and row[_ci["last_fetch_date"]]:
+                    entry["last_fetch_date"] = str(row[_ci["last_fetch_date"]])[:10]
+                if _has_tr and row[_ci["total_rows"]] is not None:
+                    entry["total_rows"] = int(row[_ci["total_rows"]])
+                if _has_range:
+                    start = row[_ci["date_range_start"]]
+                    end   = row[_ci["date_range_end"]]
+                    if start and end:
+                        entry["date_range"] = {
+                            "start": str(start)[:10],
+                            "end":   str(end)[:10],
+                        }
+                entry["file_path"] = str(_DATA_RAW / f"{ticker}_raw.parquet")
                 registry[ticker] = entry
             if registry:
                 _logger.debug(
@@ -182,3 +202,26 @@ def _add_indicators(df: pd.DataFrame) -> pd.DataFrame:
         high=df["High"], low=df["Low"], close=close, window=14
     ).average_true_range()
     return df
+
+
+def _add_indicators_cached(ticker: str, df: pd.DataFrame) -> pd.DataFrame:
+    """Return a cached, indicator-enriched copy of *df* for *ticker*.
+
+    Results are cached per ticker for ``_INDICATOR_TTL`` seconds (5 min) so
+    that toggling overlays or changing the date-range slider does not
+    recompute all indicators on every callback invocation.
+
+    Args:
+        ticker: Uppercase ticker symbol used as the cache key.
+        df: Raw OHLCV DataFrame (without indicator columns).
+
+    Returns:
+        Copy of *df* with all indicator columns appended.
+    """
+    now = _time.monotonic()
+    entry = _INDICATOR_CACHE.get(ticker)
+    if entry and entry[1] > now:
+        return entry[0]
+    result = _add_indicators(df)
+    _INDICATOR_CACHE[ticker] = (result, now + _INDICATOR_TTL)
+    return result

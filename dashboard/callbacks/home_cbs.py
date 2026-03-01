@@ -72,15 +72,17 @@ def register(app) -> None:
         for ticker, entry in sorted(registry.items()):
             last_updated = entry.get("last_fetch_date", "Unknown")
 
+            # Fix #4: hoist _load_raw() once per ticker — reused in both blocks below
+            raw_df = _load_raw(ticker)
+
             # Current price + 10Y return from parquet
             current_price_str = "N/A"
             total_return_str  = "N/A"
             return_color_cls  = "text-muted"
             try:
-                df = _load_raw(ticker)
-                if df is not None and len(df) > 1:
-                    cp = float(df["Close"].iloc[-1])
-                    fp = float(df["Close"].iloc[0])
+                if raw_df is not None and len(raw_df) > 1:
+                    cp = float(raw_df["Close"].iloc[-1])
+                    fp = float(raw_df["Close"].iloc[0])
                     tr = (cp / fp - 1) * 100
                     current_price_str = f"{_get_currency(ticker)}{cp:,.2f}"
                     total_return_str  = f"{tr:+.1f}%"
@@ -93,13 +95,16 @@ def register(app) -> None:
             sent_color = "secondary"
             sent_emoji = "⚪"
             try:
-                forecast_files = list(_DATA_FORECASTS.glob(f"{ticker}_*m_forecast.parquet"))
-                if forecast_files:
-                    latest = max(forecast_files, key=lambda p: p.stat().st_mtime)
-                    fc_df  = pd.read_parquet(latest, engine="pyarrow")
-                    df_raw = _load_raw(ticker)
-                    if df_raw is not None and len(fc_df) > 0:
-                        cp  = float(df_raw["Close"].iloc[-1])
+                # Fix #8: use pathlib sort by mtime (avoid glob.glob + os.stat)
+                forecast_paths = sorted(
+                    _DATA_FORECASTS.glob(f"{ticker}_*m_forecast.parquet"),
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True,
+                )
+                if forecast_paths:
+                    fc_df = pd.read_parquet(forecast_paths[0], engine="pyarrow")
+                    if raw_df is not None and len(fc_df) > 0:
+                        cp  = float(raw_df["Close"].iloc[-1])
                         fp  = float(fc_df["yhat"].iloc[-1])
                         pct = (fp - cp) / cp * 100
                         if pct > 10:
