@@ -405,6 +405,36 @@ Also set `ANTHROPIC_API_KEY` in `backend/.env` instead of `GROQ_API_KEY`.
 
 ---
 
+## Deployment Notes
+
+### First run
+`./run.sh start` automatically runs `auth/create_tables.py` and `scripts/seed_admin.py` when `data/iceberg/catalog.db` does not yet exist. Set `ADMIN_EMAIL` and `ADMIN_PASSWORD` in `backend/.env` before the first start.
+
+### Existing deployments (after SSO was added Feb 26)
+Run the schema migration once to add the three OAuth columns:
+```bash
+source backend/demoenv/bin/activate
+python auth/migrate_users_table.py
+```
+
+### Auth implementation quirks (important for debugging)
+- **JWT env propagation** — `auth/dependencies.py` reads `JWT_SECRET_KEY` from `os.environ` directly. `backend/main.py` copies all Pydantic settings into `os.environ` at startup to bridge the gap. If auth endpoints raise `ValueError: JWT_SECRET_KEY must be at least 32 characters`, check that `JWT_SECRET_KEY` is in `backend/.env`.
+- **Dashboard JWT** — Dash is a separate process; it never inherits `backend/.env`. `dashboard/app.py` calls `_load_dotenv()` at import time to load the file explicitly.
+
+### SSO / OAuth2 (Google + Facebook PKCE)
+
+| Variable | Notes |
+|----------|-------|
+| `GOOGLE_CLIENT_ID` | Required for Google SSO |
+| `GOOGLE_CLIENT_SECRET` | Required for Google SSO |
+| `FACEBOOK_APP_ID` | Facebook SSO (placeholder — button hidden until set) |
+| `FACEBOOK_APP_SECRET` | Facebook SSO (placeholder) |
+| `OAUTH_REDIRECT_URI` | Default: `http://localhost:3000/auth/oauth/callback` |
+
+Register `http://localhost:3000/auth/oauth/callback` as an authorised redirect URI in Google Cloud Console.
+
+---
+
 ## Known Limitations
 
 | Issue | Notes |
@@ -412,3 +442,4 @@ Also set `ANTHROPIC_API_KEY` in `backend/.env` instead of `GROQ_API_KEY`.
 | **Groq LLM** | Claude Sonnet 4.6 is the intended model; Groq is a temporary workaround |
 | **`SERPAPI_API_KEY` required for web search** | Free tier (100/month) at serpapi.com |
 | **Refresh token deny-list is in-memory** | Cleared on backend restart — revoked tokens become valid again until natural expiry (7 days) |
+| **Facebook SSO** | Code complete; credentials are placeholders — button hidden until real credentials added |

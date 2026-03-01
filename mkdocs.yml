@@ -51,6 +51,7 @@ nav:
       - Logging: backend/logging.md
   - Stock Agent:
       - Overview: stock_agent.md
+      - Iceberg Storage: backend/stocks_iceberg.md
   - Dashboard:
       - Overview: dashboard/overview.md
   - Frontend:
