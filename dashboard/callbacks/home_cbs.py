@@ -202,7 +202,7 @@ def register(app) -> None:
         Returns:
             Tuple of (list of card columns, pagination max_value, count text).
         """
-        page_size_int = int(page_size or 10)
+        page_size_int = int(page_size or 12)
         if not raw_data:
             return (
                 [dbc.Col(html.P(
@@ -240,32 +240,32 @@ def register(app) -> None:
                 children=dbc.Card([
                     dbc.CardBody([
                         html.Div([
-                            html.H5(d["ticker"], className="card-title text-info mb-0"),
+                            html.H6(d["ticker"], className="card-title text-info mb-0 fw-bold"),
                             dbc.Badge(
                                 f"{d['sent_emoji']} {d['sentiment']}",
                                 color=d["sent_color"],
                                 className="ms-auto",
                             ),
                         ], className="d-flex justify-content-between align-items-center mb-1"),
-                        html.P(d["company"], className="card-subtitle text-muted small mb-3"),
+                        html.P(d["company"], className="card-subtitle text-muted small mb-2 text-truncate"),
                         html.Div([
                             html.Div([
                                 html.Small("Price", className="text-muted d-block"),
-                                html.Strong(d["current_price_str"], className="text-dark"),
+                                html.Strong(d["current_price_str"], className="text-dark small"),
                             ], className="me-3"),
                             html.Div([
-                                html.Small("10Y Return", className="text-muted d-block"),
-                                html.Strong(d["total_return_str"], className=d["return_color_cls"]),
+                                html.Small("10Y Ret", className="text-muted d-block"),
+                                html.Strong(d["total_return_str"], className=f"{d['return_color_cls']} small"),
                             ], className="me-3"),
                             html.Div([
                                 html.Small("Updated", className="text-muted d-block"),
                                 html.Small(d["last_updated"], className="text-muted"),
                             ]),
                         ], className="d-flex align-items-start"),
-                    ]),
+                    ], className="p-3"),
                 ], className="stock-card h-100"),
             )
-            cols.append(dbc.Col(card, xs=12, sm=6, md=4, lg=3, className="mb-4"))
+            cols.append(dbc.Col(card, xs=12, sm=6, md=4, lg=3))
 
         return cols, max_pages, count_txt
 
