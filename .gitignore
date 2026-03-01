@@ -59,3 +59,6 @@ data/iceberg/
 
 # Iceberg catalog config (contains absolute local paths)
 .pyiceberg.yaml
+
+# Local Claude Code instructions (personal, not for repo)
+instruction.txt

@@ -153,6 +153,21 @@ _init_auth() {
     echo ""
 }
 
+# ── First-time stocks Iceberg initialisation ──────────────────────────────────
+
+# Create the 8 stocks.* Iceberg tables (idempotent — safe to run on every start).
+# Must be called AFTER _init_auth so catalog.db already exists.
+_init_stocks() {
+    echo "  Initialising stocks Iceberg tables…"
+    if ! (cd "$SCRIPT_DIR" && "$PYTHON" stocks/create_tables.py \
+              >> "${LOG_DIR}/init_stocks.log" 2>&1); then
+        echo -e "${Y}  WARNING: stocks/create_tables.py had issues. See ${LOG_DIR}/init_stocks.log${N}"
+        echo    "  The Insights dashboard pages may show empty data until resolved."
+    else
+        echo -e "${G}  stocks Iceberg tables ready.${N}"
+    fi
+}
+
 # ── Commands ──────────────────────────────────────────────────────────────────
 
 do_start() {
@@ -172,6 +187,9 @@ do_start() {
 
     # First-time auth DB initialisation (no-op if already initialised)
     _init_auth
+
+    # Ensure stocks Iceberg tables exist (idempotent — safe every start)
+    _init_stocks
 
     # Free any stale processes on our ports
     _free_port "$BACKEND_PORT"
