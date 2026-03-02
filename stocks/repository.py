@@ -41,6 +41,7 @@ import logging
 import math
 import uuid
 from datetime import date, datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -346,6 +347,120 @@ class StockRepository:
         if ticker:
             return self._scan_ticker(_REGISTRY, ticker.upper())
         return self._table_to_df(_REGISTRY)
+
+    def get_all_registry(self) -> Dict[str, Dict]:
+        """Return the full registry as a dict keyed by ticker symbol.
+
+        Mirrors the shape previously stored in ``stock_registry.json`` so that
+        callers can switch from JSON reads to this method without changing
+        their downstream logic.
+
+        Returns:
+            Dict mapping ticker symbols to metadata dicts with keys:
+            ``ticker``, ``last_fetch_date``, ``total_rows``, ``date_range``
+            (containing ``start`` and ``end``), and ``file_path``.
+        """
+        df = self._table_to_df(_REGISTRY)
+        if df.empty:
+            return {}
+        result: Dict[str, Dict] = {}
+        for row in df.to_dict("records"):
+            ticker = str(row.get("ticker", ""))
+            if not ticker:
+                continue
+            lfd = row.get("last_fetch_date")
+            start = row.get("date_range_start")
+            end = row.get("date_range_end")
+            result[ticker] = {
+                "ticker": ticker,
+                "last_fetch_date": str(lfd)[:10] if lfd else "",
+                "total_rows": int(row["total_rows"]) if row.get("total_rows") is not None else 0,
+                "date_range": {
+                    "start": str(start)[:10] if start else "",
+                    "end": str(end)[:10] if end else "",
+                },
+                "file_path": str(
+                    Path(__file__).parent.parent / "data" / "raw" / f"{ticker}_raw.parquet"
+                ),
+            }
+        return result
+
+    def check_existing_data(self, ticker: str) -> Optional[Dict]:
+        """Look up a single ticker in the registry.
+
+        Returns a dict matching the legacy JSON shape (with ``last_fetch_date``,
+        ``total_rows``, ``date_range``, ``file_path``) or ``None`` if the
+        ticker is not registered.
+
+        Args:
+            ticker: Stock ticker symbol (already uppercased).
+
+        Returns:
+            Registry entry dict, or ``None``.
+        """
+        df = self._scan_ticker(_REGISTRY, ticker.upper())
+        if df.empty:
+            return None
+        row = df.iloc[0]
+        lfd = row.get("last_fetch_date")
+        start = row.get("date_range_start")
+        end = row.get("date_range_end")
+        return {
+            "ticker": ticker,
+            "last_fetch_date": str(lfd)[:10] if lfd else "",
+            "total_rows": int(row["total_rows"]) if row.get("total_rows") is not None else 0,
+            "date_range": {
+                "start": str(start)[:10] if start else "",
+                "end": str(end)[:10] if end else "",
+            },
+            "file_path": str(
+                Path(__file__).parent.parent / "data" / "raw" / f"{ticker}_raw.parquet"
+            ),
+        }
+
+    def get_latest_company_info_if_fresh(
+        self, ticker: str, as_of_date: date
+    ) -> Optional[Dict[str, Any]]:
+        """Return the latest company info snapshot if fetched on *as_of_date*.
+
+        Used as a cache check: callers can skip a Yahoo Finance call when the
+        most recent snapshot was already fetched today.
+
+        Args:
+            ticker: Stock ticker symbol.
+            as_of_date: Date to check freshness against (typically ``date.today()``).
+
+        Returns:
+            Dict of company info fields if the latest snapshot's ``fetched_at``
+            date matches *as_of_date*, otherwise ``None``.
+        """
+        df = self._scan_ticker(_COMPANY_INFO, ticker.upper())
+        if df.empty:
+            return None
+        latest = df.sort_values("fetched_at", ascending=False).iloc[0]
+        fetched_at = latest.get("fetched_at")
+        if fetched_at is None:
+            return None
+        fetched_date = _to_date(fetched_at)
+        if fetched_date != as_of_date:
+            return None
+        return latest.to_dict()
+
+    def get_currency(self, ticker: str) -> str:
+        """Return the ISO currency code for *ticker* from the latest company info.
+
+        Falls back to ``"USD"`` if no company info snapshot exists.
+
+        Args:
+            ticker: Stock ticker symbol.
+
+        Returns:
+            ISO currency code string, e.g. ``"USD"`` or ``"INR"``.
+        """
+        info = self.get_latest_company_info(ticker)
+        if info is None:
+            return "USD"
+        return str(info.get("currency") or "USD")
 
     # ------------------------------------------------------------------
     # Company info

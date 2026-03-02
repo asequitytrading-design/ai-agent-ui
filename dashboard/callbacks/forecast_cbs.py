@@ -111,11 +111,18 @@ def register(app) -> None:
             return _empty_fig(f"No price data for '{ticker}'."), [], []
 
         # Build prophet-format historical series
-        price_col = "Adj Close" if "Adj Close" in df_raw.columns else "Close"
+        # yfinance >=1.2 dropped "Adj Close"; also Iceberg may store it as
+        # all-NaN.  Fall back to "Close" when the column is absent or empty.
+        if "Adj Close" in df_raw.columns and df_raw["Adj Close"].notna().any():
+            price_col = "Adj Close"
+        else:
+            price_col = "Close"
         prophet_df = pd.DataFrame({
             "ds": pd.to_datetime(df_raw.index).tz_localize(None),
             "y": df_raw[price_col].values,
         }).dropna(subset=["y"]).sort_values("ds")
+        if prophet_df.empty:
+            return _empty_fig(f"No valid price data for '{ticker}'."), [], []
         current_price = float(prophet_df["y"].iloc[-1])
 
         forecast_df = _load_forecast(ticker, horizon_months)
@@ -197,13 +204,20 @@ def register(app) -> None:
         ticker = ticker.upper().strip()
 
         try:
+            # backend tools use `import tools.*` internally, so
+            # backend/ must be on sys.path for those imports to resolve.
+            import sys as _sys
+            _backend_dir = str(Path(__file__).parent.parent.parent / "backend")
+            if _backend_dir not in _sys.path:
+                _sys.path.insert(0, _backend_dir)
+
             # ── Step 1: Fetch / delta-update price data ────────────────────
-            from backend.tools.stock_data_tool import fetch_stock_data
+            from tools.stock_data_tool import fetch_stock_data
             fetch_result = fetch_stock_data.invoke({"ticker": ticker})
             _logger.info("fetch_stock_data result: %s", fetch_result[:80])
 
             # ── Step 2: Run Prophet forecast pipeline ──────────────────────
-            from backend.tools.forecasting_tool import (
+            from tools.forecasting_tool import (
                 _load_parquet as _ft_load,
                 _prepare_data_for_prophet,
                 _train_prophet_model,
