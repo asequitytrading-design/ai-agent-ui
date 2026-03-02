@@ -66,12 +66,16 @@ Fix remaining issues manually
     ↓
 git add → git commit → pre-commit hook re-checks
     ↓
+git fetch origin && git merge origin/<target-branch>   ← resolve conflicts locally
+    ↓
 git push → CI passes
     ↓
 PR is clean → ready for review
 ```
 
 > **Never push code with linting errors.** Pre-commit hooks catch most issues, but always verify with a manual lint pass before creating a PR.
+>
+> **Never push without syncing.** Always `git fetch origin && git merge origin/<target>` before pushing to avoid merge conflicts on the PR.
 
 ---
 
@@ -168,9 +172,18 @@ Branch protection (apply manually in GitHub → Settings → Branches):
 - `qa`: PR from `dev` only, 1 approval
 - `dev`: PR from `feature/*`, 1 approval, unit tests + lint must pass
 
-### Before raising any PR (ALWAYS — NO EXCEPTIONS)
+### Avoiding Merge Conflicts (ALWAYS — NO EXCEPTIONS)
 
-Sync the source branch with the target before opening the PR to prevent conflicts:
+**Before every push** — sync your branch with the target to catch conflicts early:
+
+```bash
+git fetch origin
+git merge origin/<target-branch>   # e.g. origin/dev for feature→dev
+# If conflicts → resolve locally, then: git add <files> && git commit
+git push origin HEAD
+```
+
+**Before raising any PR** — do a final sync + verify:
 
 ```bash
 git fetch origin
@@ -178,8 +191,11 @@ git merge origin/<target-branch>   # e.g. origin/dev for feature→dev, origin/q
 git push origin HEAD
 ```
 
+Rules:
 - **Never raise a PR on a branch that is behind the target branch.**
-- Resolve all conflicts locally before creating the PR.
+- **Resolve all conflicts locally** — never rely on GitHub's auto-merge.
+- If your feature branch is long-lived (> 1 day), merge the target into it daily.
+- After resolving conflicts, **re-run lint** — merges can introduce new violations.
 - This applies to every promotion: `feature→dev`, `dev→qa`, `qa→release`, `release→main`.
 
 ---
