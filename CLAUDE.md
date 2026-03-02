@@ -20,6 +20,61 @@ git branch --show-current   # confirm before touching files
 
 ---
 
+## Pre-Commit / Pre-Push Lint Checklist (ALWAYS — NO EXCEPTIONS)
+
+**Every commit and PR must be lint-clean.** Run these locally before pushing — CI will reject lint failures.
+
+### Frontend (from `frontend/`)
+
+```bash
+cd frontend
+npx eslint . --fix          # auto-fix what it can
+npx eslint .                # verify zero errors remain
+```
+
+- ESLint flat config: `frontend/eslint.config.mjs`
+- Key rules enforced by CI: `@next/next/no-img-element` (use `<Image />` from `next/image`), `react-hooks/*`, no unused imports
+- If a rule must be suppressed, use **block-level** `/* eslint-disable rule-name */` with a comment explaining why — never blanket-disable
+
+### Backend (from project root, inside virtualenv)
+
+```bash
+source backend/demoenv/bin/activate
+black backend/ auth/ stocks/ scripts/ dashboard/ --check   # formatting
+isort backend/ auth/ stocks/ scripts/ dashboard/ --check    # import order
+flake8 backend/ auth/ stocks/ scripts/ dashboard/           # style + errors
+```
+
+To auto-fix:
+
+```bash
+black backend/ auth/ stocks/ scripts/ dashboard/
+isort backend/ auth/ stocks/ scripts/ dashboard/
+# Then fix any remaining flake8 issues manually
+```
+
+### Workflow
+
+```
+Write code
+    ↓
+Run lint locally (eslint / flake8+black+isort)
+    ↓
+Auto-fix (--fix / black / isort)
+    ↓
+Fix remaining issues manually
+    ↓
+git add → git commit → pre-commit hook re-checks
+    ↓
+git push → CI passes
+    ↓
+PR is clean → ready for review
+```
+
+> **Never push code with linting errors.** Pre-commit hooks catch most issues, but always verify with a manual lint pass before creating a PR.
+
+---
+
 ## Project Overview
 
 Fullstack agentic chat app. See `README.md` for full architecture, quick start, and tech stack.
