@@ -301,4 +301,4 @@ cp hooks/pre-push .git/hooks/pre-push && chmod +x .git/hooks/pre-push
 - **`SERPAPI_API_KEY` required** for `search_web` tool (100 free/month at serpapi.com)
 - **Refresh token deny-list is in-memory** — cleared on backend restart; tokens remain valid until natural expiry
 - **Run once per new deployment**: `python auth/create_tables.py` + `python auth/migrate_users_table.py` + `python stocks/create_tables.py` + `python stocks/backfill_metadata.py`
-- **LangChain 0.3.x** — held at 0.3.x pending separate upgrade to 1.x
+- **LangChain 1.x** — upgraded from 0.3.x; `langchain-community` is at 0.4.x (community package uses separate versioning)
