@@ -176,7 +176,7 @@ do_start() {
 
     if [[ ! -f "$PYTHON" ]]; then
         echo -e "${R}ERROR: demoenv not found at ${PYTHON}${N}"
-        echo "  Run: cd backend && python3.9 -m venv demoenv && pip install -r requirements.txt"
+        echo "  Run: cd backend && python3.12 -m venv demoenv && pip install -r requirements.txt"
         exit 1
     fi
 
