@@ -248,10 +248,19 @@ def _build_analysis_fig(
                 opacity=0.35,
                 row=1,
                 col=1,
-                annotation_text=hol_name,
-                annotation_textangle=-90,
-                annotation_font_size=8,
-                annotation_font_color="gray",
+            )
+            fig.add_annotation(
+                x=hol_dt,
+                y=1,
+                yref="y domain",
+                text=hol_name,
+                textangle=-90,
+                font=dict(size=8, color="gray"),
+                showarrow=False,
+                xanchor="left",
+                yanchor="top",
+                row=1,
+                col=1,
             )
 
     # ── Dividend markers ─────────────────────────────────────
