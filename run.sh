@@ -180,6 +180,15 @@ do_start() {
         exit 1
     fi
 
+    # Source backend/.env so shell-level checks can see the keys.
+    # The file may be a symlink to ~/.ai-agent-ui/backend.env.
+    if [[ -f "${SCRIPT_DIR}/backend/.env" ]]; then
+        set -a
+        # shellcheck disable=SC1091
+        source "${SCRIPT_DIR}/backend/.env"
+        set +a
+    fi
+
     if [[ -z "${GROQ_API_KEY:-}" ]]; then
         echo -e "${Y}  WARNING: GROQ_API_KEY not set — backend will start but chat will fail${N}"
         echo ""
