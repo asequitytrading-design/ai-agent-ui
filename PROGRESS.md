@@ -2,6 +2,23 @@
 
 ---
 
+# Session: Mar 3, 2026 — LangChain 0.3 → 1.x upgrade
+
+## Summary
+Upgraded LangChain family from 0.3.x to 1.x. Zero code changes needed — all APIs used (messages, tools, bind_tools, invoke, tool_calls) are stable across the version boundary.
+
+### Changes
+- `langchain` 0.3.27 → 1.2.10, `langchain-core` 0.3.83 → 1.2.17
+- `langchain-anthropic` 0.3.22 → 1.3.4, `langchain-groq` 0.3.8 → 1.1.2
+- `langchain-community` 0.3.31 → 0.4.1, `langchain-openai` 0.3.35 → 1.1.10
+- `langchain-text-splitters` 0.3.11 → 1.1.1
+- New transitive deps: `langchain-classic`, `langgraph`, `langgraph-checkpoint`, `langgraph-prebuilt`, `langgraph-sdk`, `ormsgpack`
+
+### Branch
+`feature/upgrade-langchain-1x` → PR to `dev`
+
+---
+
 # Session: Mar 3, 2026 — Python 3.9 → 3.12 upgrade + dependency refresh
 
 ## Summary
