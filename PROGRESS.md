@@ -2,6 +2,51 @@
 
 ---
 
+# Session: Mar 6, 2026 — Quarterly data robustness & dashboard improvements
+
+## Summary
+Analysed Yahoo Finance quarterly data for Indian stocks (RELIANCE.NS)
+and fixed multiple issues: empty cashflow, all-NaN balance sheet rows,
+and dashboard displaying wrong columns per statement type. Added annual
+cashflow fallback, statement-aware table/chart, and UI polish.
+
+### Root Cause Analysis (RELIANCE.NS)
+- **Quarterly cashflow**: yfinance returns empty (0×0) — no data
+  available. Annual cashflow exists (47 metrics × 5 years).
+- **Balance sheet**: Latest quarter (2025-09-30) has all NaN for key
+  metrics; older quarters have real data.
+- **Dashboard**: Table always showed income columns regardless of
+  statement filter, so balance/cashflow rows appeared as all "—".
+
+### Changes
+- **`backend/tools/stock_data_tool.py`** — `_extract_statement()`
+  skips quarters where all mapped metrics are NaN. Annual cashflow
+  fallback when `quarterly_cashflow` is empty (marks rows with
+  `fiscal_quarter="FY"`). Per-statement gap reporting in return msg.
+- **`dashboard/callbacks/insights_cbs.py`** — Statement-aware table
+  columns (income/balance/cashflow show relevant metrics). Statement-
+  aware chart metrics. Empty chart shows "No data to display" instead
+  of blank axes. Center-aligned alerts. Comma-formatted numbers
+  (e.g. `12,451.40`). Drop rows missing primary metric. Specific
+  empty-state messages per statement type. FY label support.
+- **`dashboard/layouts/insights_tabs.py`** — Default filters: India
+  market, first Indian ticker, Income statement. Removed "All"
+  statement option.
+- **Tests** (6 total in `test_fetch_quarterly.py`, 188 total):
+  `test_annual_cashflow_fallback` verifies FY label + annual data
+  used when quarterly is empty. Updated existing tests for new
+  mock attributes.
+
+### Known Gaps (Yahoo Finance limitations)
+| Ticker | Income | Balance Sheet | Cash Flow |
+|--------|--------|---------------|-----------|
+| RELIANCE.NS | 37×6 ✅ | 76×3 (latest=NaN) ⚠️ | Empty → annual fallback |
+| TCS.NS | 49×6 ✅ | 78×4 ✅ | 39×3 ✅ |
+| AAPL | 33×5 ✅ | 65×6 ✅ | 46×7 ✅ |
+| MSFT | 47×5 ✅ | 79×7 ✅ | 59×7 ✅ |
+
+---
+
 # Session: Mar 5, 2026 — Quarterly Results feature
 
 ## Summary
