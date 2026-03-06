@@ -407,6 +407,10 @@ def _extract_statement(
 ) -> list[dict]:
     """Extract quarterly rows from a yfinance statement.
 
+    Skips quarters where every mapped metric is null (e.g.
+    partially reported balance sheets for some Indian stocks).
+
+
     Args:
         stmt_df: Raw yfinance statement (rows=metrics,
             cols=quarter-end dates).
@@ -421,21 +425,22 @@ def _extract_statement(
     if stmt_df is None or stmt_df.empty:
         return []
     rows = []
+    metric_cols = list(metric_map.values())
+    all_cols = (
+        list(_INCOME_MAP.values())
+        + list(_BALANCE_MAP.values())
+        + list(_CASHFLOW_MAP.values())
+    )
     for col_date in stmt_df.columns:
         qe = pd.Timestamp(col_date).date()
         row = {
             "ticker": ticker,
             "quarter_end": qe,
             "fiscal_year": qe.year,
-            "fiscal_quarter": f"Q{(qe.month - 1) // 3 + 1}",
+            "fiscal_quarter": (f"Q{(qe.month - 1) // 3 + 1}"),
             "statement_type": statement_type,
         }
         # Initialise all metric cols to None
-        all_cols = (
-            list(_INCOME_MAP.values())
-            + list(_BALANCE_MAP.values())
-            + list(_CASHFLOW_MAP.values())
-        )
         for c in all_cols:
             row.setdefault(c, None)
         for label, col_name in metric_map.items():
@@ -444,6 +449,15 @@ def _extract_statement(
                 row[col_name] = float(val) if pd.notna(val) else None
             except (KeyError, ValueError, TypeError):
                 row[col_name] = None
+        # Skip rows where ALL mapped metrics are None
+        if all(row[c] is None for c in metric_cols):
+            _logger.debug(
+                "Skipping all-null %s row for %s %s",
+                statement_type,
+                ticker,
+                qe,
+            )
+            continue
         rows.append(row)
     return rows
 
@@ -486,37 +500,56 @@ def fetch_quarterly_results(ticker: str) -> str:
             )
 
         yt = yf.Ticker(ticker)
-        all_rows = []
+        all_rows: list[dict] = []
+        gaps: list[str] = []
 
         # Income Statement
-        all_rows.extend(
-            _extract_statement(
-                yt.quarterly_income_stmt,
-                _INCOME_MAP,
-                "income",
-                ticker,
-            )
+        inc_rows = _extract_statement(
+            yt.quarterly_income_stmt,
+            _INCOME_MAP,
+            "income",
+            ticker,
         )
+        all_rows.extend(inc_rows)
+        if not inc_rows:
+            gaps.append("income (no data)")
 
         # Balance Sheet
-        all_rows.extend(
-            _extract_statement(
-                yt.quarterly_balance_sheet,
-                _BALANCE_MAP,
-                "balance",
-                ticker,
-            )
+        bs_rows = _extract_statement(
+            yt.quarterly_balance_sheet,
+            _BALANCE_MAP,
+            "balance",
+            ticker,
         )
+        all_rows.extend(bs_rows)
+        if not bs_rows:
+            gaps.append("balance_sheet (no data)")
 
         # Cash Flow
-        all_rows.extend(
-            _extract_statement(
-                yt.quarterly_cashflow,
+        cf_rows = _extract_statement(
+            yt.quarterly_cashflow,
+            _CASHFLOW_MAP,
+            "cashflow",
+            ticker,
+        )
+        all_rows.extend(cf_rows)
+        if not cf_rows:
+            # Fallback: try annual cashflow
+            annual_cf = _extract_statement(
+                yt.cashflow,
                 _CASHFLOW_MAP,
                 "cashflow",
                 ticker,
             )
-        )
+            if annual_cf:
+                for r in annual_cf:
+                    r["fiscal_quarter"] = "FY"
+                all_rows.extend(annual_cf)
+                gaps.append(
+                    "cashflow (annual fallback, " f"{len(annual_cf)} years)"
+                )
+            else:
+                gaps.append("cashflow (no data)")
 
         if not all_rows:
             return f"No quarterly financial data found " f"for {ticker}."
@@ -524,14 +557,20 @@ def fetch_quarterly_results(ticker: str) -> str:
         df = pd.DataFrame(all_rows)
         repo.insert_quarterly_results(ticker, df)
 
-        n_quarters = df["quarter_end"].nunique()
-        stmts = df["statement_type"].unique().tolist()
+        counts = df.groupby("statement_type").size().to_dict()
+        parts = [f"{st}: {n}q" for st, n in sorted(counts.items())]
         msg = (
-            f"Fetched quarterly results for {ticker}: "
-            f"{n_quarters} quarters, statements: "
-            f"{', '.join(stmts)}. "
+            f"Fetched quarterly results for {ticker} "
+            f"— {', '.join(parts)}. "
             f"Total {len(df)} records saved."
         )
+        if gaps:
+            msg += f" Gaps: {', '.join(gaps)}."
+            _logger.warning(
+                "Quarterly data gaps for %s: %s",
+                ticker,
+                ", ".join(gaps),
+            )
         _logger.info(msg)
         return msg
 

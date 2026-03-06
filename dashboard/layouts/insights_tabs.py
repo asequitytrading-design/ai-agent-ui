@@ -889,6 +889,15 @@ def _quarterly_tab(
         List of Dash components for the Quarterly tab.
     """
     sector_options = sector_options or []
+    # Default to first Indian ticker, else first ticker
+    _default_ticker = "all"
+    for opt in ticker_options:
+        v = opt.get("value", "")
+        if v != "all" and (v.endswith(".NS") or v.endswith(".BO")):
+            _default_ticker = v
+            break
+    if _default_ticker == "all" and len(ticker_options) > 1:
+        _default_ticker = ticker_options[1]["value"]
     return [
         html.Div(
             className="mt-3",
@@ -912,7 +921,7 @@ def _quarterly_tab(
                                 dcc.Dropdown(
                                     id=("quarterly-ticker" "-filter"),
                                     options=ticker_options,
-                                    value="all",
+                                    value=_default_ticker,
                                     clearable=False,
                                 ),
                             ],
@@ -950,7 +959,7 @@ def _quarterly_tab(
                                             "value": "us",
                                         },
                                     ],
-                                    value="all",
+                                    value="india",
                                     inline=True,
                                     className="mt-1",
                                 ),
@@ -990,10 +999,6 @@ def _quarterly_tab(
                                     id=("quarterly" "-statement" "-filter"),
                                     options=[
                                         {
-                                            "label": "All",
-                                            "value": "all",
-                                        },
-                                        {
                                             "label": ("Income"),
                                             "value": ("income"),
                                         },
@@ -1006,7 +1011,7 @@ def _quarterly_tab(
                                             "value": ("cashflow"),
                                         },
                                     ],
-                                    value="all",
+                                    value="income",
                                     inline=True,
                                     className="mt-1",
                                 ),

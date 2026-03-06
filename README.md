@@ -10,7 +10,7 @@ A fullstack agentic chat application powered by LangChain, FastAPI, and Next.js.
 |---------|-------|------|---------|
 | **Frontend** | Next.js 16 + React 19 + Tailwind 4 | `3000` | Chat UI + SPA shell (login, chat, docs, dashboard, admin) |
 | **Backend** | FastAPI + LangChain + Claude Sonnet 4.6 | `8181` | Agentic loop + REST API + Auth endpoints |
-| **Dashboard** | Plotly Dash + Dash Bootstrap (FLATLY) | `8050` | Stock analysis dashboard (Home / Analysis / Forecast / Compare / 6 Insights pages) + Admin UI |
+| **Dashboard** | Plotly Dash + Dash Bootstrap (FLATLY) | `8050` | Stock analysis dashboard (Home / Analysis / Forecast / Compare / 7 Insights tabs) + Admin UI |
 | **Docs** | MkDocs Material | `8000` | Project documentation |
 
 ---
@@ -305,13 +305,13 @@ ai-agent-ui/
 │       ├── time_tool.py      # get_current_time
 │       ├── search_tool.py    # search_web (SerpAPI)
 │       ├── agent_tool.py     # search_market_news (wraps GeneralAgent)
-│       ├── stock_data_tool.py      # 6 Yahoo Finance tools
+│       ├── stock_data_tool.py      # 7 Yahoo Finance tools (incl. fetch_quarterly_results)
 │       ├── price_analysis_tool.py  # analyse_stock_price
 │       └── forecasting_tool.py     # forecast_stock (Prophet)
 │
 ├── stocks/                   # Iceberg persistence — single source of truth
-│   ├── create_tables.py      # Idempotent init of 8 tables (called by run.sh)
-│   ├── repository.py         # StockRepository — CRUD + batch reads for all 8 tables
+│   ├── create_tables.py      # Idempotent init of 9 tables (called by run.sh)
+│   ├── repository.py         # StockRepository — CRUD + batch reads for all 9 tables
 │   ├── backfill_metadata.py  # One-time JSON → Iceberg migration
 │   └── backfill_adj_close.py # One-time adj_close backfill from parquet
 │
@@ -321,7 +321,7 @@ ai-agent-ui/
 │   ├── layouts/              # Stateless page-layout factories (package)
 │   │   ├── home.py           # Home cards + market filter + pagination
 │   │   ├── analysis.py       # Technical analysis chart layout
-│   │   ├── insights_tabs.py  # Screener/Targets/Dividends/Risk/Sectors/Correlation
+│   │   ├── insights_tabs.py  # Screener/Targets/Dividends/Risk/Sectors/Correlation/Quarterly
 │   │   ├── admin.py          # User management + audit log layout
 │   │   └── navbar.py         # Global navbar
 │   ├── callbacks/            # Interactive callbacks (package)
@@ -332,7 +332,7 @@ ai-agent-ui/
 │   │   ├── insights_cbs.py   # All Insights tab callbacks
 │   │   ├── admin_cbs.py      # User table callbacks
 │   │   ├── admin_cbs2.py     # Add/Edit/Deactivate user modals
-│   │   ├── iceberg.py        # Iceberg repo singleton + 7 TTL-cached helpers
+│   │   ├── iceberg.py        # Iceberg repo singleton + 8 TTL-cached helpers
 │   │   └── utils.py          # Shared utilities (currency, market label)
 │   └── assets/custom.css     # Light theme styles
 │
@@ -463,3 +463,4 @@ Pre-commit auto-fixes code style and updates meta-files on every commit (require
 | **Refresh token deny-list is in-memory** | Cleared on backend restart — revoked tokens become valid again until natural expiry (7 days) |
 | **Facebook SSO** | Code complete; credentials are placeholders — button hidden until real credentials added |
 | **yfinance >= 1.2 dropped `Adj Close`** | Iceberg `stocks.ohlcv` stores `adj_close` as NaN; all consumers fall back to `Close` automatically |
+| **Quarterly cashflow unavailable for some Indian stocks** | yfinance returns empty quarterly cashflow for tickers like RELIANCE.NS; tool falls back to annual cashflow (marked `fiscal_quarter="FY"`) |

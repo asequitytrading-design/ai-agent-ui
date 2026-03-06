@@ -1207,28 +1207,44 @@ def register(app) -> None:
             "col": None,
             "dir": "none",
         }
-        empty_fig = go.Figure().update_layout(
+        _empty_fig = go.Figure()
+        _empty_fig.update_layout(
             template="plotly_white",
-            title="No quarterly data",
             paper_bgcolor="#f9fafb",
+            plot_bgcolor="#ffffff",
+            height=360,
+            xaxis=dict(visible=False),
+            yaxis=dict(visible=False),
+            annotations=[
+                dict(
+                    text="No data to display",
+                    xref="paper",
+                    yref="paper",
+                    x=0.5,
+                    y=0.5,
+                    showarrow=False,
+                    font=dict(size=16, color="#9ca3af"),
+                )
+            ],
         )
         if active_tab != "quarterly-tab":
-            return empty_fig, html.Div()
+            return _empty_fig, html.Div()
 
         repo = _get_iceberg_repo()
         if repo is None:
-            return empty_fig, dbc.Alert(
+            return _empty_fig, dbc.Alert(
                 "Iceberg unavailable.",
                 color="warning",
+                className="text-center mt-3",
             )
 
         df = _get_quarterly_cached(repo)
         if df.empty:
-            return empty_fig, dbc.Alert(
+            return _empty_fig, dbc.Alert(
                 "No quarterly data available. "
                 "Use fetch_quarterly_results first.",
                 color="warning",
-                className="mt-3",
+                className="text-center mt-3",
             )
 
         # Market filter
@@ -1257,18 +1273,35 @@ def register(app) -> None:
             df = df[df["statement_type"] == stmt_filter].reset_index(drop=True)
 
         if df.empty:
-            return empty_fig, dbc.Alert(
-                "No data matches the filters.",
+            _stmt_labels = {
+                "income": "income statement",
+                "balance": "balance sheet",
+                "cashflow": "cash flow",
+            }
+            _lbl = _stmt_labels.get(stmt_filter, "")
+            _ticker_part = (
+                f" for {ticker_filter.upper()}"
+                if ticker_filter and ticker_filter != "all"
+                else ""
+            )
+            return _empty_fig, dbc.Alert(
+                f"No {_lbl} data available{_ticker_part}. "
+                "Try refreshing the stock or selecting "
+                "a different filter.",
                 color="info",
-                className="mt-3",
+                className="text-center mt-3",
             )
 
-        # Build a display column: "Q4 FY25"
+        # Build a display column: "Q4 FY25" or "FY25"
         if "fiscal_quarter" in df.columns and "fiscal_year" in df.columns:
-            df["quarter_label"] = (
-                df["fiscal_quarter"].fillna("")
-                + " FY"
-                + df["fiscal_year"].astype(str).str[-2:]
+            fy_suffix = "FY" + df["fiscal_year"].astype(str).str[-2:]
+            df["quarter_label"] = df.apply(
+                lambda r: (
+                    fy_suffix[r.name]
+                    if r["fiscal_quarter"] == "FY"
+                    else f"{r['fiscal_quarter']} " f"{fy_suffix[r.name]}"
+                ),
+                axis=1,
             )
         else:
             df["quarter_label"] = df.get("fiscal_quarter", "")
@@ -1277,12 +1310,17 @@ def register(app) -> None:
         df = apply_sort(df, sort_state)
 
         # ── QoQ Bar Chart ──────────────────────────
-        # Use income-statement rows for the chart
-        chart_df = (
-            df[df["statement_type"] == "income"].copy()
-            if "statement_type" in df.columns
-            else df
-        )
+        # Pick chart rows by statement type
+        _chart_stmt = stmt_filter or "all"
+        if _chart_stmt in ("income", "all") and "statement_type" in df.columns:
+            chart_df = df[df["statement_type"] == "income"].copy()
+        elif _chart_stmt == "balance" and "statement_type" in df.columns:
+            chart_df = df[df["statement_type"] == "balance"].copy()
+        elif _chart_stmt == "cashflow" and "statement_type" in df.columns:
+            chart_df = df[df["statement_type"] == "cashflow"].copy()
+        else:
+            chart_df = df.copy()
+
         if chart_df.empty:
             chart_df = df.copy()
         chart_df = chart_df.sort_values("quarter_end")
@@ -1305,48 +1343,61 @@ def register(app) -> None:
             _div = 1e6
             _suffix = " M"
 
-        traces = []
-        if "revenue" in chart_df.columns:
-            rev = pd.to_numeric(chart_df["revenue"], errors="coerce")
-            traces.append(
-                go.Bar(
-                    x=chart_df["q_label"],
-                    y=(rev / _div).round(1),
-                    name="Revenue" + _suffix,
-                )
-            )
-        if "net_income" in chart_df.columns:
-            ni = pd.to_numeric(
-                chart_df["net_income"],
-                errors="coerce",
-            )
-            traces.append(
-                go.Bar(
-                    x=chart_df["q_label"],
-                    y=(ni / _div).round(1),
-                    name="Net Income" + _suffix,
-                )
-            )
+        # Chart metric pairs per statement type
+        if _chart_stmt == "balance":
+            _chart_pairs = [
+                ("total_assets", "Total Assets"),
+                ("total_equity", "Equity"),
+            ]
+        elif _chart_stmt == "cashflow":
+            _chart_pairs = [
+                ("operating_cashflow", "Op. Cashflow"),
+                ("free_cashflow", "Free CF"),
+            ]
+        else:
+            _chart_pairs = [
+                ("revenue", "Revenue"),
+                ("net_income", "Net Income"),
+            ]
 
-        fig = go.Figure(data=traces)
-        fig.update_layout(
-            template="plotly_white",
-            title="Quarter-over-Quarter Results",
-            barmode="group",
-            paper_bgcolor="#f9fafb",
-            plot_bgcolor="#ffffff",
-            height=360,
-            margin=dict(l=40, r=20, t=50, b=80),
-        )
-        fig.update_xaxes(tickangle=-30)
+        traces = []
+        for col_key, col_label in _chart_pairs:
+            if col_key in chart_df.columns:
+                vals = pd.to_numeric(chart_df[col_key], errors="coerce")
+                if vals.notna().any():
+                    traces.append(
+                        go.Bar(
+                            x=chart_df["q_label"],
+                            y=(vals / _div).round(1),
+                            name=col_label + _suffix,
+                        )
+                    )
+
+        if traces:
+            fig = go.Figure(data=traces)
+            fig.update_layout(
+                template="plotly_white",
+                title="Quarter-over-Quarter Results",
+                barmode="group",
+                paper_bgcolor="#f9fafb",
+                plot_bgcolor="#ffffff",
+                height=360,
+                margin=dict(l=40, r=20, t=50, b=80),
+            )
+            fig.update_xaxes(tickangle=-30)
+        else:
+            fig = _empty_fig
 
         # ── Table ──────────────────────────────────
-        q_col_defs = [
+        # Column definitions per statement type
+        _base_cols = [
             {"key": "ticker", "label": "Ticker"},
             {
                 "key": "quarter_label",
                 "label": "Quarter",
             },
+        ]
+        _income_cols = [
             {"key": "revenue", "label": "Revenue"},
             {
                 "key": "net_income",
@@ -1361,26 +1412,87 @@ def register(app) -> None:
                 "label": "Op. Income",
             },
             {"key": "ebitda", "label": "EBITDA"},
+            {"key": "eps_diluted", "label": "EPS"},
+        ]
+        _balance_cols = [
             {
-                "key": "eps_diluted",
-                "label": "EPS",
+                "key": "total_assets",
+                "label": "Total Assets",
+            },
+            {
+                "key": "total_liabilities",
+                "label": "Total Liab.",
+            },
+            {
+                "key": "total_equity",
+                "label": "Equity",
+            },
+            {
+                "key": "total_debt",
+                "label": "Total Debt",
+            },
+            {
+                "key": "cash_and_equivalents",
+                "label": "Cash & Equiv.",
             },
         ]
+        _cashflow_cols = [
+            {
+                "key": "operating_cashflow",
+                "label": "Op. Cashflow",
+            },
+            {"key": "capex", "label": "Capex"},
+            {
+                "key": "free_cashflow",
+                "label": "Free CF",
+            },
+        ]
+
+        # Pick columns based on active filter
+        if stmt_filter == "income":
+            metric_defs = _income_cols
+        elif stmt_filter == "balance":
+            metric_defs = _balance_cols
+        elif stmt_filter == "cashflow":
+            metric_defs = _cashflow_cols
+        else:
+            # Fallback — show all statement columns
+            metric_defs = (
+                [
+                    {
+                        "key": "statement_type",
+                        "label": "Statement",
+                    },
+                ]
+                + _income_cols
+                + _balance_cols
+                + _cashflow_cols
+            )
+
+        q_col_defs = _base_cols + metric_defs
 
         avail_cols = [
             c for c in [d["key"] for d in q_col_defs] if c in df.columns
         ]
         show_df = df[avail_cols].copy()
 
-        # Format numbers
-        num_cols = [
+        # Format large numbers with scale
+        _scale_cols = [
             "revenue",
             "net_income",
             "gross_profit",
             "operating_income",
             "ebitda",
+            "total_assets",
+            "total_liabilities",
+            "total_equity",
+            "total_debt",
+            "cash_and_equivalents",
+            "operating_cashflow",
+            "capex",
+            "free_cashflow",
         ]
-        for nc in num_cols:
+        for nc in _scale_cols:
             if nc in show_df.columns:
                 vals = pd.to_numeric(show_df[nc], errors="coerce")
                 show_df[nc] = (vals / _div).round(1)
@@ -1391,15 +1503,30 @@ def register(app) -> None:
                 errors="coerce",
             ).round(2)
 
+        # Drop rows missing the primary metric for the type
+        _primary = {
+            "income": "revenue",
+            "balance": "total_assets",
+            "cashflow": "operating_cashflow",
+        }
+        _prim_col = _primary.get(stmt_filter)
+        if _prim_col and _prim_col in show_df.columns:
+            show_df = show_df.dropna(subset=[_prim_col])
+
+        _num_keys = set(_scale_cols) | {"eps_diluted"}
+
         rows_html = []
         for rec in show_df.to_dict("records"):
             cells = []
             for c in q_col_defs:
-                if c["key"] not in avail_cols:
+                key = c["key"]
+                if key not in avail_cols:
                     continue
-                val = rec.get(c["key"])
+                val = rec.get(key)
                 if val is None or (isinstance(val, float) and pd.isna(val)):
                     cells.append(html.Td("\u2014"))
+                elif key in _num_keys and isinstance(val, (int, float)):
+                    cells.append(html.Td(f"{val:,.2f}"))
                 else:
                     cells.append(html.Td(str(val)))
             rows_html.append(html.Tr(cells))
