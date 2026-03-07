@@ -13,7 +13,6 @@ import os
 from typing import Any, Dict, Optional
 from urllib.parse import parse_qs
 
-import dash_bootstrap_components as dbc
 from dash import html
 
 # Module-level logger — mutable but kept here as a module-level singleton
@@ -45,7 +44,8 @@ def _validate_token(token: Optional[str]) -> Optional[Dict[str, Any]]:
     secret = os.environ.get("JWT_SECRET_KEY", "")
     if not secret:
         logger.warning(
-            "_validate_token: JWT_SECRET_KEY not set — all dashboard requests will be denied."
+            "_validate_token: JWT_SECRET_KEY not set"
+            " — all dashboard requests will be denied."
         )
         return None
     try:
@@ -109,7 +109,7 @@ def _unauth_notice() -> html.Div:
 
 
 def _admin_forbidden() -> html.Div:
-    """Return a Dash layout component shown when a non-superuser visits /admin/*.
+    """Return a Dash layout for non-superuser /admin/* access.
 
     Returns:
         A :class:`~dash.html.Div` with a 403-style message and a back link.
@@ -207,3 +207,32 @@ def _api_call(
     except Exception as exc:
         logger.error("API call %s %s failed: %s", method.upper(), path, exc)
         return None
+
+
+def _fetch_user_tickers(
+    token: Optional[str],
+) -> set | None:
+    """Fetch the authenticated user's linked tickers.
+
+    Calls ``GET /users/me/tickers`` and returns the set
+    of ticker symbols.  Returns ``None`` when there is
+    no token or the API call fails — callers should fall
+    back to showing all tickers.
+
+    Args:
+        token: JWT access token, or ``None``.
+
+    Returns:
+        Set of ticker strings, or ``None`` on failure.
+    """
+    if not token:
+        return None
+    resp = _api_call("get", "/users/me/tickers", token)
+    if resp is None or not resp.ok:
+        return None
+    data = resp.json()
+    if isinstance(data, list):
+        return set(data)
+    if isinstance(data, dict):
+        return set(data.get("tickers", []))
+    return None

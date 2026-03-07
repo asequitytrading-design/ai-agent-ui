@@ -5,14 +5,20 @@ Functions
 - :func:`get_catalog`
 - :func:`users_table`
 - :func:`audit_table`
+- :func:`user_tickers_table`
 - :func:`scan_all_users`
 """
 
 import logging
 import os
-from typing import Any, Dict, Generator, List
+from typing import Any, Dict, List
 
-from auth.repo.schemas import _AUDIT_LOG_TABLE, _USERS_TABLE, _row_to_dict
+from auth.repo.schemas import (
+    _AUDIT_LOG_TABLE,
+    _USER_TICKERS_TABLE,
+    _USERS_TABLE,
+    _row_to_dict,
+)
 
 # Module-level logger; not mutable state — safe to keep at module level.
 _logger = logging.getLogger(__name__)
@@ -65,11 +71,13 @@ def get_catalog(root: str):
         return cat
     except Exception as exc:
         _logger.warning(
-            "Absolute-URI catalog load failed (%s); falling back to load_catalog('local').",
+            "Absolute-URI catalog load failed (%s);"
+            " falling back to load_catalog('local').",
             exc,
         )
 
-    # Fallback: temporarily set cwd so the relative URI in .pyiceberg.yaml resolves.
+    # Fallback: temporarily set cwd so the relative URI
+    # in .pyiceberg.yaml resolves.
     orig_cwd = os.getcwd()
     try:
         os.chdir(root)
@@ -110,6 +118,19 @@ def audit_table(cat):
     return cat.load_table(_AUDIT_LOG_TABLE)
 
 
+def user_tickers_table(cat):
+    """Return the open ``auth.user_tickers`` Iceberg table.
+
+    Args:
+        cat: The loaded Iceberg catalog.
+
+    Returns:
+        The ``auth.user_tickers``
+        :class:`pyiceberg.table.Table`.
+    """
+    return cat.load_table(_USER_TICKERS_TABLE)
+
+
 def scan_all_users(cat) -> List[Dict[str, Any]]:
     """Read every row from ``auth.users`` as a list of plain dicts.
 
@@ -127,7 +148,8 @@ def scan_all_users(cat) -> List[Dict[str, Any]]:
     """
     tbl = users_table(cat)
     result: List[Dict[str, Any]] = []
-    # Fix #11: iterate over Arrow record batches instead of converting the whole
+    # Fix #11: iterate over Arrow record batches instead
+    # of converting the whole
     # table to a Python list in one shot — keeps peak memory proportional to a
     # single batch rather than all rows simultaneously.
     for batch in tbl.scan().to_arrow().to_batches():

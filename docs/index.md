@@ -44,7 +44,7 @@ Response text returned to the frontend and rendered as a chat bubble
 ```bash
 # 1. Start the backend
 cd backend
-source demoenv/bin/activate
+source ~/.ai-agent-ui/venv/bin/activate
 export GROQ_API_KEY=...
 export SERPAPI_API_KEY=...
 uvicorn main:app --port 8181 --reload

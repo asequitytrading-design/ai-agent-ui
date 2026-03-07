@@ -16,6 +16,7 @@ The tool framework lives in `backend/tools/`. It provides a registry that decoup
 | `tools/price_analysis_tool.py` | `analyse_stock_price` — technical indicators + chart + same-day cache |
 | `tools/forecasting_tool.py` | `forecast_stock` — Prophet forecast + chart + same-day cache |
 | `tools/__init__.py` | Empty (marks directory as a Python package) |
+| `validation.py` | Shared input validators: `validate_ticker`, `validate_search_query`, `validate_ticker_batch` |
 
 ---
 

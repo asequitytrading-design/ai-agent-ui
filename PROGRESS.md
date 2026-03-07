@@ -2,6 +2,102 @@
 
 ---
 
+# Session: Mar 7, 2026 — 5-Epic feature sprint (Epics 1–5)
+
+## Summary
+Implemented all 5 epics from the feature plan: admin password reset,
+smart data freshness gates, virtualenv relocation, per-user ticker
+linking, and the ticker marketplace dashboard page.
+
+### Epic 1: Admin Password Reset
+- `POST /users/{user_id}/reset-password` — superuser-only endpoint
+- Dashboard modal with password validation (min 8 chars, 1 digit)
+- Pattern-match "Reset Pwd" button per user row in admin table
+- Audit logging: `ADMIN_PASSWORD_RESET` event with actor/target
+
+### Epic 2: Smart Data Freshness
+- Analysis freshness gate: skip re-analysis if done today (Iceberg check)
+- Forecast 7-day cooldown: skip re-forecast within 7 days of last run
+- Both gates wrapped in try/except — never block fallback to full run
+- Same-day file cache still active alongside Iceberg freshness
+
+### Epic 3: Virtualenv Relocation
+- Moved venv from `backend/demoenv` → `~/.ai-agent-ui/venv`
+- `setup.sh`: auto-migrates (mv + symlink) on upgrade
+- `run.sh`, hooks: probe new path first, fall back to old
+- Updated: pyproject.toml, .flake8, CI workflow, all docs
+- Prevents linter corruption of site-packages (root cause of
+  circular import issues)
+
+### Epic 4: Per-User Ticker Linking
+- New Iceberg table: `auth.user_tickers` (user_id, ticker, linked_at, source)
+- API: `GET/POST/DELETE /users/me/tickers`
+- Auto-link on chat: `_ticker_linker.py` — thread-local user tracking
+- Default ticker: RELIANCE.NS linked on user creation
+- Dashboard home filters cards by user's linked tickers
+- 13 new tests in `test_ticker_api.py`
+
+### Epic 5: Ticker Marketplace Page
+- New dashboard page at `/marketplace`
+- Lists ALL tickers from central registry
+- Add/Remove buttons per row (pattern-match callbacks)
+- Search filtering, market column, company names
+- Nav link added between Insights and Admin
+
+### Tests: 255 total (+19 new, all passing)
+- `test_auth_api.py`: 5 admin password reset tests
+- `test_stock_tools.py`: 3 freshness gate tests
+- `test_ticker_api.py`: 13 ticker endpoint tests (new file)
+
+### Files changed: 40+ modified, 5 new files created
+
+---
+
+# Session: Mar 7, 2026 — RSI/MACD tooltips + input validation hardening
+
+## Summary
+Added educational tooltips for RSI and MACD indicators across the
+dashboard, then performed a full OWASP-style security audit and
+hardened all user-input entry points (18 gaps fixed).
+
+### Feature: RSI/MACD Tooltips
+- Generalised the Sharpe tooltip system in `sort_helpers.py`
+  into a generic `label_with_tooltip()` + `_TOOLTIP_TEXT` dict.
+- Added info-icon (ℹ) tooltips on RSI and MACD columns in:
+  screener table, comparison table, screener filter label.
+- Added `hovertext` + `captureevents` to RSI/MACD chart panel
+  titles in `chart_builders.py`.
+- Renamed CSS class `sharpe-info-icon` → `col-info-icon`.
+- Fixed duplicate DOM ID bug that prevented tooltips from
+  rendering (two RSI columns shared same ID).
+- Replaced `<`/`>` in tooltip text with Unicode `≤`/`≥` to
+  eliminate any XSS vector.
+
+### Security: Input Validation Hardening
+- Created `backend/validation.py` — shared validators for
+  ticker symbols, search queries, and batch ticker lists.
+- **P0 fixes**:
+  - `ChatRequest.message`: `max_length=10000`, `min_length=1`
+  - `ChatRequest.agent_id`: `pattern=^[a-z_]+$`, `max_length=50`
+  - `search_web()` and `search_market_news()`: query length
+    validation via `validate_search_query()`.
+- **P1 fixes**:
+  - All 8 stock tools: ticker regex validation
+    (`^[A-Za-z0-9^.\-]{1,15}$`) via `validate_ticker()`.
+  - `fetch_multiple_stocks()`: batch limit (50 tickers).
+  - `role` field: `Literal["general", "superuser"]` (was `str`).
+- **P2 fixes**: `max_length` on all auth model string fields
+  (password 128, full_name 200, avatar_url 500, tokens 2000).
+
+### Tests: 236 total (28 new, all passing)
+- `test_validation.py`: 19 tests (ticker, query, batch)
+- `test_input_constraints.py`: 9 tests (Pydantic limits)
+- `test_sort_helpers.py`: 6 new tooltip tests
+
+### Files changed: 17 modified + 3 new
+
+---
+
 # Session: Mar 7, 2026 — Fix Iceberg avro path issue after migration
 
 ## Summary

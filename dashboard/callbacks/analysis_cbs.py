@@ -16,12 +16,12 @@ from typing import Optional
 from urllib.parse import parse_qs
 
 import dash_bootstrap_components as dbc
-import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from dash import Input, Output, State, ctx, html, no_update
+from dash import Input, Output, State, html, no_update
 
 from dashboard.callbacks.auth_utils import (
+    _fetch_user_tickers,
     _unauth_notice,
     _validate_token,
 )
@@ -33,7 +33,6 @@ from dashboard.callbacks.chart_builders import (
     _empty_fig,
 )
 from dashboard.callbacks.data_loaders import (
-    _add_indicators,
     _add_indicators_cached,
     _clear_indicator_cache,
     _load_dividends,
@@ -42,11 +41,16 @@ from dashboard.callbacks.data_loaders import (
     _load_reg_cb,
 )
 from dashboard.callbacks.iceberg import clear_caches
+from dashboard.callbacks.sort_helpers import (
+    MACD_TOOLTIP,
+    RSI_TOOLTIP,
+)
 from dashboard.services.stock_refresh import (
     run_full_refresh,
 )
 
-# Module-level logger; mutable but intentionally module-scoped for callback registration.
+# Module-level logger; mutable but intentionally
+# module-scoped for callback registration.
 _logger = logging.getLogger(__name__)
 
 
@@ -84,6 +88,32 @@ def register(app) -> None:
             return stored_ticker
         tickers = sorted(_load_reg_cb().keys())
         return tickers[0] if tickers else no_update
+
+    @app.callback(
+        Output("analysis-ticker-dropdown", "options"),
+        Output("compare-ticker-dropdown", "options"),
+        Input("url", "pathname"),
+        State("auth-token-store", "data"),
+    )
+    def filter_ticker_dropdowns(pathname, token):
+        """Update analysis + compare dropdowns to user tickers.
+
+        Args:
+            pathname: Current URL path.
+            token: JWT access token.
+
+        Returns:
+            Tuple of (analysis options, compare options).
+        """
+        registry = _load_reg_cb()
+        all_tickers = sorted(registry.keys())
+        ut = _fetch_user_tickers(token)
+        if ut is not None:
+            tickers = [t for t in all_tickers if t in ut]
+        else:
+            tickers = all_tickers
+        opts = [{"label": t, "value": t} for t in tickers]
+        return opts, opts
 
     @app.callback(
         [
@@ -442,10 +472,39 @@ def register(app) -> None:
             )
 
         metrics_df = pd.DataFrame(rows)
-        header_cells = [
-            html.Th(col, className="text-muted small")
-            for col in metrics_df.columns
-        ]
+        _col_tips = {
+            "RSI": ("cmp-rsi-tip", RSI_TOOLTIP),
+            "MACD": ("cmp-macd-tip", MACD_TOOLTIP),
+        }
+        header_cells = []
+        for col in metrics_df.columns:
+            if col in _col_tips:
+                uid, tip = _col_tips[col]
+                header_cells.append(
+                    html.Th(
+                        [
+                            html.Span(col),
+                            html.Span(
+                                "\u2139",
+                                id=uid,
+                                className="col-info-icon",
+                            ),
+                            dbc.Tooltip(
+                                tip,
+                                target=uid,
+                                placement="top",
+                            ),
+                        ],
+                        className="text-muted small",
+                    )
+                )
+            else:
+                header_cells.append(
+                    html.Th(
+                        col,
+                        className="text-muted small",
+                    )
+                )
         body_rows = []
         for _, row in metrics_df.iterrows():
             cells = [html.Td(str(v), className="small") for v in row]

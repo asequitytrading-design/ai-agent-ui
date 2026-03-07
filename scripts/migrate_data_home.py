@@ -9,7 +9,7 @@ destination are skipped (never overwritten).
 
 Usage::
 
-    source backend/demoenv/bin/activate
+    source ~/.ai-agent-ui/venv/bin/activate
     python scripts/migrate_data_home.py          # dry-run
     python scripts/migrate_data_home.py --apply  # real copy
 """

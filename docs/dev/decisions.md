@@ -107,7 +107,7 @@ This is safe because `setup_logging()` always re-adds the correct handlers immed
 
 ## Python 3.12
 
-The `demoenv` virtualenv runs Python 3.12.9. All modern Python features are available:
+The project virtualenv (`~/.ai-agent-ui/venv`) runs Python 3.12.9. All modern Python features are available:
 
 - **Union type syntax** (`X | None`) via PEP 604 is preferred over `Optional[X]`.
 - `match` statements (PEP 634) may be used where appropriate.
@@ -352,7 +352,7 @@ The Dash process is launched by `run.sh` with `exec` — it inherits only the sh
 
 ### Virtualenv excluded from git
 
-`backend/demoenv/` is listed in `.gitignore` as both `demoenv/` and `*env/`. The virtualenv is reconstructable from `requirements.txt`.
+The virtualenv now lives at `~/.ai-agent-ui/venv` (with `backend/demoenv` kept as a backwards-compat symlink). Both paths are covered by `.gitignore` (`demoenv/` and `*env/`). The virtualenv is reconstructable from `requirements.txt`.
 
 ### frontend/.git removed
 

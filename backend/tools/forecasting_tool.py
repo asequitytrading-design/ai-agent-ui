@@ -20,7 +20,7 @@ Typical usage (via LangChain tool call)::
 """
 
 import logging
-from datetime import date
+from datetime import date, timedelta
 
 import tools._forecast_shared as _sh
 from langchain_core.tools import tool
@@ -35,8 +35,9 @@ from tools._forecast_model import (
     _train_prophet_model,
 )
 from tools._forecast_persist import _save_forecast
+from validation import validate_ticker
 
-# Module-level logger — must remain module-level for LangChain @tool compatibility
+# Module-level logger — required for LangChain @tool
 _logger = logging.getLogger(__name__)
 
 # Re-export so tests can still monkeypatch via forecasting_tool.*
@@ -70,15 +71,62 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
         >>> "AAPL" in result
         True
     """
+    err = validate_ticker(ticker)
+    if err:
+        return f"Error: {err}"
     ticker = ticker.upper().strip()
+    from tools._ticker_linker import auto_link_ticker
+
+    auto_link_ticker(ticker)
     months = max(1, int(months))
-    _logger.info("forecast_stock | ticker=%s | months=%d", ticker, months)
+    _logger.info(
+        "forecast_stock | ticker=%s | months=%d",
+        ticker,
+        months,
+    )
     sym = _sh._currency_symbol(_sh._load_currency(ticker))
 
     cached = _sh._load_cache(ticker, f"forecast_{months}m")
     if cached:
-        _logger.info("Returning cached forecast for %s (%dm)", ticker, months)
+        _logger.info(
+            "Returning cached forecast for %s (%dm)",
+            ticker,
+            months,
+        )
         return cached
+
+    # 7-day cooldown: skip re-running Prophet if a forecast
+    # was generated within the last 7 days (in Iceberg).
+    try:
+        repo_check = _sh._get_repo()
+        if repo_check is not None:
+            latest_run = repo_check.get_latest_forecast_run(ticker, months)
+            if latest_run is not None:
+                rd = latest_run.get("run_date")
+                if rd is not None:
+                    if hasattr(rd, "date"):
+                        rd = rd.date()
+                    cutoff = date.today() - timedelta(days=7)
+                    if rd > cutoff:
+                        _logger.info(
+                            "Forecast cooldown: %s %dm"
+                            " last run on %s (<7d ago)",
+                            ticker,
+                            months,
+                            rd,
+                        )
+                        return (
+                            f"Forecast for {ticker} "
+                            f"({months}-month) was last "
+                            f"run on {rd} (within 7 "
+                            f"days). Next forecast "
+                            f"available after "
+                            f"{rd + timedelta(days=7)}. "
+                            f"Use the dashboard to view "
+                            f"current forecast results."
+                        )
+    except Exception:
+        pass  # non-critical; fall through to forecast
 
     try:
         df = _sh._load_parquet(ticker)

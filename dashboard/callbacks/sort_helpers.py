@@ -34,33 +34,73 @@ SHARPE_TOOLTIP = (
     "Sharpe Ratio measures risk-adjusted return: "
     "(annualised return \u2212 risk-free rate) \u00f7 "
     "annualised volatility. Higher is better; "
-    ">1 is good, >2 is very good."
+    "\u22651 is good, \u22652 is very good."
 )
 
+RSI_TOOLTIP = (
+    "RSI (Relative Strength Index) is a momentum"
+    " oscillator (0\u2013100). \u226570 = overbought"
+    " (potential sell), \u226430 = oversold"
+    " (potential buy)."
+)
 
-def sharpe_label_with_tooltip(label: str, uid: str) -> List:
+MACD_TOOLTIP = (
+    "MACD (Moving Average Convergence Divergence)"
+    " tracks trend momentum. Bullish when MACD"
+    " crosses above the signal line; bearish"
+    " when it crosses below."
+)
+
+_TOOLTIP_TEXT = {
+    "sharpe": SHARPE_TOOLTIP,
+    "rsi": RSI_TOOLTIP,
+    "macd": MACD_TOOLTIP,
+}
+
+
+def label_with_tooltip(
+    label: str,
+    uid: str,
+    tooltip_key: str,
+) -> List:
     """Return label span, info icon, and Bootstrap tooltip.
 
     Args:
         label: Column header text (e.g. ``"Sharpe"``).
         uid: Unique DOM id for the tooltip target.
+        tooltip_key: Key into ``_TOOLTIP_TEXT``
+            (``"sharpe"``, ``"rsi"``, ``"macd"``).
 
     Returns:
         List of ``[Span, Span(icon), dbc.Tooltip]``.
     """
+    text = _TOOLTIP_TEXT.get(tooltip_key, "")
     return [
         html.Span(label),
         html.Span(
             "\u2139",
             id=uid,
-            className="sharpe-info-icon",
+            className="col-info-icon",
         ),
         dbc.Tooltip(
-            SHARPE_TOOLTIP,
+            text,
             target=uid,
             placement="top",
         ),
     ]
+
+
+def sharpe_label_with_tooltip(label: str, uid: str) -> List:
+    """Return label with Sharpe tooltip (compat wrapper).
+
+    Args:
+        label: Column header text.
+        uid: Unique DOM id for the tooltip target.
+
+    Returns:
+        List of ``[Span, Span(icon), dbc.Tooltip]``.
+    """
+    return label_with_tooltip(label, uid, "sharpe")
 
 
 def next_sort_state(
@@ -181,9 +221,14 @@ def build_sortable_thead(
             btn_cls += " sort-active"
 
         # Build label children — with optional tooltip
-        if col_def.get("tooltip") == "sharpe":
-            tip_id = f"{table_id}-sharpe-tip"
-            label_children = sharpe_label_with_tooltip(label, tip_id)
+        tip_key = col_def.get("tooltip")
+        if tip_key and tip_key in _TOOLTIP_TEXT:
+            tip_id = f"{table_id}-{key}-tip"
+            label_children = label_with_tooltip(
+                label,
+                tip_id,
+                tip_key,
+            )
         else:
             label_children = [html.Span(label)]
 
