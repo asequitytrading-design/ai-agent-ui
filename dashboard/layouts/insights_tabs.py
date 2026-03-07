@@ -67,8 +67,8 @@ def _screener_tab(
                                             " Strength Index):"
                                             " momentum oscillator"
                                             " (0\u2013100)."
-                                            " > 70 = overbought,"
-                                            " < 30 = oversold.",
+                                            " \u226570 = overbought,"
+                                            " \u226430 = oversold.",
                                             target=(
                                                 "screener-filter"
                                                 "-rsi-tip"

@@ -412,11 +412,11 @@ def _build_analysis_fig(
     _panel_tips = {
         "RSI (14)": (
             "Momentum oscillator (0\u2013100). "
-            "> 70 overbought, < 30 oversold."
+            "\u226570 overbought, \u226430 oversold."
         ),
         "MACD": (
             "Trend momentum indicator. Bullish"
-            " when MACD > signal line."
+            " when MACD \u2265 signal line."
         ),
     }
     for ann in fig.layout.annotations:

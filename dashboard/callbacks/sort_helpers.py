@@ -34,13 +34,13 @@ SHARPE_TOOLTIP = (
     "Sharpe Ratio measures risk-adjusted return: "
     "(annualised return \u2212 risk-free rate) \u00f7 "
     "annualised volatility. Higher is better; "
-    ">1 is good, >2 is very good."
+    "\u22651 is good, \u22652 is very good."
 )
 
 RSI_TOOLTIP = (
     "RSI (Relative Strength Index) is a momentum"
-    " oscillator (0\u2013100). > 70 = overbought"
-    " (potential sell), < 30 = oversold"
+    " oscillator (0\u2013100). \u226570 = overbought"
+    " (potential sell), \u226430 = oversold"
     " (potential buy)."
 )
 
