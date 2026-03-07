@@ -54,13 +54,8 @@ def _screener_tab(
                                         "RSI Signal ",
                                         html.Span(
                                             "\u2139",
-                                            id=(
-                                                "screener-filter"
-                                                "-rsi-tip"
-                                            ),
-                                            className=(
-                                                "col-info-icon"
-                                            ),
+                                            id=("screener-filter" "-rsi-tip"),
+                                            className=("col-info-icon"),
                                         ),
                                         dbc.Tooltip(
                                             "RSI (Relative"
@@ -70,15 +65,13 @@ def _screener_tab(
                                             " \u226570 = overbought,"
                                             " \u226430 = oversold.",
                                             target=(
-                                                "screener-filter"
-                                                "-rsi-tip"
+                                                "screener-filter" "-rsi-tip"
                                             ),
                                             placement="top",
                                         ),
                                     ],
                                     className=(
-                                        "text-muted small"
-                                        " fw-semibold"
+                                        "text-muted small" " fw-semibold"
                                     ),
                                 ),
                                 dbc.RadioItems(

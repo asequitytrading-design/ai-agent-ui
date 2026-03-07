@@ -59,7 +59,9 @@ _TOOLTIP_TEXT = {
 
 
 def label_with_tooltip(
-    label: str, uid: str, tooltip_key: str,
+    label: str,
+    uid: str,
+    tooltip_key: str,
 ) -> List:
     """Return label span, info icon, and Bootstrap tooltip.
 
@@ -223,7 +225,9 @@ def build_sortable_thead(
         if tip_key and tip_key in _TOOLTIP_TEXT:
             tip_id = f"{table_id}-{key}-tip"
             label_children = label_with_tooltip(
-                label, tip_id, tip_key,
+                label,
+                tip_id,
+                tip_key,
             )
         else:
             label_children = [html.Span(label)]

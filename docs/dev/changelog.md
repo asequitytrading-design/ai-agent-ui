@@ -4,6 +4,34 @@ Session-by-session record of what was built, changed, and fixed.
 
 ---
 
+## Mar 7, 2026 — RSI/MACD tooltips + input validation hardening
+
+### Feature: Dashboard Tooltips
+
+Added educational info-icon tooltips for RSI and MACD indicators across the dashboard (screener, comparison table, filter labels, chart panel titles). Generalised the existing Sharpe tooltip system into a reusable `label_with_tooltip()` pattern.
+
+### Security: Input Validation
+
+Full OWASP-style audit identified 18 input validation gaps. All fixed:
+
+| Priority | Fix | Files |
+|----------|-----|-------|
+| P0 | `ChatRequest.message` max 10k chars, `agent_id` regex | `backend/models.py` |
+| P0 | `search_web` / `search_market_news` query validation | `search_tool.py`, `agent_tool.py` |
+| P1 | Ticker regex on all 8 stock tools + 50-ticker batch limit | `stock_data_tool.py`, `forecasting_tool.py`, `price_analysis_tool.py` |
+| P1 | `role` field: `Literal["general", "superuser"]` | `auth/models/request.py` |
+| P2 | `max_length` on all auth string fields | `auth/models/request.py` |
+
+### Bug Fixes
+
+- Fixed duplicate DOM IDs preventing RSI tooltip from rendering on screener
+- Added `captureevents=True` to Plotly annotations for hover to work
+- Replaced `<`/`>` in tooltip text with Unicode `≤`/`≥`
+
+### Tests (+28 new → 236 total)
+
+---
+
 ## Mar 4, 2026 — Home page load latency optimisation
 
 ### Performance

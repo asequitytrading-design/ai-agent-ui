@@ -35,6 +35,10 @@ from tools._stock_shared import (
     _parquet_path,
     _require_repo,
 )
+from validation import (
+    validate_ticker,
+    validate_ticker_batch,
+)
 
 # Module-level logger — kept at module scope intentionally (not inside a class).
 _logger = logging.getLogger(__name__)
@@ -71,8 +75,15 @@ def fetch_stock_data(ticker: str, period: str = "10y") -> str:
         >>> "AAPL" in result
         True
     """
+    err = validate_ticker(ticker)
+    if err:
+        return f"Error: {err}"
     ticker = ticker.upper().strip()
-    _logger.info("fetch_stock_data | ticker=%s | period=%s", ticker, period)
+    _logger.info(
+        "fetch_stock_data | ticker=%s | period=%s",
+        ticker,
+        period,
+    )
 
     try:
         existing = _check_existing_data(ticker)
@@ -200,6 +211,9 @@ def get_stock_info(ticker: str) -> str:
         >>> "Apple" in result
         True
     """
+    err = validate_ticker(ticker)
+    if err:
+        return f"Error: {err}"
     ticker = ticker.upper().strip()
     _logger.info("get_stock_info | ticker=%s", ticker)
 
@@ -261,6 +275,9 @@ def load_stock_data(ticker: str) -> str:
         >>> "rows" in result
         True
     """
+    err = validate_ticker(ticker)
+    if err:
+        return f"Error: {err}"
     ticker = ticker.upper().strip()
     _logger.info("load_stock_data | ticker=%s", ticker)
 
@@ -303,8 +320,14 @@ def fetch_multiple_stocks(tickers: str, period: str = "10y") -> str:
         >>> "AAPL" in result
         True
     """
+    err = validate_ticker_batch(tickers)
+    if err:
+        return f"Error: {err}"
     ticker_list = [t.strip().upper() for t in tickers.split(",") if t.strip()]
-    _logger.info("fetch_multiple_stocks | tickers=%s", ticker_list)
+    _logger.info(
+        "fetch_multiple_stocks | tickers=%s",
+        ticker_list,
+    )
     results = []
     full_count = delta_count = skip_count = error_count = 0
     for ticker in ticker_list:
@@ -341,8 +364,14 @@ def get_dividend_history(ticker: str) -> str:
         >>> isinstance(result, str)
         True
     """
+    err = validate_ticker(ticker)
+    if err:
+        return f"Error: {err}"
     ticker = ticker.upper().strip()
-    _logger.info("get_dividend_history | ticker=%s", ticker)
+    _logger.info(
+        "get_dividend_history | ticker=%s",
+        ticker,
+    )
     _ss._DATA_PROCESSED.mkdir(parents=True, exist_ok=True)
 
     try:
@@ -483,8 +512,14 @@ def fetch_quarterly_results(ticker: str) -> str:
         >>> "AAPL" in result
         True
     """
+    err = validate_ticker(ticker)
+    if err:
+        return f"Error: {err}"
     ticker = ticker.upper().strip()
-    _logger.info("fetch_quarterly_results | ticker=%s", ticker)
+    _logger.info(
+        "fetch_quarterly_results | ticker=%s",
+        ticker,
+    )
 
     try:
         repo = _require_repo()

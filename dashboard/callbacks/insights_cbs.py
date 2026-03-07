@@ -275,11 +275,7 @@ def register(app) -> None:
             {
                 "key": k,
                 "label": cols_map[k],
-                **(
-                    {"tooltip": _tip_map[k]}
-                    if k in _tip_map
-                    else {}
-                ),
+                **({"tooltip": _tip_map[k]} if k in _tip_map else {}),
             }
             for k in display_cols
         ]

@@ -21,6 +21,7 @@ import logging
 
 from agents.base import BaseAgent
 from langchain_core.tools import BaseTool, tool
+from validation import validate_search_query
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +76,13 @@ def create_search_market_news_tool(general_agent: BaseAgent) -> BaseTool:
             >>> isinstance(result, str)
             True
         """
-        logger.info("search_market_news | query=%r", query)
+        err = validate_search_query(query)
+        if err:
+            return f"News search failed: {err}"
+        logger.info(
+            "search_market_news | query=%r",
+            query,
+        )
         try:
             result = general_agent.run(user_input=query, history=[])
             logger.debug(

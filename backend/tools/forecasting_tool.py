@@ -35,6 +35,7 @@ from tools._forecast_model import (
     _train_prophet_model,
 )
 from tools._forecast_persist import _save_forecast
+from validation import validate_ticker
 
 # Module-level logger — must remain module-level for LangChain @tool compatibility
 _logger = logging.getLogger(__name__)
@@ -70,9 +71,16 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
         >>> "AAPL" in result
         True
     """
+    err = validate_ticker(ticker)
+    if err:
+        return f"Error: {err}"
     ticker = ticker.upper().strip()
     months = max(1, int(months))
-    _logger.info("forecast_stock | ticker=%s | months=%d", ticker, months)
+    _logger.info(
+        "forecast_stock | ticker=%s | months=%d",
+        ticker,
+        months,
+    )
     sym = _sh._currency_symbol(_sh._load_currency(ticker))
 
     cached = _sh._load_cache(ticker, f"forecast_{months}m")

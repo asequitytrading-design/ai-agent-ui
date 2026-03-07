@@ -17,7 +17,7 @@ Models
 """
 
 from enum import Enum
-from typing import Dict, Optional
+from typing import Dict, Literal
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -31,7 +31,7 @@ class LoginRequest(BaseModel):
     """
 
     email: EmailStr
-    password: str
+    password: str = Field(..., max_length=128)
 
 
 class UserCreateRequest(BaseModel):
@@ -45,9 +45,9 @@ class UserCreateRequest(BaseModel):
     """
 
     email: EmailStr
-    password: str = Field(..., min_length=8)
-    full_name: str = Field(..., min_length=1)
-    role: str = "general"
+    password: str = Field(..., min_length=8, max_length=128)
+    full_name: str = Field(..., min_length=1, max_length=200)
+    role: Literal["general", "superuser"] = "general"
 
 
 class UserUpdateRequest(BaseModel):
@@ -62,11 +62,11 @@ class UserUpdateRequest(BaseModel):
         is_active: Set to ``False`` to deactivate the account.
     """
 
-    full_name: Optional[str] = None
-    email: Optional[EmailStr] = None
-    role: Optional[str] = None
-    is_active: Optional[bool] = None
-    page_permissions: Optional[Dict[str, bool]] = None
+    full_name: str | None = Field(None, max_length=200)
+    email: EmailStr | None = None
+    role: Literal["general", "superuser"] | None = None
+    is_active: bool | None = None
+    page_permissions: Dict[str, bool] | None = None
 
 
 class ProfileUpdateRequest(BaseModel):
@@ -77,8 +77,8 @@ class ProfileUpdateRequest(BaseModel):
         avatar_url: New avatar URL (set by upload-avatar endpoint).
     """
 
-    full_name: Optional[str] = None
-    avatar_url: Optional[str] = None
+    full_name: str | None = Field(None, max_length=200)
+    avatar_url: str | None = Field(None, max_length=500)
 
 
 class PasswordResetRequestBody(BaseModel):
@@ -99,28 +99,30 @@ class PasswordResetConfirmBody(BaseModel):
         new_password: The new plaintext password (min 8 chars, one digit).
     """
 
-    reset_token: str
-    new_password: str = Field(..., min_length=8)
+    reset_token: str = Field(..., max_length=500)
+    new_password: str = Field(..., min_length=8, max_length=128)
 
 
 class RefreshRequest(BaseModel):
     """Request body for ``POST /auth/refresh``.
 
     Attributes:
-        refresh_token: The long-lived refresh token issued at login.
+        refresh_token: The long-lived refresh token issued
+            at login.
     """
 
-    refresh_token: str
+    refresh_token: str = Field(..., max_length=2000)
 
 
 class LogoutRequest(BaseModel):
     """Request body for ``POST /auth/logout``.
 
     Attributes:
-        refresh_token: The refresh token to invalidate server-side.
+        refresh_token: The refresh token to invalidate
+            server-side.
     """
 
-    refresh_token: str
+    refresh_token: str = Field(..., max_length=2000)
 
 
 class OAuthProvider(str, Enum):
@@ -146,6 +148,6 @@ class OAuthCallbackRequest(BaseModel):
     """
 
     provider: OAuthProvider
-    code: str
-    state: str
-    code_verifier: Optional[str] = None
+    code: str = Field(..., max_length=2000)
+    state: str = Field(..., max_length=500)
+    code_verifier: str | None = Field(None, max_length=500)

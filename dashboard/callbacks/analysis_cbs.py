@@ -28,10 +28,6 @@ from dashboard.callbacks.auth_utils import (
 from dashboard.callbacks.card_builders import (
     _build_stats_cards,
 )
-from dashboard.callbacks.sort_helpers import (
-    RSI_TOOLTIP,
-    MACD_TOOLTIP,
-)
 from dashboard.callbacks.chart_builders import (
     _build_analysis_fig,
     _empty_fig,
@@ -46,6 +42,10 @@ from dashboard.callbacks.data_loaders import (
     _load_reg_cb,
 )
 from dashboard.callbacks.iceberg import clear_caches
+from dashboard.callbacks.sort_helpers import (
+    MACD_TOOLTIP,
+    RSI_TOOLTIP,
+)
 from dashboard.services.stock_refresh import (
     run_full_refresh,
 )
