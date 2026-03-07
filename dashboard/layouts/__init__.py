@@ -19,6 +19,9 @@ from dashboard.layouts.helpers import (  # noqa: F401
 )
 from dashboard.layouts.home import home_layout  # noqa: F401
 from dashboard.layouts.insights import insights_layout  # noqa: F401
+from dashboard.layouts.marketplace import (  # noqa: F401
+    marketplace_layout,
+)
 from dashboard.layouts.navbar import NAVBAR  # noqa: F401
 
 logger = logging.getLogger(__name__)
@@ -34,6 +37,7 @@ _all_exports = [
     "compare_layout",
     "admin_users_layout",
     "insights_layout",
+    "marketplace_layout",
     "_load_registry",
     "_get_available_tickers",
 ]

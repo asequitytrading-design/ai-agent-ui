@@ -375,3 +375,82 @@ class TestCreateUser:
             headers={"Authorization": f"Bearer {token}"},
         )
         assert r.status_code == 409, r.text
+
+
+# ---------------------------------------------------------------------------
+# POST /users/{user_id}/reset-password  (superuser only)
+# ---------------------------------------------------------------------------
+
+
+class TestAdminPasswordReset:
+    """Tests for ``POST /users/{user_id}/reset-password``."""
+
+    def _superuser_token(self, client: TestClient) -> str:
+        tokens = _login(client, "superadmin@example.com", "AdminPass1!")
+        return tokens["access_token"]
+
+    def _alice_id(self, fake_repo) -> str:
+        user = fake_repo.get_by_email("alice@example.com")
+        return user["user_id"]
+
+    def test_admin_reset_password_success(self, client, fake_repo):
+        """Superuser can reset another user's password."""
+        token = self._superuser_token(client)
+        alice_id = self._alice_id(fake_repo)
+        r = client.post(
+            f"/users/{alice_id}/reset-password",
+            json={"new_password": "NewPass99!"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["detail"] == "Password reset successfully"
+        # Verify Alice can log in with the new password
+        r2 = client.post(
+            "/auth/login",
+            json={
+                "email": "alice@example.com",
+                "password": "NewPass99!",
+            },
+        )
+        assert r2.status_code == 200, r2.text
+
+    def test_admin_reset_password_non_superuser_403(self, client, fake_repo):
+        """Non-superuser gets 403 when trying to reset."""
+        tokens = _login(client, "alice@example.com", "Password1!")
+        alice_id = self._alice_id(fake_repo)
+        r = client.post(
+            f"/users/{alice_id}/reset-password",
+            json={"new_password": "NewPass99!"},
+            headers={"Authorization": f"Bearer {tokens['access_token']}"},
+        )
+        assert r.status_code == 403, r.text
+
+    def test_admin_reset_password_unknown_user_404(self, client):
+        """Returns 404 for a non-existent user_id."""
+        token = self._superuser_token(client)
+        r = client.post(
+            "/users/nonexistent-id/reset-password",
+            json={"new_password": "NewPass99!"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 404, r.text
+
+    def test_admin_reset_password_weak_password_400(self, client, fake_repo):
+        """Weak password gets rejected with 400."""
+        token = self._superuser_token(client)
+        alice_id = self._alice_id(fake_repo)
+        r = client.post(
+            f"/users/{alice_id}/reset-password",
+            json={"new_password": "short"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code in (400, 422), r.text
+
+    def test_admin_reset_no_auth_401(self, client, fake_repo):
+        """Unauthenticated request returns 401."""
+        alice_id = self._alice_id(fake_repo)
+        r = client.post(
+            f"/users/{alice_id}/reset-password",
+            json={"new_password": "NewPass99!"},
+        )
+        assert r.status_code in (401, 403), r.text

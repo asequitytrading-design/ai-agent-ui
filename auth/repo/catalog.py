@@ -5,6 +5,7 @@ Functions
 - :func:`get_catalog`
 - :func:`users_table`
 - :func:`audit_table`
+- :func:`user_tickers_table`
 - :func:`scan_all_users`
 """
 
@@ -12,7 +13,12 @@ import logging
 import os
 from typing import Any, Dict, List
 
-from auth.repo.schemas import _AUDIT_LOG_TABLE, _USERS_TABLE, _row_to_dict
+from auth.repo.schemas import (
+    _AUDIT_LOG_TABLE,
+    _USER_TICKERS_TABLE,
+    _USERS_TABLE,
+    _row_to_dict,
+)
 
 # Module-level logger; not mutable state — safe to keep at module level.
 _logger = logging.getLogger(__name__)
@@ -110,6 +116,19 @@ def audit_table(cat):
         The ``auth.audit_log`` :class:`pyiceberg.table.Table`.
     """
     return cat.load_table(_AUDIT_LOG_TABLE)
+
+
+def user_tickers_table(cat):
+    """Return the open ``auth.user_tickers`` Iceberg table.
+
+    Args:
+        cat: The loaded Iceberg catalog.
+
+    Returns:
+        The ``auth.user_tickers``
+        :class:`pyiceberg.table.Table`.
+    """
+    return cat.load_table(_USER_TICKERS_TABLE)
 
 
 def scan_all_users(cat) -> List[Dict[str, Any]]:

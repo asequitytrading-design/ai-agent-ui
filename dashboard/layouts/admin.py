@@ -481,7 +481,93 @@ def admin_users_layout() -> html.Div:
                     ),
                 ],
             ),
+            # ── Admin reset-password modal ──────────
+            dbc.Modal(
+                id="admin-reset-pw-modal",
+                is_open=False,
+                backdrop="static",
+                children=[
+                    dbc.ModalHeader(
+                        dbc.ModalTitle("Reset User Password"),
+                        close_button=False,
+                    ),
+                    dbc.ModalBody(
+                        [
+                            html.Div(
+                                id="admin-reset-pw-error",
+                                className=("text-danger small mb-2"),
+                            ),
+                            html.P(
+                                id="admin-reset-pw-label",
+                                className="text-muted small",
+                            ),
+                            dbc.Row(
+                                [
+                                    dbc.Col(
+                                        [
+                                            dbc.Label("New Password"),
+                                            dbc.Input(
+                                                id=(
+                                                    "admin" "-reset" "-pw-new"
+                                                ),
+                                                type="password",
+                                                placeholder=(
+                                                    "Min 8 chars,"
+                                                    " 1 digit,"
+                                                    " 1 upper,"
+                                                    " 1 special"
+                                                ),
+                                            ),
+                                        ]
+                                    ),
+                                ],
+                                className="mb-3",
+                            ),
+                            dbc.Row(
+                                [
+                                    dbc.Col(
+                                        [
+                                            dbc.Label("Confirm Password"),
+                                            dbc.Input(
+                                                id=(
+                                                    "admin"
+                                                    "-reset"
+                                                    "-pw-confirm"
+                                                ),
+                                                type="password",
+                                            ),
+                                        ]
+                                    ),
+                                ],
+                                className="mb-3",
+                            ),
+                        ]
+                    ),
+                    dbc.ModalFooter(
+                        [
+                            dbc.Button(
+                                "Cancel",
+                                id="admin-reset-pw-cancel",
+                                color="secondary",
+                                outline=True,
+                                size="sm",
+                                className="me-2",
+                            ),
+                            dbc.Button(
+                                "Reset Password",
+                                id="admin-reset-pw-save",
+                                color="warning",
+                                size="sm",
+                            ),
+                        ]
+                    ),
+                ],
+            ),
             # ── Hidden stores ─────────────────────
+            dcc.Store(
+                id="admin-reset-pw-store",
+                data=None,
+            ),
             dcc.Store(id="users-store", data=[]),
             dcc.Store(id="user-modal-store", data=None),
             dcc.Store(id="users-refresh-store", data=0),

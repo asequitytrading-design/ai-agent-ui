@@ -18,14 +18,18 @@ from typing import Any, Optional
 import dash_bootstrap_components as dbc
 import pandas as pd
 import plotly.graph_objects as go
-from dash import Input, Output, html, no_update
+from dash import Input, Output, State, html, no_update
 
+from dashboard.callbacks.auth_utils import (
+    _fetch_user_tickers,
+)
 from dashboard.callbacks.iceberg import (
     _get_analysis_with_gaps_filled,
     _get_company_info_cached,
     _get_iceberg_repo,
     _get_ohlcv_cached,
     _get_quarterly_cached,
+    _get_registry_cached,
 )
 from dashboard.callbacks.sort_helpers import (
     apply_sort,
@@ -90,6 +94,7 @@ def register(app) -> None:
         Input("screener-pagination", "active_page"),
         Input("screener-page-size", "value"),
         Input("screener-sort-store", "data"),
+        State("auth-token-store", "data"),
     )
     def update_screener(
         rsi_filter: str,
@@ -99,6 +104,7 @@ def register(app) -> None:
         page: Optional[int],
         page_size_str: Optional[str],
         sort_state: dict | None = None,
+        token: str | None = None,
     ) -> Any:
         """Populate the screener table.
 
@@ -110,6 +116,7 @@ def register(app) -> None:
             page: Current pagination page (1-based).
             page_size_str: Rows per page as string.
             sort_state: Column sort state dict.
+            token: JWT access token.
 
         Returns:
             Tuple of (table, count text, max_value).
@@ -125,6 +132,11 @@ def register(app) -> None:
 
         if repo is not None:
             df = _get_analysis_with_gaps_filled(repo)
+
+        # Filter by user's linked tickers
+        ut = _fetch_user_tickers(token)
+        if ut is not None and not df.empty:
+            df = df[df["ticker"].isin(ut)].reset_index(drop=True)
 
         if df.empty:
             return (
@@ -313,6 +325,7 @@ def register(app) -> None:
         Input("targets-pagination", "active_page"),
         Input("targets-page-size", "value"),
         Input("targets-sort-store", "data"),
+        State("auth-token-store", "data"),
     )
     def update_targets(
         ticker_filter: str,
@@ -322,6 +335,7 @@ def register(app) -> None:
         page: Optional[int],
         page_size_str: Optional[str],
         sort_state: dict | None = None,
+        token: str | None = None,
     ) -> Any:
         """Populate the price targets table.
 
@@ -333,6 +347,7 @@ def register(app) -> None:
             page: Current pagination page (1-based).
             page_size_str: Rows per page as string.
             sort_state: Column sort state dict.
+            token: JWT access token.
 
         Returns:
             Tuple of (table, count text, max_value).
@@ -383,6 +398,11 @@ def register(app) -> None:
             .groupby(["ticker", "horizon_months"], as_index=False)
             .first()
         )
+
+        # Filter by user's linked tickers
+        ut = _fetch_user_tickers(token)
+        if ut is not None and not df.empty:
+            df = df[df["ticker"].isin(ut)].reset_index(drop=True)
 
         if ticker_filter and ticker_filter != "all":
             df = df[df["ticker"] == ticker_filter.upper()]
@@ -531,6 +551,7 @@ def register(app) -> None:
         Input("dividends-pagination", "active_page"),
         Input("dividends-page-size", "value"),
         Input("dividends-sort-store", "data"),
+        State("auth-token-store", "data"),
     )
     def update_dividends(
         ticker_filter: str,
@@ -540,6 +561,7 @@ def register(app) -> None:
         page: Optional[int],
         page_size_str: Optional[str],
         sort_state: dict | None = None,
+        token: str | None = None,
     ) -> Any:
         """Populate the dividends table.
 
@@ -551,6 +573,7 @@ def register(app) -> None:
             page: Current pagination page (1-based).
             page_size_str: Rows per page as string.
             sort_state: Column sort state dict.
+            token: JWT access token.
 
         Returns:
             Tuple of (table, count text, max_value).
@@ -577,6 +600,11 @@ def register(app) -> None:
             df = repo.get_dividends(ticker_filter.upper())
         else:
             df = repo._table_to_df("stocks.dividends")
+
+        # Filter by user's linked tickers
+        ut = _fetch_user_tickers(token)
+        if ut is not None and not df.empty:
+            df = df[df["ticker"].isin(ut)].reset_index(drop=True)
 
         # Vectorised market filter
         if not df.empty and market_filter and market_filter != "all":
@@ -686,6 +714,7 @@ def register(app) -> None:
         Input("risk-pagination", "active_page"),
         Input("risk-page-size", "value"),
         Input("risk-sort-store", "data"),
+        State("auth-token-store", "data"),
     )
     def update_risk(
         market_filter: str,
@@ -694,6 +723,7 @@ def register(app) -> None:
         page: Optional[int],
         page_size_str: Optional[str],
         sort_state: dict | None = None,
+        token: str | None = None,
     ) -> Any:
         """Populate the risk metrics table.
 
@@ -704,6 +734,7 @@ def register(app) -> None:
             page: Current pagination page (1-based).
             page_size_str: Rows per page as string.
             sort_state: Column sort state dict.
+            token: JWT access token.
 
         Returns:
             Tuple of (table, count text, max_value).
@@ -719,6 +750,11 @@ def register(app) -> None:
         df = pd.DataFrame()
         if repo is not None:
             df = _get_analysis_with_gaps_filled(repo)
+
+        # Filter by user's linked tickers
+        ut = _fetch_user_tickers(token)
+        if ut is not None and not df.empty:
+            df = df[df["ticker"].isin(ut)].reset_index(drop=True)
 
         # Vectorised market filter
         if not df.empty and market_filter and market_filter != "all":
@@ -839,11 +875,13 @@ def register(app) -> None:
         Input("insights-tabs", "active_tab"),
         Input("sectors-market-filter", "value"),
         Input("sectors-sort-store", "data"),
+        State("auth-token-store", "data"),
     )
     def update_sectors(
         active_tab: str,
         market_filter: str | None = None,
         sort_state: dict | None = None,
+        token: str | None = None,
     ) -> tuple:
         """Populate the sector analysis chart and table.
 
@@ -854,6 +892,7 @@ def register(app) -> None:
             active_tab: Currently active Insights tab ID.
             market_filter: ``"all"``, ``"india"``, or ``"us"``.
             sort_state: Column sort state dict.
+            token: JWT access token.
 
         Returns:
             Tuple of (Plotly figure, table component).
@@ -901,6 +940,11 @@ def register(app) -> None:
             how="inner",
         )
         merged = merged[merged["sector"].notna() & (merged["sector"] != "N/A")]
+
+        # Filter by user's linked tickers
+        ut = _fetch_user_tickers(token)
+        if ut is not None and not merged.empty:
+            merged = merged[merged["ticker"].isin(ut)].reset_index(drop=True)
 
         # Market filter (before groupby)
         if market_filter and market_filter != "all":
@@ -1022,11 +1066,13 @@ def register(app) -> None:
         Input("corr-period-filter", "value"),
         Input("corr-market-filter", "value"),
         Input("corr-sector-filter", "value"),
+        State("auth-token-store", "data"),
     )
     def update_correlation(
         period: str,
         market_filter: str | None = None,
         sector_filter: str | None = None,
+        token: str | None = None,
     ) -> go.Figure:
         """Build the returns correlation heatmap.
 
@@ -1131,6 +1177,13 @@ def register(app) -> None:
         if not close_data:
             return empty_fig
 
+        # Filter by user's linked tickers
+        ut = _fetch_user_tickers(token)
+        if ut is not None:
+            close_data = {k: v for k, v in close_data.items() if k in ut}
+        if not close_data:
+            return empty_fig
+
         # Apply period filter
         cutoff = None
         if period == "1y":
@@ -1187,12 +1240,17 @@ def register(app) -> None:
     @app.callback(
         Output("quarterly-chart", "figure"),
         Output("quarterly-table-container", "children"),
+        Output("quarterly-count-text", "children"),
+        Output("quarterly-pagination", "max_value"),
         Input("insights-tabs", "active_tab"),
         Input("quarterly-ticker-filter", "value"),
         Input("quarterly-sector-filter", "value"),
         Input("quarterly-market-filter", "value"),
         Input("quarterly-statement-filter", "value"),
+        Input("quarterly-pagination", "active_page"),
+        Input("quarterly-page-size", "value"),
         Input("quarterly-sort-store", "data"),
+        State("auth-token-store", "data"),
     )
     def update_quarterly(
         active_tab: str,
@@ -1200,7 +1258,10 @@ def register(app) -> None:
         sector_filter: str | None,
         market_filter: str | None,
         stmt_filter: str | None,
+        page: int | None = None,
+        page_size_str: str | None = None,
         sort_state: dict | None = None,
+        token: str | None = None,
     ) -> tuple:
         """Populate the quarterly results chart and table.
 
@@ -1210,10 +1271,14 @@ def register(app) -> None:
             sector_filter: Sector or ``"all"``.
             market_filter: ``"all"``/``"india"``/``"us"``.
             stmt_filter: Statement type filter.
+            page: Current pagination page (1-based).
+            page_size_str: Rows per page as string.
             sort_state: Column sort state dict.
+            token: JWT access token.
 
         Returns:
-            Tuple of (Plotly figure, table component).
+            Tuple of (figure, table, count text,
+            max pages).
         """
         sort_state = sort_state or {
             "col": None,
@@ -1240,24 +1305,45 @@ def register(app) -> None:
             ],
         )
         if active_tab != "quarterly-tab":
-            return _empty_fig, html.Div()
+            return (
+                _empty_fig,
+                html.Div(),
+                "",
+                1,
+            )
 
         repo = _get_iceberg_repo()
         if repo is None:
-            return _empty_fig, dbc.Alert(
-                "Iceberg unavailable.",
-                color="warning",
-                className="text-center mt-3",
+            return (
+                _empty_fig,
+                dbc.Alert(
+                    "Iceberg unavailable.",
+                    color="warning",
+                    className="text-center mt-3",
+                ),
+                "",
+                1,
             )
 
         df = _get_quarterly_cached(repo)
         if df.empty:
-            return _empty_fig, dbc.Alert(
-                "No quarterly data available. "
-                "Use fetch_quarterly_results first.",
-                color="warning",
-                className="text-center mt-3",
+            return (
+                _empty_fig,
+                dbc.Alert(
+                    "No quarterly data available. "
+                    "Use fetch_quarterly_results"
+                    " first.",
+                    color="warning",
+                    className="text-center mt-3",
+                ),
+                "",
+                1,
             )
+
+        # Filter by user's linked tickers
+        ut = _fetch_user_tickers(token)
+        if ut is not None and not df.empty:
+            df = df[df["ticker"].isin(ut)].reset_index(drop=True)
 
         # Market filter
         if market_filter and market_filter != "all":
@@ -1296,12 +1382,18 @@ def register(app) -> None:
                 if ticker_filter and ticker_filter != "all"
                 else ""
             )
-            return _empty_fig, dbc.Alert(
-                f"No {_lbl} data available{_ticker_part}. "
-                "Try refreshing the stock or selecting "
-                "a different filter.",
-                color="info",
-                className="text-center mt-3",
+            return (
+                _empty_fig,
+                dbc.Alert(
+                    f"No {_lbl} data"
+                    f" available{_ticker_part}. "
+                    "Try refreshing the stock or"
+                    " selecting a different filter.",
+                    color="info",
+                    className="text-center mt-3",
+                ),
+                "",
+                1,
             )
 
         # Build a display column: "Q4 FY25" or "FY25"
@@ -1527,6 +1619,17 @@ def register(app) -> None:
 
         _num_keys = set(_scale_cols) | {"eps_diluted"}
 
+        # Pagination
+        page_size = int(page_size_str or 10)
+        page = page or 1
+        total = len(show_df)
+        max_pages = max(1, -(-total // page_size))
+        page = min(page, max_pages)
+        show_df = show_df.iloc[
+            (page - 1) * page_size : page * page_size
+        ].reset_index(drop=True)
+        count_text = f"{total} row{'s' if total != 1 else ''}"
+
         rows_html = []
         for rec in show_df.to_dict("records"):
             cells = []
@@ -1560,7 +1663,7 @@ def register(app) -> None:
             className="mt-2",
         )
 
-        return fig, table
+        return fig, table, count_text, max_pages
 
     # ── Sort-header callbacks + pagination resets ──────────
     for _tid in (
@@ -1608,3 +1711,52 @@ def register(app) -> None:
     def _reset_risk_page_on_sort(_s):
         """Reset risk to page 1 on sort change."""
         return 1
+
+    @app.callback(
+        Output("quarterly-pagination", "active_page"),
+        Input("quarterly-sort-store", "data"),
+        prevent_initial_call=True,
+    )
+    def _reset_quarterly_page_on_sort(_s):
+        """Reset quarterly to page 1 on sort change."""
+        return 1
+
+    # ── Filter insight dropdowns by user tickers ──────
+    @app.callback(
+        Output("targets-ticker-dropdown", "options"),
+        Output("dividends-ticker-dropdown", "options"),
+        Output("quarterly-ticker-filter", "options"),
+        Input("insights-tabs", "active_tab"),
+        State("auth-token-store", "data"),
+    )
+    def filter_insights_dropdowns(active_tab, token):
+        """Update ticker dropdowns on insights page.
+
+        Adds an ``"all"`` option plus the user's linked
+        tickers so that only watchlist tickers appear.
+
+        Args:
+            active_tab: Currently active Insights tab.
+            token: JWT access token.
+
+        Returns:
+            Tuple of (targets options, dividends options,
+            quarterly options).
+        """
+        repo = _get_iceberg_repo()
+        if repo is not None:
+            reg = _get_registry_cached(repo)
+            all_tickers = sorted(reg.keys())
+        else:
+            all_tickers = []
+
+        ut = _fetch_user_tickers(token)
+        if ut is not None:
+            tickers = [t for t in all_tickers if t in ut]
+        else:
+            tickers = all_tickers
+
+        opts = [{"label": "All", "value": "all"}] + [
+            {"label": t, "value": t} for t in tickers
+        ]
+        return opts, opts, opts

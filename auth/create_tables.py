@@ -1,13 +1,14 @@
 """One-time Iceberg table initialisation for the auth module.
 
-Run this script once to create the ``users`` and ``audit_log`` tables in the
+Run this script once to create the ``users``, ``audit_log``, and
+``user_tickers`` tables in the
 local SqlCatalog-backed Iceberg warehouse.  The script is idempotent — if the
 tables already exist it exits without error.
 
 Usage::
 
     cd ai-agent-ui
-    source backend/demoenv/bin/activate
+    source ~/.ai-agent-ui/venv/bin/activate
     python auth/create_tables.py
 
 The Iceberg catalog is configured via ``.pyiceberg.yaml`` in the project root
@@ -61,6 +62,7 @@ logger = logging.getLogger(__name__)
 _NAMESPACE = "auth"
 _USERS_TABLE = f"{_NAMESPACE}.users"
 _AUDIT_LOG_TABLE = f"{_NAMESPACE}.audit_log"
+_USER_TICKERS_TABLE = f"{_NAMESPACE}.user_tickers"
 
 
 def _get_catalog() -> SqlCatalog:
@@ -223,8 +225,45 @@ def _audit_log_schema() -> Schema:
     )
 
 
+def _user_tickers_schema() -> Schema:
+    """Return the Iceberg schema for ``user_tickers``.
+
+    Returns:
+        Schema: An Iceberg :class:`~pyiceberg.schema.Schema`
+            linking users to tracked tickers.
+    """
+    return Schema(
+        NestedField(
+            field_id=1,
+            name="user_id",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=2,
+            name="ticker",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=3,
+            name="linked_at",
+            field_type=TimestampType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=4,
+            name="source",
+            field_type=StringType(),
+            required=True,
+        ),
+    )
+
+
 def create_tables() -> None:
-    """Create the ``users`` and ``audit_log`` Iceberg tables.
+    """Create auth Iceberg tables.
+
+    Creates ``users``, ``audit_log``, and ``user_tickers``.
 
     This function is idempotent — calling it on an already‑initialised catalog
     simply logs a message and returns.  It creates the ``auth`` namespace if it
@@ -265,6 +304,22 @@ def create_tables() -> None:
         logger.info("Created Iceberg table '%s'.", _AUDIT_LOG_TABLE)
     except Exception:
         logger.info("Table '%s' already exists — skipping.", _AUDIT_LOG_TABLE)
+
+    # Create user_tickers table
+    try:
+        catalog.create_table(
+            identifier=_USER_TICKERS_TABLE,
+            schema=_user_tickers_schema(),
+        )
+        logger.info(
+            "Created Iceberg table '%s'.",
+            _USER_TICKERS_TABLE,
+        )
+    except Exception:
+        logger.info(
+            "Table '%s' already exists — skipping.",
+            _USER_TICKERS_TABLE,
+        )
 
     logger.info("Iceberg table initialisation complete.")
 

@@ -26,6 +26,7 @@ from dashboard.layouts import (
     forecast_layout,
     home_layout,
     insights_layout,
+    marketplace_layout,
 )
 
 # Module-level logger; intentionally module-scoped
@@ -206,6 +207,8 @@ def build_layout(app: dash.Dash) -> None:
                 )
                 return _admin_forbidden()
             return insights_layout()
+        if pathname == "/marketplace":
+            return marketplace_layout()
         if pathname == "/admin/users":
             if role != "superuser" and not perms.get("admin"):
                 _logger.warning(

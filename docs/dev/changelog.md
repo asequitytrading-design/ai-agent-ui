@@ -4,6 +4,44 @@ Session-by-session record of what was built, changed, and fixed.
 
 ---
 
+## Mar 7, 2026 — 5-Epic feature sprint
+
+### Epic 1: Admin Password Reset
+
+New superuser-only endpoint `POST /users/{user_id}/reset-password` with dashboard modal integration. Pattern-match "Reset Pwd" button on each row of the admin users table. Audit-logged as `ADMIN_PASSWORD_RESET`.
+
+### Epic 2: Smart Data Freshness Gates
+
+- **Analysis**: Iceberg `analysis_date == today` check — skips re-analysis if already done today
+- **Forecast**: 7-day cooldown — skips if `run_date` within last 7 days
+- Both gates are non-blocking (wrapped in try/except, fall through on error)
+
+### Epic 3: Virtualenv Relocation
+
+Moved Python virtualenv from `backend/demoenv` (inside project tree) to `~/.ai-agent-ui/venv` (outside). Prevents linter tools from rewriting site-packages. `setup.sh` auto-migrates with symlink for backwards compat. Updated: `run.sh`, hooks, CI, `pyproject.toml`, `.flake8`, all docs.
+
+### Epic 4: Per-User Ticker Linking
+
+New `auth.user_tickers` Iceberg table linking users to their tracked tickers.
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/users/me/tickers` | GET | List user's linked tickers |
+| `/users/me/tickers` | POST | Link a ticker (validated) |
+| `/users/me/tickers/{ticker}` | DELETE | Unlink a ticker |
+
+Auto-linking: stock tools (`fetch_stock_data`, `analyse_stock_price`, `forecast_stock`) auto-link tickers to the requesting user via thread-local tracking. Default ticker (RELIANCE.NS) linked on user creation.
+
+Dashboard home page now filters stock cards by user's linked tickers (dropdown still shows all).
+
+### Epic 5: Ticker Marketplace
+
+New dashboard page at `/marketplace` listing all available tickers from the central registry. Users can Add/Remove tickers from their watchlist with pattern-match buttons. Search filtering, market indicators, and company names displayed.
+
+### Tests (+19 new → 255 total)
+
+---
+
 ## Mar 7, 2026 — RSI/MACD tooltips + input validation hardening
 
 ### Feature: Dashboard Tooltips

@@ -78,6 +78,9 @@ def fetch_stock_data(ticker: str, period: str = "10y") -> str:
     if err:
         return f"Error: {err}"
     ticker = ticker.upper().strip()
+    from tools._ticker_linker import auto_link_ticker
+
+    auto_link_ticker(ticker)
     _logger.info(
         "fetch_stock_data | ticker=%s | period=%s",
         ticker,

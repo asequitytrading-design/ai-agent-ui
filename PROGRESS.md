@@ -2,6 +2,57 @@
 
 ---
 
+# Session: Mar 7, 2026 — 5-Epic feature sprint (Epics 1–5)
+
+## Summary
+Implemented all 5 epics from the feature plan: admin password reset,
+smart data freshness gates, virtualenv relocation, per-user ticker
+linking, and the ticker marketplace dashboard page.
+
+### Epic 1: Admin Password Reset
+- `POST /users/{user_id}/reset-password` — superuser-only endpoint
+- Dashboard modal with password validation (min 8 chars, 1 digit)
+- Pattern-match "Reset Pwd" button per user row in admin table
+- Audit logging: `ADMIN_PASSWORD_RESET` event with actor/target
+
+### Epic 2: Smart Data Freshness
+- Analysis freshness gate: skip re-analysis if done today (Iceberg check)
+- Forecast 7-day cooldown: skip re-forecast within 7 days of last run
+- Both gates wrapped in try/except — never block fallback to full run
+- Same-day file cache still active alongside Iceberg freshness
+
+### Epic 3: Virtualenv Relocation
+- Moved venv from `backend/demoenv` → `~/.ai-agent-ui/venv`
+- `setup.sh`: auto-migrates (mv + symlink) on upgrade
+- `run.sh`, hooks: probe new path first, fall back to old
+- Updated: pyproject.toml, .flake8, CI workflow, all docs
+- Prevents linter corruption of site-packages (root cause of
+  circular import issues)
+
+### Epic 4: Per-User Ticker Linking
+- New Iceberg table: `auth.user_tickers` (user_id, ticker, linked_at, source)
+- API: `GET/POST/DELETE /users/me/tickers`
+- Auto-link on chat: `_ticker_linker.py` — thread-local user tracking
+- Default ticker: RELIANCE.NS linked on user creation
+- Dashboard home filters cards by user's linked tickers
+- 13 new tests in `test_ticker_api.py`
+
+### Epic 5: Ticker Marketplace Page
+- New dashboard page at `/marketplace`
+- Lists ALL tickers from central registry
+- Add/Remove buttons per row (pattern-match callbacks)
+- Search filtering, market column, company names
+- Nav link added between Insights and Admin
+
+### Tests: 255 total (+19 new, all passing)
+- `test_auth_api.py`: 5 admin password reset tests
+- `test_stock_tools.py`: 3 freshness gate tests
+- `test_ticker_api.py`: 13 ticker endpoint tests (new file)
+
+### Files changed: 40+ modified, 5 new files created
+
+---
+
 # Session: Mar 7, 2026 — RSI/MACD tooltips + input validation hardening
 
 ## Summary

@@ -21,6 +21,7 @@ import plotly.graph_objects as go
 from dash import Input, Output, State, html, no_update
 
 from dashboard.callbacks.auth_utils import (
+    _fetch_user_tickers,
     _unauth_notice,
     _validate_token,
 )
@@ -87,6 +88,32 @@ def register(app) -> None:
             return stored_ticker
         tickers = sorted(_load_reg_cb().keys())
         return tickers[0] if tickers else no_update
+
+    @app.callback(
+        Output("analysis-ticker-dropdown", "options"),
+        Output("compare-ticker-dropdown", "options"),
+        Input("url", "pathname"),
+        State("auth-token-store", "data"),
+    )
+    def filter_ticker_dropdowns(pathname, token):
+        """Update analysis + compare dropdowns to user tickers.
+
+        Args:
+            pathname: Current URL path.
+            token: JWT access token.
+
+        Returns:
+            Tuple of (analysis options, compare options).
+        """
+        registry = _load_reg_cb()
+        all_tickers = sorted(registry.keys())
+        ut = _fetch_user_tickers(token)
+        if ut is not None:
+            tickers = [t for t in all_tickers if t in ut]
+        else:
+            tickers = all_tickers
+        opts = [{"label": t, "value": t} for t in tickers]
+        return opts, opts
 
     @app.callback(
         [

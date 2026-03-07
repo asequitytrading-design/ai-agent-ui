@@ -20,6 +20,7 @@ Typical usage (via LangChain tool call)::
 """
 
 import logging
+from datetime import date
 
 import tools._analysis_shared as _sh
 from langchain_core.tools import tool
@@ -74,6 +75,9 @@ def analyse_stock_price(ticker: str) -> str:
     if err:
         return f"Error: {err}"
     ticker = ticker.upper().strip()
+    from tools._ticker_linker import auto_link_ticker
+
+    auto_link_ticker(ticker)
     _logger.info(
         "analyse_stock_price | ticker=%s",
         ticker,
@@ -84,6 +88,36 @@ def analyse_stock_price(ticker: str) -> str:
     if cached:
         _logger.info("Returning cached analysis for %s", ticker)
         return cached
+
+    # Iceberg freshness gate: if another user (or session)
+    # already analysed this ticker today, return that result
+    # from the file cache it would have written.  We only
+    # need to check the Iceberg analysis_date; the file cache
+    # is always written alongside the Iceberg insert.
+    try:
+        repo_check = _sh._get_repo()
+        if repo_check is not None:
+            latest = repo_check.get_latest_analysis_summary(ticker)
+            if latest is not None:
+                ad = latest.get("analysis_date")
+                if ad is not None:
+                    if hasattr(ad, "date"):
+                        ad = ad.date()
+                    if ad == date.today():
+                        _logger.info(
+                            "Analysis already done today"
+                            " for %s (Iceberg), skipping",
+                            ticker,
+                        )
+                        return (
+                            f"Analysis for {ticker} is "
+                            f"already up-to-date (run "
+                            f"today). Use load_stock_data "
+                            f"or the dashboard to view "
+                            f"results."
+                        )
+    except Exception:
+        pass  # non-critical; fall through to full analysis
 
     try:
         df = _sh._load_parquet(ticker)

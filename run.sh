@@ -15,8 +15,18 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="${HOME}/.ai-agent-ui/logs"
-PYTHON="${SCRIPT_DIR}/backend/demoenv/bin/python"
-MKDOCS="${SCRIPT_DIR}/backend/demoenv/bin/mkdocs"
+_VENV_HOME="${AI_AGENT_UI_HOME:-${HOME}/.ai-agent-ui}/venv"
+# Backwards compat: fall back to old project-local venv
+if [[ -x "${_VENV_HOME}/bin/python" ]]; then
+    PYTHON="${_VENV_HOME}/bin/python"
+    MKDOCS="${_VENV_HOME}/bin/mkdocs"
+elif [[ -x "${SCRIPT_DIR}/backend/demoenv/bin/python" ]]; then
+    PYTHON="${SCRIPT_DIR}/backend/demoenv/bin/python"
+    MKDOCS="${SCRIPT_DIR}/backend/demoenv/bin/mkdocs"
+else
+    PYTHON="${_VENV_HOME}/bin/python"
+    MKDOCS="${_VENV_HOME}/bin/mkdocs"
+fi
 NPM="$(command -v npm 2>/dev/null || echo 'npm')"
 
 BACKEND_PORT=8181

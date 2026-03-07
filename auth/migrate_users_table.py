@@ -7,7 +7,7 @@ already exist are skipped without error.
 Usage::
 
     cd ai-agent-ui
-    source backend/demoenv/bin/activate
+    source ~/.ai-agent-ui/venv/bin/activate
     python auth/migrate_users_table.py
 
 New columns added

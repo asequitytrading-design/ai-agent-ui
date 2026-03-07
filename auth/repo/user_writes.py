@@ -85,6 +85,32 @@ def create(cat, user_data: Dict[str, Any]) -> Dict[str, Any]:
         "Created user user_id=%s email=%s", row["user_id"], row["email"]
     )
 
+    # Auto-link the default ticker for new users
+    try:
+        from auth.repo.catalog import user_tickers_table
+        from auth.repo.schemas import _USER_TICKERS_PA_SCHEMA
+
+        _default_ticker = "RELIANCE.NS"
+        link_row = {
+            "user_id": row["user_id"],
+            "ticker": _default_ticker,
+            "linked_at": _to_ts(now),
+            "source": "default",
+        }
+        link_arrow = pa.table(
+            {k: [v] for k, v in link_row.items()},
+            schema=_USER_TICKERS_PA_SCHEMA,
+        )
+        ut_tbl = user_tickers_table(cat)
+        ut_tbl.append(link_arrow)
+        _logger.info(
+            "Linked default ticker %s to user %s",
+            _default_ticker,
+            row["user_id"],
+        )
+    except Exception as exc:
+        _logger.debug("Default ticker link skipped: %s", exc)
+
     stored = dict(row)
     for ts_col in _USER_TS_COLS:
         stored[ts_col] = _from_ts(stored[ts_col])

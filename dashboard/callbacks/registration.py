@@ -18,6 +18,7 @@ from dashboard.callbacks.analysis_cbs import register as _reg_analysis
 from dashboard.callbacks.forecast_cbs import register as _reg_forecast
 from dashboard.callbacks.home_cbs import register as _reg_home
 from dashboard.callbacks.insights_cbs import register as _reg_insights
+from dashboard.callbacks.marketplace_cbs import register as _reg_marketplace
 from dashboard.callbacks.profile_cbs import register as _reg_profile
 from dashboard.callbacks.routing_cbs import register as _reg_routing
 
@@ -63,5 +64,8 @@ def register_callbacks(app) -> None:
 
     _logger.debug("Registering insights callbacks.")
     _reg_insights(app)
+
+    _logger.debug("Registering marketplace callbacks.")
+    _reg_marketplace(app)
 
     _logger.info("All callbacks registered successfully.")

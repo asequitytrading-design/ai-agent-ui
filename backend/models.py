@@ -19,11 +19,17 @@ class ChatRequest(BaseModel):
             (``"user"`` or ``"assistant"``) and ``"content"``.
         agent_id: ID of the agent that should handle the
             request.
+        user_id: Optional authenticated user UUID for
+            auto-linking tickers analysed during the chat.
     """
 
     message: str = Field(..., min_length=1, max_length=10_000)
     history: list = []
     agent_id: str = Field("general", max_length=50, pattern=r"^[a-z_]+$")
+    user_id: str | None = Field(
+        default=None,
+        description=("Authenticated user's ID for ticker linking."),
+    )
 
 
 class ChatResponse(BaseModel):

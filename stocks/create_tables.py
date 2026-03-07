@@ -7,7 +7,7 @@ if tables already exist it exits without error.
 Usage::
 
     cd ai-agent-ui
-    source backend/demoenv/bin/activate
+    source ~/.ai-agent-ui/venv/bin/activate
     python stocks/create_tables.py
 
 The catalog is configured via ``.pyiceberg.yaml`` in the project root.

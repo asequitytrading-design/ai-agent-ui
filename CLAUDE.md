@@ -19,10 +19,10 @@ Fullstack agentic chat app with stock analysis and Prophet forecasting.
 ```bash
 ./run.sh start                              # all services
 ./run.sh status                             # health check
-source backend/demoenv/bin/activate         # Python virtualenv
+source ~/.ai-agent-ui/venv/bin/activate      # Python virtualenv
 ```
 
-**Key directories**: `backend/` (agents, tools, config), `auth/` (JWT + RBAC + OAuth PKCE), `stocks/` (Iceberg persistence — 8 tables, single source of truth), `frontend/` (SPA), `dashboard/` (Dash + services), `hooks/` (pre-commit, pre-push).
+**Key directories**: `backend/` (agents, tools, config), `auth/` (JWT + RBAC + OAuth PKCE + user-ticker linking), `stocks/` (Iceberg persistence — 9 tables, single source of truth), `frontend/` (SPA), `dashboard/` (Dash + services, incl. Marketplace page), `hooks/` (pre-commit, pre-push).
 
 **Config files**: `pyproject.toml` (black + isort, 79 chars), `.flake8` (flake8, 79 chars), `frontend/eslint.config.mjs`.
 
@@ -43,6 +43,8 @@ source backend/demoenv/bin/activate         # Python virtualenv
 - **Same-day cache**: `~/.ai-agent-ui/data/cache/{TICKER}_{key}_{YYYY-MM-DD}.txt` — repeat tool calls return instantly.
 - **Centralised paths**: `backend/paths.py` — single source of truth for all filesystem locations. Override root with `AI_AGENT_UI_HOME` env var.
 - **Tool registration order**: `search_market_news` registered _after_ GeneralAgent, _before_ StockAgent.
+- **Ticker auto-linking**: `tools/_ticker_linker.py` uses `threading.local()` to pass `user_id` from HTTP handler into `@tool` functions. Stock tools call `auto_link_ticker(ticker)` to link tickers to the requesting user (fire-and-forget, never fails the tool).
+- **Freshness gates**: Analysis skips if done today (Iceberg check); forecast skips if run within 7 days. Both non-blocking (try/except fallthrough).
 
 ### Iceberg (single source of truth)
 
@@ -471,7 +473,7 @@ except Exception as exc:
 
 ### Python (backend)
 
-- **Virtualenv**: `backend/demoenv` (Python 3.12.9). Activate with `source backend/demoenv/bin/activate`.
+- **Virtualenv**: `~/.ai-agent-ui/venv` (Python 3.12.9). Activate with `source ~/.ai-agent-ui/venv/bin/activate`. Legacy: `backend/demoenv` symlink for backwards compat.
 - **Installing new packages**: `pip install <package>` inside the virtualenv, then update `requirements.txt` or `setup.sh` accordingly.
 - **Version pinning**: Pin major versions in `setup.sh` for stability. Use `pip show <package>` to verify installed version.
 - **Upgrade protocol**: Test in feature branch -> verify all 133+ tests pass -> verify lint clean -> PR to dev.

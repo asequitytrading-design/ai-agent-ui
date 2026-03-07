@@ -118,7 +118,18 @@ def _build_users_table(
                             style={"fontSize": "0.75rem"},
                         ),
                         dbc.Button(
-                            "Deactivate" if is_active else "Reactivate",
+                            "Reset Pwd",
+                            id={
+                                "type": "reset-pw-btn",
+                                "index": user["user_id"],
+                            },
+                            size="sm",
+                            color="outline-warning",
+                            className="me-1 py-0 px-2",
+                            style={"fontSize": "0.75rem"},
+                        ),
+                        dbc.Button(
+                            ("Deactivate" if is_active else "Reactivate"),
                             id={
                                 "type": "toggle-user-btn",
                                 "index": user["user_id"],

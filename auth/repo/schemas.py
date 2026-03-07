@@ -1,8 +1,9 @@
 """PyArrow schemas and timestamp helpers for auth Iceberg tables.
 
-Defines the immutable schema constants used when reading from and writing to
-the ``auth.users`` and ``auth.audit_log`` Iceberg tables, plus helper
-functions for datetime normalisation.
+Defines the immutable schema constants used when reading from and
+writing to the ``auth.users``, ``auth.audit_log``, and
+``auth.user_tickers`` Iceberg tables, plus helper functions for
+datetime normalisation.
 
 Constants
 ---------
@@ -11,6 +12,8 @@ Constants
 - :data:`_USERS_PA_SCHEMA`
 - :data:`_AUDIT_PA_SCHEMA`
 - :data:`_USER_TS_COLS`
+- :data:`_USER_TICKERS_TABLE`
+- :data:`_USER_TICKERS_PA_SCHEMA`
 """
 
 import logging
@@ -28,6 +31,7 @@ logger = logging.getLogger(__name__)
 _NAMESPACE = "auth"
 _USERS_TABLE = f"{_NAMESPACE}.users"
 _AUDIT_LOG_TABLE = f"{_NAMESPACE}.audit_log"
+_USER_TICKERS_TABLE = f"{_NAMESPACE}.user_tickers"
 
 # pa.timestamp("us") matches PyIceberg TimestampType (microseconds, no tz).
 # _TS is an immutable constant; kept module-level as a shared type reference.
@@ -65,6 +69,17 @@ _AUDIT_PA_SCHEMA = pa.schema(
         pa.field("target_user_id", pa.string(), nullable=False),
         pa.field("event_timestamp", _TS, nullable=False),
         pa.field("metadata", pa.string(), nullable=True),
+    ]
+)
+
+# _USER_TICKERS_PA_SCHEMA is an immutable constant; kept
+# module-level as a shared schema reference.
+_USER_TICKERS_PA_SCHEMA = pa.schema(
+    [
+        pa.field("user_id", pa.string(), nullable=False),
+        pa.field("ticker", pa.string(), nullable=False),
+        pa.field("linked_at", _TS, nullable=False),
+        pa.field("source", pa.string(), nullable=False),
     ]
 )
 

@@ -49,6 +49,13 @@ NAVBAR = dbc.Navbar(
                     ),
                     dbc.NavItem(
                         dbc.NavLink(
+                            "Marketplace",
+                            href="/marketplace",
+                            className="nav-link-custom",
+                        ),
+                    ),
+                    dbc.NavItem(
+                        dbc.NavLink(
                             "Admin",
                             href="/admin/users",
                             className="nav-link-custom",

@@ -17,7 +17,11 @@ from urllib.parse import parse_qs
 import pandas as pd
 from dash import Input, Output, State, html, no_update
 
-from dashboard.callbacks.auth_utils import _unauth_notice, _validate_token
+from dashboard.callbacks.auth_utils import (
+    _fetch_user_tickers,
+    _unauth_notice,
+    _validate_token,
+)
 from dashboard.callbacks.card_builders import (
     _build_accuracy_row,
     _build_target_cards,
@@ -29,6 +33,7 @@ from dashboard.callbacks.data_loaders import (
     _clear_indicator_cache,
     _load_forecast,
     _load_raw,
+    _load_reg_cb,
 )
 from dashboard.callbacks.iceberg import clear_caches
 from dashboard.services.stock_refresh import run_full_refresh
@@ -74,6 +79,30 @@ def register(app) -> None:
         if stored_ticker:
             return stored_ticker
         return no_update
+
+    @app.callback(
+        Output("forecast-ticker-dropdown", "options"),
+        Input("url", "pathname"),
+        State("auth-token-store", "data"),
+    )
+    def filter_forecast_dropdown(pathname, token):
+        """Update forecast dropdown to user tickers.
+
+        Args:
+            pathname: Current URL path.
+            token: JWT access token.
+
+        Returns:
+            List of dropdown option dicts.
+        """
+        registry = _load_reg_cb()
+        all_tickers = sorted(registry.keys())
+        ut = _fetch_user_tickers(token)
+        if ut is not None:
+            tickers = [t for t in all_tickers if t in ut]
+        else:
+            tickers = all_tickers
+        return [{"label": t, "value": t} for t in tickers]
 
     @app.callback(
         [

@@ -11,7 +11,7 @@ The AI Stock Analysis Dashboard is a multi-page interactive web app built with [
 ./run.sh start
 
 # Dashboard only:
-source backend/demoenv/bin/activate
+source ~/.ai-agent-ui/venv/bin/activate
 python dashboard/app.py
 ```
 
@@ -162,6 +162,14 @@ Side-by-side comparison of 2–5 stocks.
 | Sentiment | Bullish / Neutral / Bearish |
 
 **Returns correlation heatmap** — RdBu diverging colour scale, values annotated in each cell.
+
+---
+
+### Marketplace `/marketplace`
+
+Browse all available tickers from the central registry and manage your watchlist. Each row shows the ticker symbol, company name, market, and last update date. Use the **Add** button to link a ticker to your account or **Remove** to unlink it. A search bar filters the table in real time.
+
+Tickers you add here (or via the chat server) appear on your Home page as stock cards.
 
 ---
 
@@ -316,6 +324,6 @@ def _api_call(method, path, token, json_body=None):
 The `server` attribute in `app.py` exposes the underlying Flask WSGI object:
 
 ```bash
-source backend/demoenv/bin/activate
+source ~/.ai-agent-ui/venv/bin/activate
 gunicorn "dashboard.app:server" --bind 0.0.0.0:8050 --workers 2
 ```

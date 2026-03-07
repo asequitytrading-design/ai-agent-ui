@@ -6,7 +6,7 @@ the script exits with a success message and makes no changes.
 
 Usage::
 
-    # from the project root, with demoenv activated:
+    # from the project root, with venv activated:
     python scripts/seed_admin.py
 
 Required environment variables (or set in .env at the project root or

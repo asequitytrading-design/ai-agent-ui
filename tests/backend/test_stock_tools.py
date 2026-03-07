@@ -79,6 +79,8 @@ def _mock_repo():
     repo.insert_analysis_summary.return_value = None
     repo.insert_forecast_run.return_value = None
     repo.insert_forecast_series.return_value = None
+    repo.get_latest_analysis_summary.return_value = None
+    repo.get_latest_forecast_run.return_value = None
     return repo
 
 
@@ -401,6 +403,7 @@ class TestAnalyseStockPrice:
         repo = _mock_repo()
         repo.get_ohlcv.return_value = pd.DataFrame()
 
+        monkeypatch.setattr(_ash, "_get_repo", lambda: repo)
         monkeypatch.setattr(_ash, "_require_repo", lambda: repo)
         monkeypatch.setattr(_ash, "_CACHE_DIR", tmp_path / "cache")
 
@@ -422,6 +425,7 @@ class TestAnalyseStockPrice:
         repo = _mock_repo()
         repo.get_ohlcv.return_value = _make_iceberg_ohlcv(300, "AAPL")
 
+        monkeypatch.setattr(_ash, "_get_repo", lambda: repo)
         monkeypatch.setattr(_ash, "_require_repo", lambda: repo)
         monkeypatch.setattr(_ash, "_CACHE_DIR", tmp_path / "cache")
         monkeypatch.setattr(_ash, "_CHARTS_ANALYSIS", tmp_path / "charts")
@@ -448,6 +452,7 @@ class TestAnalyseStockPrice:
             "Iceberg write failed"
         )
 
+        monkeypatch.setattr(_ash, "_get_repo", lambda: repo)
         monkeypatch.setattr(_ash, "_require_repo", lambda: repo)
         monkeypatch.setattr(_ash, "_CACHE_DIR", tmp_path / "cache")
         monkeypatch.setattr(_ash, "_CHARTS_ANALYSIS", tmp_path / "charts")
@@ -457,6 +462,26 @@ class TestAnalyseStockPrice:
         )
         assert isinstance(result, str)
         assert "Error" in result
+
+    def test_analysis_freshness_gate_today(self, tmp_path, monkeypatch):
+        """If analysis was done today, tool returns early."""
+        import tools._analysis_shared as _ash
+        from tools import price_analysis_tool
+
+        repo = _mock_repo()
+        repo.get_latest_analysis_summary.return_value = {
+            "analysis_date": date.today(),
+        }
+
+        monkeypatch.setattr(_ash, "_get_repo", lambda: repo)
+        monkeypatch.setattr(_ash, "_require_repo", lambda: repo)
+        monkeypatch.setattr(_ash, "_CACHE_DIR", tmp_path / "cache")
+
+        result = price_analysis_tool.analyse_stock_price.invoke(
+            {"ticker": "AAPL"}
+        )
+        assert "already up-to-date" in result
+        repo.upsert_technical_indicators.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -475,6 +500,7 @@ class TestForecastStock:
         repo = _mock_repo()
         repo.get_ohlcv.return_value = pd.DataFrame()
 
+        monkeypatch.setattr(_fsh, "_get_repo", lambda: repo)
         monkeypatch.setattr(_fsh, "_require_repo", lambda: repo)
         monkeypatch.setattr(_fsh, "_CACHE_DIR", tmp_path / "cache")
 
@@ -496,6 +522,7 @@ class TestForecastStock:
         repo = _mock_repo()
         repo.get_ohlcv.return_value = _make_iceberg_ohlcv(600, "AAPL")
 
+        monkeypatch.setattr(_fsh, "_get_repo", lambda: repo)
         monkeypatch.setattr(_fsh, "_require_repo", lambda: repo)
         monkeypatch.setattr(_fsh, "_DATA_FORECASTS", tmp_path / "forecasts")
         monkeypatch.setattr(_fsh, "_CACHE_DIR", tmp_path / "cache")
@@ -520,6 +547,7 @@ class TestForecastStock:
             "Iceberg write failed"
         )
 
+        monkeypatch.setattr(_fsh, "_get_repo", lambda: repo)
         monkeypatch.setattr(_fsh, "_require_repo", lambda: repo)
         monkeypatch.setattr(_fsh, "_DATA_FORECASTS", tmp_path / "forecasts")
         monkeypatch.setattr(_fsh, "_CACHE_DIR", tmp_path / "cache")
@@ -530,3 +558,50 @@ class TestForecastStock:
         )
         assert isinstance(result, str)
         assert "Error" in result
+
+    def test_forecast_7day_cooldown(self, tmp_path, monkeypatch):
+        """If forecast was run within 7 days, tool returns early."""
+        from datetime import timedelta
+
+        import tools._forecast_shared as _fsh
+        from tools import forecasting_tool
+
+        repo = _mock_repo()
+        repo.get_latest_forecast_run.return_value = {
+            "run_date": date.today() - timedelta(days=3),
+        }
+
+        monkeypatch.setattr(_fsh, "_get_repo", lambda: repo)
+        monkeypatch.setattr(_fsh, "_require_repo", lambda: repo)
+        monkeypatch.setattr(_fsh, "_CACHE_DIR", tmp_path / "cache")
+
+        result = forecasting_tool.forecast_stock.invoke(
+            {"ticker": "AAPL", "months": 9}
+        )
+        assert "within 7 days" in result
+        repo.insert_forecast_run.assert_not_called()
+
+    def test_forecast_cooldown_expired(self, tmp_path, monkeypatch):
+        """If forecast is older than 7 days, run proceeds."""
+        from datetime import timedelta
+
+        import tools._forecast_shared as _fsh
+        from tools import forecasting_tool
+
+        repo = _mock_repo()
+        repo.get_latest_forecast_run.return_value = {
+            "run_date": date.today() - timedelta(days=10),
+        }
+        repo.get_ohlcv.return_value = _make_iceberg_ohlcv(600, "AAPL")
+
+        monkeypatch.setattr(_fsh, "_get_repo", lambda: repo)
+        monkeypatch.setattr(_fsh, "_require_repo", lambda: repo)
+        monkeypatch.setattr(_fsh, "_CACHE_DIR", tmp_path / "cache")
+        monkeypatch.setattr(_fsh, "_DATA_FORECASTS", tmp_path / "forecasts")
+        monkeypatch.setattr(_fsh, "_CHARTS_FORECASTS", tmp_path / "charts")
+
+        result = forecasting_tool.forecast_stock.invoke(
+            {"ticker": "AAPL", "months": 3}
+        )
+        # Should proceed to run (not blocked by cooldown)
+        assert "within 7 days" not in result

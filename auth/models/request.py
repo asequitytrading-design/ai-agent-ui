@@ -8,6 +8,7 @@ Models
 - :class:`LoginRequest`
 - :class:`UserCreateRequest`
 - :class:`UserUpdateRequest`
+- :class:`AdminPasswordResetBody`
 - :class:`PasswordResetRequestBody`
 - :class:`PasswordResetConfirmBody`
 - :class:`RefreshRequest`
@@ -79,6 +80,18 @@ class ProfileUpdateRequest(BaseModel):
 
     full_name: str | None = Field(None, max_length=200)
     avatar_url: str | None = Field(None, max_length=500)
+
+
+class AdminPasswordResetBody(BaseModel):
+    """Request body for ``POST /users/{user_id}/reset-password``.
+
+    Superuser-only endpoint to set a new password for any user.
+
+    Attributes:
+        new_password: The new plaintext password (min 8 chars).
+    """
+
+    new_password: str = Field(..., min_length=8, max_length=128)
 
 
 class PasswordResetRequestBody(BaseModel):

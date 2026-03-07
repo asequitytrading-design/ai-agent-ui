@@ -69,6 +69,7 @@ from fastapi.responses import StreamingResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from logging_config import setup_logging  # noqa: E402
 from models import ChatRequest, ChatResponse  # noqa: E402
+from tools._ticker_linker import set_current_user  # noqa: E402
 from tools.agent_tool import create_search_market_news_tool  # noqa: E402
 from tools.forecasting_tool import forecast_stock  # noqa: E402
 from tools.price_analysis_tool import analyse_stock_price  # noqa: E402
@@ -87,7 +88,10 @@ from tools.stock_data_tool import (  # noqa: E402
 )
 from tools.time_tool import get_current_time  # noqa: E402
 
-from auth.api import create_auth_router  # noqa: E402
+from auth.api import (  # noqa: E402
+    create_auth_router,
+    get_ticker_router,
+)
 
 # === END STOCK AGENT ROUTING ===
 
@@ -203,6 +207,9 @@ class ChatServer:
         # Auth + user management router (mounts /auth/*, /users/*, /admin/*)
         app.include_router(create_auth_router())
 
+        # User-ticker management router (mounts /users/me/tickers)
+        app.include_router(get_ticker_router())
+
         # Serve uploaded avatars as static files at /avatars/{filename}
         from paths import AVATARS_DIR, ensure_dirs
 
@@ -241,6 +248,7 @@ class ChatServer:
             raise HTTPException(
                 status_code=404, detail=f"Agent '{req.agent_id}' not found"
             )
+        set_current_user(req.user_id)
         try:
             loop = asyncio.get_event_loop()
             future = loop.run_in_executor(
@@ -308,6 +316,7 @@ class ChatServer:
 
             def run() -> None:
                 """Execute ``agent.stream()`` and push events to the queue."""
+                set_current_user(req.user_id)
                 try:
                     for event in agent.stream(req.message, req.history):
                         event_queue.put(event)

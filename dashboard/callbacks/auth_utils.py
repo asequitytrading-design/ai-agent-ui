@@ -207,3 +207,32 @@ def _api_call(
     except Exception as exc:
         logger.error("API call %s %s failed: %s", method.upper(), path, exc)
         return None
+
+
+def _fetch_user_tickers(
+    token: Optional[str],
+) -> set | None:
+    """Fetch the authenticated user's linked tickers.
+
+    Calls ``GET /users/me/tickers`` and returns the set
+    of ticker symbols.  Returns ``None`` when there is
+    no token or the API call fails — callers should fall
+    back to showing all tickers.
+
+    Args:
+        token: JWT access token, or ``None``.
+
+    Returns:
+        Set of ticker strings, or ``None`` on failure.
+    """
+    if not token:
+        return None
+    resp = _api_call("get", "/users/me/tickers", token)
+    if resp is None or not resp.ok:
+        return None
+    data = resp.json()
+    if isinstance(data, list):
+        return set(data)
+    if isinstance(data, dict):
+        return set(data.get("tickers", []))
+    return None

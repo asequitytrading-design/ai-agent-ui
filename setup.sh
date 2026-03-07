@@ -276,9 +276,19 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 4: Create virtualenv
 # ══════════════════════════════════════════════════════════════════════════════
-step "4/11" "Creating Python virtualenv (backend/demoenv)"
+step "4/11" "Creating Python virtualenv (~/.ai-agent-ui/venv)"
 
-VENV_DIR="$SCRIPT_DIR/backend/demoenv"
+VENV_DIR="${APP_DATA_HOME:-$HOME/.ai-agent-ui}/venv"
+
+# Migrate: if old venv exists at backend/demoenv but new one does not,
+# move it and leave a symlink for backwards compatibility.
+OLD_VENV_DIR="$SCRIPT_DIR/backend/demoenv"
+if [[ -d "$OLD_VENV_DIR" ]] && [[ ! -L "$OLD_VENV_DIR" ]] && [[ ! -d "$VENV_DIR" ]]; then
+    info "Migrating virtualenv from backend/demoenv → $VENV_DIR"
+    mv "$OLD_VENV_DIR" "$VENV_DIR"
+    ln -s "$VENV_DIR" "$OLD_VENV_DIR"
+    ok "Virtualenv migrated (symlink left at backend/demoenv)"
+fi
 VENV_PYTHON="$VENV_DIR/bin/python"
 
 if [[ -f "$VENV_PYTHON" ]]; then

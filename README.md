@@ -10,7 +10,7 @@ A fullstack agentic chat application powered by LangChain, FastAPI, and Next.js.
 |---------|-------|------|---------|
 | **Frontend** | Next.js 16 + React 19 + Tailwind 4 | `3000` | Chat UI + SPA shell (login, chat, docs, dashboard, admin) |
 | **Backend** | FastAPI + LangChain + Claude Sonnet 4.6 | `8181` | Agentic loop + REST API + Auth endpoints |
-| **Dashboard** | Plotly Dash + Dash Bootstrap (FLATLY) | `8050` | Stock analysis dashboard (Home / Analysis / Forecast / Compare / 7 Insights tabs) + Admin UI |
+| **Dashboard** | Plotly Dash + Dash Bootstrap (FLATLY) | `8050` | Stock analysis dashboard (Home / Analysis / Forecast / Compare / Marketplace / 7 Insights tabs) + Admin UI |
 | **Docs** | MkDocs Material | `8000` | Project documentation |
 
 ---
@@ -239,14 +239,14 @@ ai-agent-ui/
 │
 ├── auth/                     # Auth package (project root — importable by backend + scripts)
 │   ├── __init__.py
-│   ├── create_tables.py      # One-time Iceberg table init (idempotent)
+│   ├── create_tables.py      # One-time Iceberg table init (incl. user_tickers, idempotent)
 │   ├── migrate_users_table.py # Iceberg schema evolution (add columns)
 │   ├── service.py            # AuthService — bcrypt + JWT lifecycle + deny-list
 │   ├── dependencies.py       # FastAPI dependency functions
 │   ├── oauth_service.py      # Google + Facebook PKCE OAuth2
 │   ├── models/               # Pydantic request/response models (package)
 │   ├── repo/                 # IcebergUserRepository, user writes, OAuth repo (package)
-│   └── endpoints/            # create_auth_router() — 12+ endpoints (package)
+│   └── endpoints/            # Auth + ticker routes — 15+ endpoints (package)
 │
 ├── hooks/
 │   ├── pre-commit            # Bash entry — quality gate on every commit
@@ -307,7 +307,8 @@ ai-agent-ui/
 │       ├── agent_tool.py     # search_market_news (wraps GeneralAgent)
 │       ├── stock_data_tool.py      # 7 Yahoo Finance tools (incl. fetch_quarterly_results)
 │       ├── price_analysis_tool.py  # analyse_stock_price
-│       └── forecasting_tool.py     # forecast_stock (Prophet)
+│       ├── forecasting_tool.py     # forecast_stock (Prophet)
+│       └── _ticker_linker.py      # Auto-link tickers to users from chat
 │
 ├── stocks/                   # Iceberg persistence — single source of truth
 │   ├── create_tables.py      # Idempotent init of 9 tables (called by run.sh)
@@ -323,6 +324,7 @@ ai-agent-ui/
 │   │   ├── analysis.py       # Technical analysis chart layout
 │   │   ├── insights_tabs.py  # Screener/Targets/Dividends/Risk/Sectors/Correlation/Quarterly
 │   │   ├── admin.py          # User management + audit log layout
+│   │   ├── marketplace.py   # Ticker marketplace — browse & add tickers
 │   │   └── navbar.py         # Global navbar
 │   ├── callbacks/            # Interactive callbacks (package)
 │   │   ├── data_loaders.py   # Iceberg reads, indicator caching
@@ -332,6 +334,7 @@ ai-agent-ui/
 │   │   ├── insights_cbs.py   # All Insights tab callbacks
 │   │   ├── admin_cbs.py      # User table callbacks
 │   │   ├── admin_cbs2.py     # Add/Edit/Deactivate user modals
+│   │   ├── marketplace_cbs.py # Marketplace add/remove ticker callbacks
 │   │   ├── iceberg.py        # Iceberg repo singleton + 8 TTL-cached helpers
 │   │   └── utils.py          # Shared utilities (currency, market label)
 │   └── assets/custom.css     # Light theme styles
@@ -344,6 +347,7 @@ ai-agent-ui/
 # ├── data/iceberg/           # Iceberg catalog + warehouse (single source of truth)
 # ├── data/{cache,raw,forecasts,avatars}/  # runtime data
 # ├── charts/{analysis,forecasts}/         # Plotly HTML
+# ├── venv/                                # Python virtualenv (relocated from backend/demoenv)
 # └── logs/                                # rotating service + agent logs
 ```
 

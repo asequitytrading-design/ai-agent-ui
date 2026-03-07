@@ -6,7 +6,7 @@
 
 | Requirement | Version | Notes |
 |-------------|---------|-------|
-| Python | 3.12+ | `demoenv` was created with Python 3.12.9 |
+| Python | 3.12+ | Virtualenv at `~/.ai-agent-ui/venv` (Python 3.12.9) |
 | Node.js | 18+ | Required by Next.js 16 |
 | npm | 9+ | Comes with Node.js |
 | GROQ_API_KEY | — | Get at [console.groq.com](https://console.groq.com) |
@@ -79,10 +79,10 @@ Logs are written to `~/.ai-agent-ui/logs/`:
 
 ```bash
 cd backend
-source demoenv/bin/activate
+source ~/.ai-agent-ui/venv/bin/activate
 ```
 
-You should see `(demoenv)` in your shell prompt.
+You should see `(venv)` in your shell prompt.
 
 ### 2. Set environment variables
 
@@ -191,7 +191,7 @@ INFO  | agent.general | Request end | agent=general | iterations=2
 ## Installing New Python Packages
 
 ```bash
-source backend/demoenv/bin/activate
+source ~/.ai-agent-ui/venv/bin/activate
 pip install <package-name>
 pip freeze > backend/requirements.txt   # update the frozen deps file
 ```
@@ -202,13 +202,12 @@ Always update `requirements.txt` after installing new packages so the file stays
 
 ## Rebuilding the Virtual Environment
 
-If `demoenv/` is missing or corrupted:
+If `~/.ai-agent-ui/venv` is missing or corrupted:
 
 ```bash
-cd backend
-python3.12 -m venv demoenv
-source demoenv/bin/activate
-pip install -r requirements.txt
+python3.12 -m venv ~/.ai-agent-ui/venv
+source ~/.ai-agent-ui/venv/bin/activate
+pip install -r backend/requirements.txt
 ```
 
 ---
@@ -243,7 +242,7 @@ export ANTHROPIC_API_KEY=sk-ant-...
 The dashboard can be started on its own — no API keys required.
 
 ```bash
-source backend/demoenv/bin/activate
+source ~/.ai-agent-ui/venv/bin/activate
 python dashboard/app.py
 # → http://127.0.0.1:8050
 ```
@@ -256,7 +255,7 @@ The Home page will be empty until stock data has been fetched at least once via 
 
 ```bash
 cd ai-agent-ui
-source backend/demoenv/bin/activate   # mkdocs is installed in demoenv
+source ~/.ai-agent-ui/venv/bin/activate
 mkdocs serve                           # → http://127.0.0.1:8000
 ```
 

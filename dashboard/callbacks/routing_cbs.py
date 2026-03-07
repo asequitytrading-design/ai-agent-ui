@@ -28,6 +28,7 @@ _PAGE_NAMES = {
     "/forecast": " → Forecast",
     "/compare": " → Compare Stocks",
     "/insights": " → Insights",
+    "/marketplace": " → Marketplace",
     "/admin/users": " → Admin",
 }
 

@@ -9,6 +9,7 @@ are re-exported from this package so callers can continue using::
 import logging
 
 from auth.models.request import (  # noqa: F401
+    AdminPasswordResetBody,
     LoginRequest,
     LogoutRequest,
     OAuthCallbackRequest,
@@ -32,6 +33,7 @@ logger = logging.getLogger(__name__)
 # Module-level export list — kept at module scope
 # as required by Python's import machinery.
 _all_exports = [
+    "AdminPasswordResetBody",
     "LoginRequest",
     "LogoutRequest",
     "OAuthCallbackRequest",
