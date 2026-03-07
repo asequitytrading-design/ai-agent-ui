@@ -27,9 +27,9 @@ from tools._stock_registry import (
     _load_registry,
     _update_registry,
 )
+from tools._stock_shared import _get_repo  # noqa: F401 patched by tests
 from tools._stock_shared import (  # noqa: F401
     _currency_symbol,
-    _get_repo,  # patched by tests
     _load_currency,
     _parquet_path,
     _require_repo,
