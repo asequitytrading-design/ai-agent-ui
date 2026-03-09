@@ -18,13 +18,13 @@ const FRONTEND =
 const AUTH_DIR = path.join(__dirname, "..", ".auth");
 
 const USER_EMAIL =
-  process.env.TEST_USER_EMAIL || "test@example.com";
+  process.env.TEST_USER_EMAIL || "test@demo.com";
 const USER_PASSWORD =
-  process.env.TEST_USER_PASSWORD || "TestPassword123!";
+  process.env.TEST_USER_PASSWORD || "Test1234!";
 const ADMIN_EMAIL =
-  process.env.TEST_ADMIN_EMAIL || "admin@example.com";
+  process.env.TEST_ADMIN_EMAIL || "admin@demo.com";
 const ADMIN_PASSWORD =
-  process.env.TEST_ADMIN_PASSWORD || "AdminPassword123!";
+  process.env.TEST_ADMIN_PASSWORD || "Admin123!";
 
 function writeStorageState(
   filename: string,
