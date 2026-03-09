@@ -254,6 +254,9 @@ def register(app) -> None:
             Tuple of (status icon, counter,
             accuracy-row, overlay).
         """
+        if not n_clicks:
+            return no_update, no_update, no_update, no_update
+
         if _validate_token(token) is None:
             return (
                 _unauth_notice(),
