@@ -82,7 +82,10 @@ def stream(
                 {"type": "thinking", "iteration": iteration}
             ) + "\n"
 
-            response = agent.llm_with_tools.invoke(messages)
+            response = agent.llm_with_tools.invoke(
+                messages,
+                iteration=iteration,
+            )
             messages.append(response)
 
             if not response.tool_calls:

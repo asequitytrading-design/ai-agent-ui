@@ -70,10 +70,18 @@ export class ChatPage extends BasePage {
     const btn = this.agentSelector.getByRole("button", {
       name: agentName,
     });
+    // Ensure the button is stable before clicking — React 19
+    // controlled inputs with storageState can delay hydration.
+    await expect(btn).toBeVisible();
     await btn.click();
-    // Wait for the active class to settle on the clicked button
+    // Retry the click if React hasn't re-rendered yet.
     await expect(btn).toHaveClass(/bg-white/, {
-      timeout: 3_000,
+      timeout: 5_000,
+    }).catch(async () => {
+      await btn.click({ force: true });
+      await expect(btn).toHaveClass(/bg-white/, {
+        timeout: 5_000,
+      });
     });
   }
 

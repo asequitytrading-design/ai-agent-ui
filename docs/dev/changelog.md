@@ -4,6 +4,58 @@ Session-by-session record of what was built, changed, and fixed.
 
 ---
 
+## Mar 9, 2026 — Seed fixes, profile NaN fix, backfill script, Groq chunking strategy
+
+### Bug Fixes
+
+- **seed_demo_data.py**: Fixed 4 bugs — OHLCV column casing (lowercase → uppercase for `insert_ohlcv`), `insert_forecast_run` missing `horizon_months` arg, `insert_forecast_series` needs `run_date` + Prophet-style column rename, `.local` TLD rejected by Pydantic EmailStr (changed to `.com`)
+- **auth/endpoints/helpers.py**: Profile edit crash — Parquet returns `float('nan')` for null string columns; added `_str_or_none()` guard and `isinstance(raw_perms, str)` check before `json.loads()`
+- **E2E credential mismatch**: Updated 6 E2E files to use seeded demo credentials (`@demo.com`) instead of `@example.com`
+- **E2E flaky tests**: Agent switcher retry with `force: true`, Enter-key test focus wait, forecast test rewrite for pre-populated dropdown
+
+### New Features
+
+- **`scripts/backfill_all.py`**: Full truncate + refetch pipeline — OHLCV, company info, dividends, analysis, quarterly results, Prophet forecast. Supports `--tickers`, `--period`, `--no-truncate`, `--skip-forecast`
+- **`StockRepository.delete_ticker_data()`**: Copy-on-write bulk truncation across all 9 Iceberg tables
+- **E2E profile save test**: New test verifying profile name edit saves without error
+
+### Groq Rate-Limit Chunking Strategy (3 layers)
+
+1. **`backend/token_budget.py`** (NEW): Sliding-window deque tracker for TPM/RPM/TPD/RPD per Groq model. 80% threshold for preemptive routing. Thread-safe via per-model locks. Hardcoded free-tier limits for 6 models
+2. **`backend/message_compressor.py`** (NEW): Three-stage compression — system prompt condensing on iteration 2+ (~40% of original), history truncation (last 3 turns), tool result truncation (2K chars). Progressive fallback for tight budgets
+3. **`backend/llm_fallback.py`** (REWRITE): Three-tier model routing — `llama-4-scout-17b` (30K TPM router) → `gpt-oss-120b` (8K TPM responder) → Anthropic Claude (fallback). Budget-checked before each call, cascades on exhaustion or 429
+
+**Config additions**: `GROQ_ROUTER_MODEL`, `GROQ_RESPONDER_MODEL`, `MAX_HISTORY_TURNS`, `MAX_TOOL_RESULT_CHARS` in `backend/config.py`
+
+**Design doc**: `docs/design/groq-chunking-strategy.md`
+
+### Files changed: 16 modified, 4 new
+
+| File | Change |
+|------|--------|
+| `backend/token_budget.py` | NEW — rate tracker |
+| `backend/message_compressor.py` | NEW — message compression |
+| `backend/llm_fallback.py` | REWRITE — three-tier router |
+| `docs/design/groq-chunking-strategy.md` | NEW — design doc |
+| `scripts/backfill_all.py` | NEW — backfill pipeline |
+| `backend/config.py` | Added 4 settings |
+| `backend/agents/config.py` | Added `router_model` field |
+| `backend/agents/base.py` | Default token_budget/compressor attrs |
+| `backend/agents/general_agent.py` | Wired router + budget |
+| `backend/agents/stock_agent.py` | Wired router + budget |
+| `backend/agents/loop.py` | Pass `iteration=` to invoke |
+| `backend/agents/stream.py` | Pass `iteration=` to invoke |
+| `backend/main.py` | Shared TokenBudget + Compressor |
+| `auth/endpoints/helpers.py` | NaN guard |
+| `scripts/seed_demo_data.py` | 4 bug fixes |
+| `stocks/repository.py` | `delete_ticker_data()` |
+| `tests/backend/test_llm_fallback.py` | Updated for new API |
+| E2E files (6) | Credential + flaky fixes |
+
+**Tests**: 155 backend pass, 50 E2E pass. Zero new dependencies.
+
+---
+
 ## Mar 8, 2026 — E2E test stabilization
 
 Ran full Playwright E2E suite against live services and fixed all failures. 10 root causes identified and resolved:

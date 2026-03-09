@@ -7,9 +7,9 @@ import { test, expect } from "@playwright/test";
 import { LoginPage } from "../../pages/frontend/login.page";
 
 const VALID_EMAIL =
-  process.env.TEST_USER_EMAIL || "test@example.com";
+  process.env.TEST_USER_EMAIL || "test@demo.com";
 const VALID_PASSWORD =
-  process.env.TEST_USER_PASSWORD || "TestPassword123!";
+  process.env.TEST_USER_PASSWORD || "Test1234!";
 
 test.describe("Login page", () => {
   let loginPage: LoginPage;

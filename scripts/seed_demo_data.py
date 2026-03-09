@@ -69,13 +69,13 @@ SEED_TICKERS = [
 # Demo users: email, password, full_name, role
 DEMO_USERS = [
     {
-        "email": "admin@demo.local",
+        "email": "admin@demo.com",
         "password": "Admin123!",
         "full_name": "Admin User",
         "role": "superuser",
     },
     {
-        "email": "test@demo.local",
+        "email": "test@demo.com",
         "password": "Test1234!",
         "full_name": "Test User",
         "role": "general",
@@ -182,6 +182,18 @@ def _seed_stocks() -> None:
         )
         if "fetched_at" in df.columns:
             df = df.drop(columns=["fetched_at"])
+        # Rename to yfinance-style columns expected by
+        # repository.insert_ohlcv.
+        df = df.rename(
+            columns={
+                "open": "Open",
+                "high": "High",
+                "low": "Low",
+                "close": "Close",
+                "adj_close": "Adj Close",
+                "volume": "Volume",
+            }
+        )
         n = repo.insert_ohlcv(t, df)
         _logger.info("OHLCV: seeded %s (%d rows)", t, n)
 
@@ -227,11 +239,11 @@ def _seed_stocks() -> None:
         df["date"] = pd.to_datetime(df["date"]).dt.date
         if "computed_at" in df.columns:
             df = df.drop(columns=["computed_at"])
-        n = repo.upsert_technical_indicators(t, df)
+        repo.upsert_technical_indicators(t, df)
         _logger.info(
             "TechIndicators: seeded %s (%d rows)",
             t,
-            n,
+            len(df),
         )
 
     # ── Analysis Summary ────────────────────────────
@@ -259,7 +271,7 @@ def _seed_stocks() -> None:
                 h,
             )
             continue
-        repo.insert_forecast_run(t, entry)
+        repo.insert_forecast_run(t, h, entry)
         _logger.info("ForecastRun: seeded %s (h=%d)", t, h)
 
     # ── Forecasts (series) ──────────────────────────
@@ -291,12 +303,23 @@ def _seed_stocks() -> None:
             "upper_bound",
         ):
             df[col] = pd.to_numeric(df[col], errors="coerce")
-        n = repo.insert_forecast_series(t, h, df)
+        run_date = df["run_date"].iloc[0]
+        # Rename to Prophet-style columns expected by
+        # repository.insert_forecast_series.
+        df = df.rename(
+            columns={
+                "forecast_date": "ds",
+                "predicted_price": "yhat",
+                "lower_bound": "yhat_lower",
+                "upper_bound": "yhat_upper",
+            }
+        )
+        repo.insert_forecast_series(t, h, run_date, df)
         _logger.info(
             "Forecasts: seeded %s (h=%d, %d rows)",
             t,
             h,
-            n,
+            len(df),
         )
 
     # ── Quarterly Results ───────────────────────────
@@ -459,8 +482,8 @@ def main() -> None:
     _seed_stocks()
     _seed_users()
     _logger.info(
-        "Demo data ready. Login: admin@demo.local / "
-        "Admin123! or test@demo.local / Test1234!"
+        "Demo data ready. Login: admin@demo.com / "
+        "Admin123! or test@demo.com / Test1234!"
     )
 
 

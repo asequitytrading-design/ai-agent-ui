@@ -67,7 +67,10 @@ def run(agent: "BaseAgent", user_input: str, history: List[Dict]) -> str:
             agent.logger.debug(
                 "Iteration %d | message_count=%d", iteration, len(messages)
             )
-            response = agent.llm_with_tools.invoke(messages)
+            response = agent.llm_with_tools.invoke(
+                messages,
+                iteration=iteration,
+            )
             messages.append(response)
 
             if not response.tool_calls:
@@ -79,13 +82,22 @@ def run(agent: "BaseAgent", user_input: str, history: List[Dict]) -> str:
             for tc in response.tool_calls:
                 tool_name = tc["name"]
                 tool_args = tc.get("args", {})
-                agent.logger.debug("Tool args | %s: %s", tool_name, tool_args)
+                agent.logger.debug(
+                    "Tool args | %s: %s",
+                    tool_name,
+                    tool_args,
+                )
                 result = agent.tool_registry.invoke(tool_name, tool_args)
                 agent.logger.debug(
-                    "Tool result | %s: %s", tool_name, result[:300]
+                    "Tool result | %s: %s",
+                    tool_name,
+                    result[:300],
                 )
                 messages.append(
-                    ToolMessage(content=result, tool_call_id=tc["id"])
+                    ToolMessage(
+                        content=result,
+                        tool_call_id=tc["id"],
+                    )
                 )
 
     except Exception:

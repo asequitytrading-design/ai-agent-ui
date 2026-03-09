@@ -72,6 +72,14 @@ class Settings(BaseSettings):
     log_to_file: bool = True
     agent_timeout_seconds: int = 900
 
+    # Groq model routing — tiered strategy to maximise free-tier usage.
+    groq_router_model: str = "meta-llama/llama-4-scout-17b-16e-instruct"
+    groq_responder_model: str = "openai/gpt-oss-120b"
+
+    # Message compression settings.
+    max_history_turns: int = 3
+    max_tool_result_chars: int = 2000
+
     # Auth / JWT settings — required for the authentication module.
     # JWT_SECRET_KEY must be at least 32 random characters.  Generate with:
     #   python -c "import secrets; print(secrets.token_hex(32))"
