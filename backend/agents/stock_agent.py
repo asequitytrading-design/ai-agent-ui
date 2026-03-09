@@ -1,4 +1,4 @@
-"""Stock Analysis Agent with Groq-first / Anthropic-fallback LLM.
+"""Stock Analysis Agent with three-tier Groq/Anthropic LLM routing.
 
 :class:`StockAgent` extends :class:`~agents.base.BaseAgent` and is wired
 with eight financial analysis tools:
@@ -14,7 +14,7 @@ with eight financial analysis tools:
 
 The agentic loop (inherited from BaseAgent) drives the LLM through
 the **fetch -> analyse -> forecast** pipeline automatically.
-The agent uses FallbackLLM (Groq-first, Anthropic fallback).
+The agent uses FallbackLLM with tiered Groq model routing.
 
 Typical usage::
 
@@ -28,7 +28,10 @@ Typical usage::
 """
 
 from agents.base import AgentConfig, BaseAgent
+from config import get_settings
 from llm_fallback import FallbackLLM
+from message_compressor import MessageCompressor
+from token_budget import TokenBudget
 from tools.registry import ToolRegistry
 
 # ---------------------------------------------------------------------------
@@ -84,64 +87,63 @@ _STOCK_SYSTEM_PROMPT = (
 
 
 class StockAgent(BaseAgent):
-    """Stock analysis agent with Groq/Anthropic fallback.
+    """Stock analysis agent with three-tier LLM routing.
 
     Inherits the agentic loop from BaseAgent and overrides
-    :meth:`_build_llm` to supply FallbackLLM.  The system
-    prompt guides the LLM through the fetch -> analyse ->
-    forecast pipeline automatically.
+    :meth:`_build_llm` to supply FallbackLLM with budget-aware
+    routing through router, responder, and Anthropic tiers.
     """
 
     def _build_llm(self) -> FallbackLLM:
-        """Instantiate and return a :class:`~llm_fallback.FallbackLLM`.
+        """Instantiate a three-tier :class:`~llm_fallback.FallbackLLM`.
 
-        Groq is tried first; Anthropic is used as fallback on rate-limit or
-        connection errors.  Uses the ``model`` and ``temperature`` values from
-        :attr:`~agents.base.BaseAgent.config`.
+        Uses the shared :attr:`token_budget` and :attr:`compressor`
+        from the agent instance (injected by the factory function).
 
         Returns:
-            A :class:`~llm_fallback.FallbackLLM` instance configured with
-            the agent's Groq model name, Anthropic model, and temperature.
+            A :class:`~llm_fallback.FallbackLLM` with router,
+            responder, and Anthropic tiers.
         """
         return FallbackLLM(
-            groq_model=self.config.model,
+            router_model=(self.config.router_model or self.config.model),
+            responder_model=self.config.model,
             anthropic_model="claude-sonnet-4-6",
             temperature=self.config.temperature,
             agent_id=self.config.agent_id,
+            token_budget=self.token_budget,
+            compressor=self.compressor,
         )
 
 
-def create_stock_agent(tool_registry: ToolRegistry) -> StockAgent:
-    """Factory function that builds a :class:`StockAgent` with all stock tools.
-
-    Constructs an :class:`~agents.base.AgentConfig` with
-    ``agent_id="stock"``, binds the eight stock analysis tools, and
-    returns a fully initialised :class:`StockAgent`.
+def create_stock_agent(
+    tool_registry: ToolRegistry,
+    token_budget: TokenBudget | None = None,
+    compressor: MessageCompressor | None = None,
+) -> StockAgent:
+    """Factory function that builds a :class:`StockAgent`.
 
     Args:
-        tool_registry: The shared :class:`~tools.registry.ToolRegistry`
-            instance from which all stock tools will be fetched and bound
-            to the LLM.
+        tool_registry: The shared :class:`~tools.registry.ToolRegistry`.
+        token_budget: Shared :class:`TokenBudget` instance.
+            Created with defaults if ``None``.
+        compressor: Shared :class:`MessageCompressor` instance.
+            Created with defaults if ``None``.
 
     Returns:
         A ready-to-use :class:`StockAgent` instance.
-
-    Example:
-        >>> from tools.registry import ToolRegistry
-        >>> registry = ToolRegistry()
-        >>> agent = create_stock_agent(registry)
-        >>> agent.config.agent_id
-        'stock'
     """
+    settings = get_settings()
     config = AgentConfig(
         agent_id="stock",
         name="Stock Analysis Agent",
         description=(
-            "Analyses stocks with 10-year OHLCV data, technical indicators "
-            "(SMA, RSI, MACD, Bollinger Bands), Prophet price forecasting, "
+            "Analyses stocks with 10-year OHLCV data, "
+            "technical indicators (SMA, RSI, MACD, "
+            "Bollinger Bands), Prophet price forecasting, "
             "and interactive Plotly charts."
         ),
-        model="openai/gpt-oss-120b",
+        model=settings.groq_responder_model,
+        router_model=settings.groq_router_model,
         temperature=0.0,
         system_prompt=_STOCK_SYSTEM_PROMPT,
         tool_names=[
@@ -156,4 +158,10 @@ def create_stock_agent(tool_registry: ToolRegistry) -> StockAgent:
             "search_market_news",
         ],
     )
-    return StockAgent(config=config, tool_registry=tool_registry)
+    agent = StockAgent(config=config, tool_registry=tool_registry)
+    agent.token_budget = token_budget or TokenBudget()
+    agent.compressor = compressor or MessageCompressor(
+        max_history_turns=settings.max_history_turns,
+        max_tool_result_chars=settings.max_tool_result_chars,
+    )
+    return agent

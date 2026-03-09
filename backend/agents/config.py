@@ -33,6 +33,7 @@ class AgentConfig:
     name: str
     description: str
     model: str
+    router_model: str = ""
     temperature: float = 0.0
     system_prompt: str = ""
     tool_names: list = field(default_factory=list)

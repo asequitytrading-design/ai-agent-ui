@@ -40,6 +40,8 @@ class BaseAgent(ABC):
     Attributes:
         config: The :class:`~agents.config.AgentConfig` for this agent.
         tool_registry: The shared :class:`~tools.registry.ToolRegistry`.
+        token_budget: Shared :class:`~token_budget.TokenBudget` tracker.
+        compressor: Shared :class:`~message_compressor.MessageCompressor`.
         logger: Logger named ``agent.<agent_id>``.
         llm: The raw (unbound) LLM instance.
         llm_with_tools: The LLM with tools bound.
@@ -58,6 +60,18 @@ class BaseAgent(ABC):
         self.config = config
         self.tool_registry = tool_registry
         self.logger = logging.getLogger(f"agent.{config.agent_id}")
+
+        # Defaults — overridden by factory functions before use,
+        # but must exist before _setup() calls _build_llm().
+        if not hasattr(self, "token_budget"):
+            from token_budget import TokenBudget
+
+            self.token_budget = TokenBudget()
+        if not hasattr(self, "compressor"):
+            from message_compressor import MessageCompressor
+
+            self.compressor = MessageCompressor()
+
         self._setup()
 
     def _setup(self) -> None:

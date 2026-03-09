@@ -68,7 +68,9 @@ from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import StreamingResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from logging_config import setup_logging  # noqa: E402
+from message_compressor import MessageCompressor  # noqa: E402
 from models import ChatRequest, ChatResponse  # noqa: E402
+from token_budget import TokenBudget  # noqa: E402
 from tools._ticker_linker import set_current_user  # noqa: E402
 from tools.agent_tool import create_search_market_news_tool  # noqa: E402
 from tools.forecasting_tool import forecast_stock  # noqa: E402
@@ -127,6 +129,16 @@ class ChatServer:
         self.settings = settings
         self.tool_registry = ToolRegistry()
         self.agent_registry = AgentRegistry()
+
+        # Shared token budget and message compressor —
+        # one instance across all agents so TPM/TPD tracking
+        # is accurate at the organisation level.
+        self.token_budget = TokenBudget()
+        self.compressor = MessageCompressor(
+            max_history_turns=settings.max_history_turns,
+            max_tool_result_chars=settings.max_tool_result_chars,
+        )
+
         # Tools must be registered before agents so agents can bind them.
         self._register_tools()
         self._register_agents()
@@ -164,7 +176,11 @@ class ChatServer:
         Add new agent factory calls here to make them available for
         routing via the ``agent_id`` field on ``POST /chat``.
         """
-        general = create_general_agent(self.tool_registry)
+        general = create_general_agent(
+            self.tool_registry,
+            token_budget=self.token_budget,
+            compressor=self.compressor,
+        )
         self.agent_registry.register(general)
 
         # Register news tool now that general agent exists
@@ -173,7 +189,11 @@ class ChatServer:
         self.tool_registry.register(search_market_news)
 
         # === STOCK AGENT ROUTING — ADDED BY PLAN PROMPT 8 ===
-        stock = create_stock_agent(self.tool_registry)
+        stock = create_stock_agent(
+            self.tool_registry,
+            token_budget=self.token_budget,
+            compressor=self.compressor,
+        )
         self.agent_registry.register(stock)
         # === END STOCK AGENT ROUTING ===
 

@@ -2,6 +2,86 @@
 
 ---
 
+# Session: Mar 9, 2026 — Seed fixes, profile NaN, backfill, Groq chunking
+
+## Summary
+Fixed setup and runtime bugs (seed data, profile edit NaN crash, E2E
+credentials), created a data backfill pipeline, and implemented a
+three-layer Groq rate-limit chunking strategy to maximize free-tier
+usage and minimize Anthropic fallback.
+
+### Bug fixes
+
+| # | Issue | Fix |
+|---|-------|-----|
+| 1 | `seed_demo_data.py` OHLCV KeyError `Open` | Column rename lowercase→uppercase |
+| 2 | `insert_forecast_run` TypeError (missing arg) | Added `horizon_months` positional arg |
+| 3 | `insert_forecast_series` KeyError `ds` | Column rename to Prophet-style names |
+| 4 | Pydantic EmailStr rejects `.local` TLD | Changed seed emails to `@demo.com` |
+| 5 | Profile edit "Network error" | `_str_or_none()` guard for Parquet NaN |
+| 6 | E2E auth login failures | Updated credentials in 6 files |
+| 7 | E2E agent switcher flaky | Retry with `force: true` |
+| 8 | E2E Enter key test flaky | Added `toBeFocused()` wait |
+| 9 | E2E forecast test invalid | Rewrote for pre-populated dropdown |
+
+### New features
+
+- **`scripts/backfill_all.py`**: Truncate + refetch 10y data for
+  OHLCV, company info, dividends, analysis, quarterly, forecast.
+  Tested on 5 tickers in 27.2s — all steps passed.
+- **`StockRepository.delete_ticker_data()`**: Bulk truncation
+  across all 9 Iceberg tables (copy-on-write).
+- **E2E profile save test**: Verifies edit modal save without error.
+
+### Groq rate-limit chunking strategy (3 layers)
+
+**Layer 1 — TokenBudget** (`backend/token_budget.py`):
+Sliding-window `deque` tracker for TPM/RPM/TPD/RPD per model.
+80% threshold preempts 429s. Thread-safe per-model locks.
+
+**Layer 2 — MessageCompressor** (`backend/message_compressor.py`):
+Three compression stages applied in order:
+1. System prompt condensing (iteration 2+, ~40% of original)
+2. History truncation (last 3 user/assistant turns)
+3. Tool result truncation (2K char cap)
+Progressive fallback: 1 turn → 0 turns → 500 chars.
+
+**Layer 3 — FallbackLLM rewrite** (`backend/llm_fallback.py`):
+Three-tier model routing:
+- Router: `llama-4-scout-17b` (30K TPM) — tool-calling iterations
+- Responder: `gpt-oss-120b` (8K TPM) — used when router exhausted
+- Anthropic: last resort only
+Budget-checked before each call, cascades on exhaustion or 429.
+
+**Config**: `GROQ_ROUTER_MODEL`, `GROQ_RESPONDER_MODEL`,
+`MAX_HISTORY_TURNS`, `MAX_TOOL_RESULT_CHARS`
+
+### Files changed
+
+New: `backend/token_budget.py`, `backend/message_compressor.py`,
+`scripts/backfill_all.py`, `docs/design/groq-chunking-strategy.md`
+
+Modified: `backend/llm_fallback.py` (rewrite), `backend/config.py`,
+`backend/agents/config.py`, `backend/agents/base.py`,
+`backend/agents/general_agent.py`, `backend/agents/stock_agent.py`,
+`backend/agents/loop.py`, `backend/agents/stream.py`,
+`backend/main.py`, `auth/endpoints/helpers.py`,
+`scripts/seed_demo_data.py`, `stocks/repository.py`,
+`tests/backend/test_llm_fallback.py`, 6 E2E test/fixture files
+
+### Test results
+
+- **155 backend tests pass** (16.8s)
+- **50 E2E Playwright tests pass** (0 failed, 0 flaky)
+- Zero new external dependencies
+
+### Branch
+
+`feature/fix-seed-and-profile-nan` — first commit pushed,
+chunking strategy uncommitted. PR pending `gh auth login`.
+
+---
+
 # Session: Mar 8, 2026 — E2E test stabilization
 
 ## Summary
