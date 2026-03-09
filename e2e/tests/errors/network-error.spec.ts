@@ -47,10 +47,10 @@ test.describe("Network error handling", () => {
       {
         data: {
           email:
-            process.env.TEST_USER_EMAIL || "test@example.com",
+            process.env.TEST_USER_EMAIL || "test@demo.com",
           password:
             process.env.TEST_USER_PASSWORD ||
-            "TestPassword123!",
+            "Test1234!",
         },
       },
     );

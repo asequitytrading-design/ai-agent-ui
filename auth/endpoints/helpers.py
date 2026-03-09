@@ -71,8 +71,16 @@ def _user_to_response(user: Dict[str, Any]) -> UserResponse:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt.isoformat()
 
+    def _str_or_none(val: object) -> Optional[str]:
+        """Return *val* as a string, or ``None`` for NaN / non-str."""
+        if val is None:
+            return None
+        if isinstance(val, float):
+            return None  # Parquet NaN
+        return str(val)
+
     raw_perms = user.get("page_permissions")
-    perms = _json.loads(raw_perms) if raw_perms else None
+    perms = _json.loads(raw_perms) if isinstance(raw_perms, str) else None
 
     return UserResponse(
         user_id=user["user_id"],
@@ -83,7 +91,7 @@ def _user_to_response(user: Dict[str, Any]) -> UserResponse:
         created_at=_iso(user.get("created_at")),
         updated_at=_iso(user.get("updated_at")),
         last_login_at=_iso(user.get("last_login_at")),
-        avatar_url=user.get("profile_picture_url"),
+        avatar_url=_str_or_none(user.get("profile_picture_url")),
         page_permissions=perms,
     )
 

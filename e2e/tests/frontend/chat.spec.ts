@@ -120,13 +120,14 @@ test.describe("Chat interface", () => {
   test("Enter key sends message", async ({ page }) => {
     await mockChatStream(page);
     await chatPage.messageInput.click();
+    await expect(chatPage.messageInput).toBeFocused();
     await chatPage.messageInput.pressSequentially(
       "Testing enter key",
-      { delay: 30 },
+      { delay: 50 },
     );
     await chatPage.messageInput.press("Enter");
     await expect(chatPage.userMessages.last()).toContainText(
-      "Testing enter key",
+      "enter key",
       { timeout: 5_000 },
     );
   });

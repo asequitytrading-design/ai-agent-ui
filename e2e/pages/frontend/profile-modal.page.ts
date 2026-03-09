@@ -41,6 +41,22 @@ export class ProfileModalPage extends BasePage {
     await expect(this.changePasswordModal).toBeVisible();
   }
 
+  /** Fill in the "Full Name" field inside the Edit Profile modal. */
+  async fillFullName(name: string): Promise<void> {
+    const input = this.editProfileModal.locator(
+      'input[placeholder="Your display name"]',
+    );
+    await input.clear();
+    await input.pressSequentially(name);
+  }
+
+  /** Click the "Save" button inside the Edit Profile modal. */
+  async clickSave(): Promise<void> {
+    await this.editProfileModal
+      .getByRole("button", { name: /save/i })
+      .click();
+  }
+
   /** Click "Sign Out" from the profile dropdown. */
   async signOut(): Promise<void> {
     await this.openProfileMenu();

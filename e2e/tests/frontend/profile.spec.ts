@@ -28,4 +28,22 @@ test.describe("Profile management", () => {
       profilePage.changePasswordModal,
     ).toBeVisible();
   });
+
+  test("save profile name without error", async ({ page }) => {
+    await profilePage.openEditProfile();
+    await profilePage.fillFullName("Admin User");
+    await profilePage.clickSave();
+
+    // Modal should close (no network error) — wait for it
+    // to disappear within a reasonable timeout.
+    await expect(profilePage.editProfileModal).toBeHidden({
+      timeout: 10_000,
+    });
+
+    // Verify no error message was shown
+    const errorText = page.locator(
+      '[data-testid="edit-profile-modal"] .text-red-500',
+    );
+    await expect(errorText).toBeHidden();
+  });
 });

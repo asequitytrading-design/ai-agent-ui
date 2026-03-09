@@ -8,9 +8,9 @@ import { LoginPage } from "../../pages/frontend/login.page";
 import { ProfileModalPage } from "../../pages/frontend/profile-modal.page";
 
 const EMAIL =
-  process.env.TEST_USER_EMAIL || "test@example.com";
+  process.env.TEST_USER_EMAIL || "test@demo.com";
 const PASSWORD =
-  process.env.TEST_USER_PASSWORD || "TestPassword123!";
+  process.env.TEST_USER_PASSWORD || "Test1234!";
 
 test.describe("Logout", () => {
   test("sign out clears tokens and redirects to login", async ({

@@ -1773,3 +1773,66 @@ class StockRepository:
         if latest >= cutoff:
             return df
         return None
+
+    # ── Bulk delete ──────────────────────────────────────
+
+    _ALL_TICKER_TABLES = (
+        "stocks.registry",
+        "stocks.company_info",
+        "stocks.ohlcv",
+        "stocks.dividends",
+        "stocks.technical_indicators",
+        "stocks.analysis_summary",
+        "stocks.forecast_runs",
+        "stocks.forecasts",
+        "stocks.quarterly_results",
+    )
+
+    def delete_ticker_data(self, ticker: str) -> Dict[str, int]:
+        """Remove all rows for *ticker* from every stocks table.
+
+        Uses copy-on-write: reads the full table, filters out
+        the ticker, then overwrites.
+
+        Args:
+            ticker: Uppercase ticker symbol.
+
+        Returns:
+            Dict mapping table name to number of rows deleted.
+        """
+        ticker = ticker.upper()
+        deleted: Dict[str, int] = {}
+        for table_id in self._ALL_TICKER_TABLES:
+            try:
+                tbl, df = self._load_table_and_scan(table_id)
+                if df.empty or "ticker" not in df.columns:
+                    deleted[table_id] = 0
+                    continue
+                before = len(df)
+                df = df[df["ticker"] != ticker]
+                removed = before - len(df)
+                if removed > 0:
+                    arrow_tbl = tbl.scan().to_arrow()
+                    schema = arrow_tbl.schema
+                    new_arrow = pa.Table.from_pandas(
+                        df,
+                        schema=schema,
+                        preserve_index=False,
+                    )
+                    tbl.overwrite(new_arrow)
+                    _logger.info(
+                        "Deleted %d rows for %s from %s",
+                        removed,
+                        ticker,
+                        table_id,
+                    )
+                deleted[table_id] = removed
+            except Exception as exc:
+                _logger.warning(
+                    "Failed to delete %s from %s: %s",
+                    ticker,
+                    table_id,
+                    exc,
+                )
+                deleted[table_id] = 0
+        return deleted
