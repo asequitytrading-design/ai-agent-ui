@@ -67,8 +67,11 @@ instruction.txt
 # MCP server config (contains API keys)
 .mcp.json
 
-# Serena MCP project state (local per-machine)
-.serena/
+# Serena — selective ignore (shared memories are tracked)
+.serena/cache/
+.serena/project.local.yml
+.serena/memories/session/
+.serena/memories/personal/
 
 # Auto-generated project index (local)
 PROJECT_INDEX.md
