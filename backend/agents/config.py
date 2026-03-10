@@ -37,3 +37,4 @@ class AgentConfig:
     temperature: float = 0.0
     system_prompt: str = ""
     tool_names: list = field(default_factory=list)
+    responder_iteration_threshold: int = 2

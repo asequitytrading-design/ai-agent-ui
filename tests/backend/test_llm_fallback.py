@@ -6,6 +6,7 @@ Tests cover:
 - Groq raises APIConnectionError → falls back to Anthropic.
 - Both fail → re-raises the Anthropic error.
 - bind_tools() stores bound LLMs and returns ``self``.
+- Iteration-aware routing: router-first early, responder-first late.
 """
 
 from unittest.mock import MagicMock, patch
@@ -199,3 +200,219 @@ class TestFallbackLLMBindTools:
         anthropic_mock.bind_tools.assert_called_once_with(tools)
         assert llm._router_bound is groq_bound
         assert llm._anthropic_bound is anthropic_bound
+
+
+# ---------------------------------------------------------------------------
+# Helper for two-model (router ≠ responder) tests
+# ---------------------------------------------------------------------------
+
+
+def _make_two_model_fallback(
+    router_mock,
+    responder_mock,
+    anthropic_mock,
+    threshold=4,
+):
+    """Build FallbackLLM with distinct router and responder mocks.
+
+    Unlike :func:`_make_fallback`, this uses different model names
+    so the code creates separate LLM instances for each tier.
+    """
+    import llm_fallback
+
+    budget_mock = MagicMock()
+    budget_mock.estimate_tokens.return_value = 100
+    budget_mock.can_afford.return_value = True
+
+    compressor_mock = MagicMock()
+    compressor_mock.compress.side_effect = lambda msgs, *a, **kw: msgs
+
+    # ChatGroq is called twice — first for router, then responder.
+    groq_instances = iter([router_mock, responder_mock])
+
+    with (
+        patch.object(
+            llm_fallback,
+            "ChatGroq",
+            side_effect=lambda **kw: next(groq_instances),
+        ),
+        patch.object(
+            llm_fallback,
+            "ChatAnthropic",
+            return_value=anthropic_mock,
+        ),
+        patch.dict("os.environ", {"GROQ_API_KEY": "test-key"}),
+    ):
+        llm = llm_fallback.FallbackLLM(
+            router_model="model-small",
+            responder_model="model-large",
+            anthropic_model="claude-sonnet-4-6",
+            temperature=0.0,
+            agent_id="test",
+            token_budget=budget_mock,
+            compressor=compressor_mock,
+            responder_iteration_threshold=threshold,
+        )
+    return llm
+
+
+# ---------------------------------------------------------------------------
+# Iteration-aware routing tests
+# ---------------------------------------------------------------------------
+
+
+class TestIterationAwareRouting:
+    """Verify router-first for early iterations, responder-first later."""
+
+    def test_early_iteration_uses_router(self):
+        """Iterations below threshold prefer the router model."""
+        router_mock = MagicMock()
+        responder_mock = MagicMock()
+        anthropic_mock = MagicMock()
+        router_mock.invoke.return_value = "router_response"
+        responder_mock.invoke.return_value = "responder_response"
+
+        llm = _make_two_model_fallback(
+            router_mock,
+            responder_mock,
+            anthropic_mock,
+            threshold=4,
+        )
+
+        result = llm.invoke("hello", iteration=1)
+
+        assert result == "router_response"
+        router_mock.invoke.assert_called_once()
+        responder_mock.invoke.assert_not_called()
+
+    def test_late_iteration_uses_responder(self):
+        """Iterations at or above threshold prefer responder."""
+        router_mock = MagicMock()
+        responder_mock = MagicMock()
+        anthropic_mock = MagicMock()
+        router_mock.invoke.return_value = "router_response"
+        responder_mock.invoke.return_value = "responder_response"
+
+        llm = _make_two_model_fallback(
+            router_mock,
+            responder_mock,
+            anthropic_mock,
+            threshold=4,
+        )
+
+        result = llm.invoke("hello", iteration=4)
+
+        assert result == "responder_response"
+        responder_mock.invoke.assert_called_once()
+        router_mock.invoke.assert_not_called()
+
+    def test_late_iteration_falls_back_to_router(self):
+        """If responder budget exhausted, falls back to router."""
+        router_mock = MagicMock()
+        responder_mock = MagicMock()
+        anthropic_mock = MagicMock()
+        router_mock.invoke.return_value = "router_fallback"
+
+        llm = _make_two_model_fallback(
+            router_mock,
+            responder_mock,
+            anthropic_mock,
+            threshold=4,
+        )
+        # Make responder unaffordable.
+        llm._budget.can_afford.side_effect = (
+            lambda model, est: model != "model-large"
+        )
+
+        result = llm.invoke("hello", iteration=5)
+
+        assert result == "router_fallback"
+        router_mock.invoke.assert_called_once()
+        responder_mock.invoke.assert_not_called()
+
+    def test_threshold_boundary_uses_responder(self):
+        """Iteration exactly at threshold uses responder."""
+        router_mock = MagicMock()
+        responder_mock = MagicMock()
+        anthropic_mock = MagicMock()
+        responder_mock.invoke.return_value = "resp"
+
+        llm = _make_two_model_fallback(
+            router_mock,
+            responder_mock,
+            anthropic_mock,
+            threshold=3,
+        )
+
+        result = llm.invoke("hello", iteration=3)
+
+        assert result == "resp"
+        responder_mock.invoke.assert_called_once()
+        router_mock.invoke.assert_not_called()
+
+    def test_progressive_compression_fits_responder(self):
+        """Progressive compression shrinks messages to fit responder."""
+        router_mock = MagicMock()
+        responder_mock = MagicMock()
+        anthropic_mock = MagicMock()
+        responder_mock.invoke.return_value = "synthesised"
+
+        llm = _make_two_model_fallback(
+            router_mock,
+            responder_mock,
+            anthropic_mock,
+            threshold=4,
+        )
+
+        # First can_afford → False (default compression too big).
+        # After progressive compress, estimate drops → True.
+        call_count = {"n": 0}
+
+        def _can_afford(model, est):
+            call_count["n"] += 1
+            if model == "model-large":
+                # First check fails, second (after
+                # progressive compress) succeeds.
+                return call_count["n"] > 1
+            return True
+
+        llm._budget.can_afford.side_effect = _can_afford
+        llm._budget.get_tpm.return_value = 8000
+
+        result = llm.invoke("hello", iteration=5)
+
+        assert result == "synthesised"
+        responder_mock.invoke.assert_called_once()
+        router_mock.invoke.assert_not_called()
+        # Compressor called twice: default + progressive.
+        assert llm._compressor.compress.call_count == 2
+        # Second call includes target_tokens.
+        second_call = llm._compressor.compress.call_args_list[1]
+        # 70% of 8000 TPM = 5600 headroom target.
+        assert second_call.kwargs.get("target_tokens") == 5600
+
+    def test_progressive_compression_still_too_big(self):
+        """If progressive compression isn't enough, cascade."""
+        router_mock = MagicMock()
+        responder_mock = MagicMock()
+        anthropic_mock = MagicMock()
+        router_mock.invoke.return_value = "router_fallback"
+
+        llm = _make_two_model_fallback(
+            router_mock,
+            responder_mock,
+            anthropic_mock,
+            threshold=4,
+        )
+
+        # Responder always unaffordable (even after compress).
+        llm._budget.can_afford.side_effect = (
+            lambda model, est: model != "model-large"
+        )
+        llm._budget.get_tpm.return_value = 8000
+
+        result = llm.invoke("hello", iteration=5)
+
+        assert result == "router_fallback"
+        router_mock.invoke.assert_called_once()
+        responder_mock.invoke.assert_not_called()

@@ -112,6 +112,9 @@ class StockAgent(BaseAgent):
             agent_id=self.config.agent_id,
             token_budget=self.token_budget,
             compressor=self.compressor,
+            responder_iteration_threshold=(
+                self.config.responder_iteration_threshold
+            ),
         )
 
 
@@ -157,6 +160,7 @@ def create_stock_agent(
             "forecast_stock",
             "search_market_news",
         ],
+        responder_iteration_threshold=(settings.responder_iteration_threshold),
     )
     agent = StockAgent(config=config, tool_registry=tool_registry)
     agent.token_budget = token_budget or TokenBudget()

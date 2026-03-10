@@ -54,6 +54,9 @@ class GeneralAgent(BaseAgent):
             agent_id=self.config.agent_id,
             token_budget=self.token_budget,
             compressor=self.compressor,
+            responder_iteration_threshold=(
+                self.config.responder_iteration_threshold
+            ),
         )
 
 
@@ -86,6 +89,7 @@ def create_general_agent(
         router_model=settings.groq_router_model,
         temperature=0.0,
         tool_names=["get_current_time", "search_web"],
+        responder_iteration_threshold=(settings.responder_iteration_threshold),
     )
     agent = GeneralAgent(config=config, tool_registry=tool_registry)
     agent.token_budget = token_budget or TokenBudget()

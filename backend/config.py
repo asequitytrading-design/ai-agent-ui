@@ -76,6 +76,10 @@ class Settings(BaseSettings):
     groq_router_model: str = "meta-llama/llama-4-scout-17b-16e-instruct"
     groq_responder_model: str = "openai/gpt-oss-120b"
 
+    # Iteration threshold: iterations >= this value prefer the
+    # responder (large) model over the router (small) model.
+    responder_iteration_threshold: int = 2
+
     # Message compression settings.
     max_history_turns: int = 3
     max_tool_result_chars: int = 2000

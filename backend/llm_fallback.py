@@ -3,8 +3,10 @@
 Provides :class:`FallbackLLM`, a duck-typed LLM that routes requests
 through up to three tiers:
 
-1. **Router model** — high-TPM Groq model for tool-calling iterations.
-2. **Responder model** — best Groq model, used when router is exhausted.
+1. **Router model** — high-TPM Groq model for early tool-calling
+   iterations (< ``responder_iteration_threshold``).
+2. **Responder model** — best Groq model, preferred from iteration
+   ``responder_iteration_threshold`` onward (synthesis phase).
 3. **Anthropic fallback** — paid provider, used only when both Groq
    models are exhausted or unavailable.
 
@@ -42,7 +44,11 @@ _logger = logging.getLogger(__name__)
 
 # Groq imports are optional — only needed when GROQ_API_KEY is set.
 try:
-    from groq import APIConnectionError, RateLimitError
+    from groq import (
+        APIConnectionError,
+        APIStatusError,
+        RateLimitError,
+    )
     from langchain_groq import ChatGroq
 
     _GROQ_AVAILABLE = True
@@ -76,6 +82,7 @@ class FallbackLLM:
         agent_id: str,
         token_budget: TokenBudget,
         compressor: MessageCompressor,
+        responder_iteration_threshold: int = 4,
     ) -> None:
         """Construct all three inner LLMs.
 
@@ -91,12 +98,15 @@ class FallbackLLM:
             agent_id: Agent identifier for logs.
             token_budget: Shared sliding-window budget tracker.
             compressor: Shared message compressor.
+            responder_iteration_threshold: Iterations at or above
+                this value prefer the responder model first.
         """
         self._router_model = router_model
         self._responder_model = responder_model
         self._agent_id = agent_id
         self._budget = token_budget
         self._compressor = compressor
+        self._resp_iter_threshold = responder_iteration_threshold
 
         # Groq LLMs (optional).
         self._router_llm: Optional[Any] = None
@@ -109,6 +119,7 @@ class FallbackLLM:
             self._router_llm = ChatGroq(
                 model=router_model,
                 temperature=temperature,
+                max_retries=0,
             )
             self._router_bound = self._router_llm
 
@@ -118,6 +129,7 @@ class FallbackLLM:
                 self._responder_llm = ChatGroq(
                     model=responder_model,
                     temperature=temperature,
+                    max_retries=0,
                 )
                 self._responder_bound = self._responder_llm
             else:
@@ -183,11 +195,14 @@ class FallbackLLM:
 
         Decision flow:
 
-        1. Compress messages via :class:`MessageCompressor`.
+        1. Compress messages (default 3 stages).
         2. Estimate tokens.
-        3. Try preferred Groq model (router first, then responder).
-        4. On budget exhaustion or ``RateLimitError``, cascade.
-        5. Anthropic as final fallback.
+        3. Build priority list (iteration-aware ordering).
+        4. For each tier: if default compression exceeds budget,
+           apply progressive compression targeting that model's
+           TPM.  Then invoke if affordable.
+        5. On budget exhaustion or ``RateLimitError``, cascade.
+        6. Anthropic as final fallback.
 
         Args:
             messages: Ordered list of LangChain BaseMessage objects.
@@ -201,7 +216,7 @@ class FallbackLLM:
         Raises:
             Exception: Re-raised if all providers fail.
         """
-        # Step 1: Compress messages.
+        # Step 1: Compress messages (default 3 stages).
         compressed = self._compressor.compress(
             messages,
             iteration,
@@ -211,34 +226,65 @@ class FallbackLLM:
         est = self._budget.estimate_tokens(compressed)
 
         # Step 3: Build priority list of Groq models.
-        groq_tiers = self._build_priority(est)
+        groq_tiers = self._build_priority(est, iteration)
 
         # Step 4: Try each Groq tier.
         for model_name, bound_llm in groq_tiers:
-            if not self._budget.can_afford(model_name, est):
+            cur_compressed = compressed
+            cur_est = est
+
+            # If this model can't afford the default
+            # compression, try progressive compression
+            # targeting its TPM.
+            if not self._budget.can_afford(model_name, cur_est):
+                tpm = self._budget.get_tpm(model_name)
+                if tpm is not None:
+                    # Target 70% of TPM to leave headroom
+                    # for estimation inaccuracy.
+                    target = int(tpm * 0.70)
+                    cur_compressed = self._compressor.compress(
+                        messages,
+                        iteration,
+                        target_tokens=target,
+                    )
+                    cur_est = self._budget.estimate_tokens(cur_compressed)
+                    _logger.info(
+                        "Progressive compress for %s: "
+                        "%d → %d tokens (agent=%s)",
+                        model_name,
+                        est,
+                        cur_est,
+                        self._agent_id,
+                    )
+
+            if not self._budget.can_afford(model_name, cur_est):
                 _logger.info(
                     "Skip %s: budget exhausted " "(est=%d, agent=%s)",
                     model_name,
-                    est,
+                    cur_est,
                     self._agent_id,
                 )
                 continue
+
             try:
-                result = bound_llm.invoke(compressed, **kwargs)
-                self._budget.record(model_name, est)
+                result = bound_llm.invoke(cur_compressed, **kwargs)
+                self._budget.record(model_name, cur_est)
                 _logger.info(
                     "Route → %s | iter=%d " "tokens≈%d (agent=%s)",
                     model_name,
                     iteration,
-                    est,
+                    cur_est,
                     self._agent_id,
                 )
                 return result
             except Exception as exc:
-                # Only catch Groq-specific errors for cascade.
                 if _GROQ_AVAILABLE and isinstance(
                     exc,
-                    (RateLimitError, APIConnectionError),
+                    (
+                        RateLimitError,
+                        APIConnectionError,
+                        APIStatusError,
+                    ),
                 ):
                     _logger.warning(
                         "Groq %s failed (%s), " "cascading — agent=%s",
@@ -259,31 +305,63 @@ class FallbackLLM:
         )
         return self._anthropic_bound.invoke(compressed, **kwargs)
 
-    def _build_priority(self, est: int) -> List[tuple]:
+    def _build_priority(self, _est: int, iteration: int = 1) -> List[tuple]:
         """Build ordered list of ``(model_name, bound_llm)`` tuples.
 
-        Router-first ordering for tool-calling iterations.
-        If router and responder are the same model, return only one
-        entry to avoid double attempts.
+        Early iterations (< threshold) prefer the router (small,
+        high-TPM) model for tool-calling.  Later iterations
+        (>= threshold) prefer the responder (large, better-quality)
+        model for synthesis.
+
+        If router and responder are the same model, return only
+        one entry to avoid double attempts.
 
         Args:
-            est: Estimated token count (unused currently,
-                reserved for future adaptive ordering).
+            est: Estimated token count (reserved for future use).
+            iteration: Current agentic loop iteration (1-based).
 
         Returns:
             List of ``(model_name, bound_llm)`` pairs.
         """
+        same_model = self._responder_model == self._router_model
+
+        # Same model — single entry, no ordering decision.
+        if same_model:
+            if self._router_bound is not None:
+                return [(self._router_model, self._router_bound)]
+            return []
+
+        router_entry = (
+            (self._router_model, self._router_bound)
+            if self._router_bound is not None
+            else None
+        )
+        responder_entry = (
+            (self._responder_model, self._responder_bound)
+            if self._responder_bound is not None
+            else None
+        )
+
+        # Late iterations → responder (large) first.
+        prefer_responder = iteration >= self._resp_iter_threshold
+
         tiers: List[tuple] = []
-        if self._router_bound is not None:
-            tiers.append((self._router_model, self._router_bound))
-        if (
-            self._responder_bound is not None
-            and self._responder_model != self._router_model
-        ):
-            tiers.append(
-                (
-                    self._responder_model,
-                    self._responder_bound,
-                )
+        if prefer_responder:
+            if responder_entry:
+                tiers.append(responder_entry)
+            if router_entry:
+                tiers.append(router_entry)
+        else:
+            if router_entry:
+                tiers.append(router_entry)
+            if responder_entry:
+                tiers.append(responder_entry)
+
+        if prefer_responder and tiers:
+            _logger.info(
+                "Iteration %d >= %d → responder-first " "(agent=%s)",
+                iteration,
+                self._resp_iter_threshold,
+                self._agent_id,
             )
         return tiers
