@@ -1,17 +1,20 @@
-"""Three-tier Groq/Anthropic LLM router with budget-aware routing.
+"""N-tier Groq/Anthropic LLM cascade with budget-aware routing.
 
-Provides :class:`FallbackLLM`, a duck-typed LLM that routes requests
-through up to three tiers:
+Provides :class:`FallbackLLM`, a duck-typed LLM that routes
+requests through an ordered list of Groq models, cascading on
+budget exhaustion or API errors, with Anthropic as the final
+paid fallback.
 
-1. **Router model** — high-TPM Groq model for early tool-calling
-   iterations (< ``responder_iteration_threshold``).
-2. **Responder model** — best Groq model, preferred from iteration
-   ``responder_iteration_threshold`` onward (synthesis phase).
-3. **Anthropic fallback** — paid provider, used only when both Groq
-   models are exhausted or unavailable.
+Tier order (default)::
 
-When ``GROQ_API_KEY`` is not set, tiers 1 and 2 are skipped entirely
-and all requests go directly to Anthropic.
+    1. llama-3.3-70b-versatile   (12K TPM, parallel tools)
+    2. kimi-k2-instruct          (10K TPM, parallel tools)
+    3. gpt-oss-120b              (8K TPM, quality)
+    4. llama-4-scout-17b         (30K TPM, fast)
+    5. claude-sonnet-4-6         (paid, unlimited)
+
+When ``GROQ_API_KEY`` is not set, all Groq tiers are skipped
+and requests go directly to Anthropic.
 
 Typical usage::
 
@@ -22,8 +25,12 @@ Typical usage::
     budget = TokenBudget()
     compressor = MessageCompressor()
     llm = FallbackLLM(
-        router_model="meta-llama/llama-4-scout-17b-16e-instruct",
-        responder_model="openai/gpt-oss-120b",
+        groq_models=[
+            "llama-3.3-70b-versatile",
+            "moonshotai/kimi-k2-instruct",
+            "openai/gpt-oss-120b",
+            "meta-llama/llama-4-scout-17b-16e-instruct",
+        ],
         anthropic_model="claude-sonnet-4-6",
         temperature=0.0,
         agent_id="stock",
@@ -34,7 +41,7 @@ Typical usage::
 
 import logging
 import os
-from typing import Any, List, Optional
+from typing import Any, List
 
 from langchain_anthropic import ChatAnthropic
 from message_compressor import MessageCompressor
@@ -57,17 +64,18 @@ except ImportError:
 
 
 class FallbackLLM:
-    """Three-tier LLM router: router -> responder -> anthropic.
+    """N-tier LLM cascade: Groq models → Anthropic.
 
-    The router/responder split is invisible to the caller — the
-    same ``bind_tools`` / ``invoke`` interface is preserved.
+    Each Groq model is tried in order.  If a model's budget is
+    exhausted, progressive compression is attempted.  On API
+    errors (429, 413, connection), the next tier is tried.
+    Anthropic is the final fallback.
 
     Attributes:
-        _router_model: Model name for the high-TPM router.
-        _responder_model: Model name for the best-quality responder.
-        _router_llm: Raw ChatGroq for router, or ``None``.
-        _responder_llm: Raw ChatGroq for responder, or ``None``.
+        _groq_tiers: Ordered list of ``(name, raw_llm, bound_llm)``
+            tuples for each Groq model.
         _anthropic_llm: Raw ChatAnthropic instance.
+        _anthropic_bound: Tools-bound ChatAnthropic instance.
         _budget: Shared :class:`TokenBudget` tracker.
         _compressor: Shared :class:`MessageCompressor`.
         _agent_id: Agent identifier for log messages.
@@ -75,72 +83,45 @@ class FallbackLLM:
 
     def __init__(
         self,
-        router_model: str,
-        responder_model: str,
+        groq_models: List[str],
         anthropic_model: str,
         temperature: float,
         agent_id: str,
         token_budget: TokenBudget,
         compressor: MessageCompressor,
-        responder_iteration_threshold: int = 4,
     ) -> None:
-        """Construct all three inner LLMs.
-
-        Groq is only instantiated when ``GROQ_API_KEY`` is present
-        in the environment.  Otherwise, all calls go directly to
-        Anthropic.
+        """Construct Groq + Anthropic LLM instances.
 
         Args:
-            router_model: High-TPM Groq model for tool routing.
-            responder_model: Best Groq model for synthesis.
-            anthropic_model: Anthropic model name.
+            groq_models: Ordered list of Groq model names,
+                tried from first to last.
+            anthropic_model: Anthropic model name (final
+                fallback).
             temperature: Sampling temperature for all LLMs.
             agent_id: Agent identifier for logs.
             token_budget: Shared sliding-window budget tracker.
             compressor: Shared message compressor.
-            responder_iteration_threshold: Iterations at or above
-                this value prefer the responder model first.
         """
-        self._router_model = router_model
-        self._responder_model = responder_model
         self._agent_id = agent_id
         self._budget = token_budget
         self._compressor = compressor
-        self._resp_iter_threshold = responder_iteration_threshold
 
-        # Groq LLMs (optional).
-        self._router_llm: Optional[Any] = None
-        self._responder_llm: Optional[Any] = None
-        self._router_bound: Optional[Any] = None
-        self._responder_bound: Optional[Any] = None
+        # Groq tiers: [(model_name, raw_llm, bound_llm), ...]
+        self._groq_tiers: List[tuple] = []
 
         groq_key = os.environ.get("GROQ_API_KEY", "").strip()
         if _GROQ_AVAILABLE and groq_key:
-            self._router_llm = ChatGroq(
-                model=router_model,
-                temperature=temperature,
-                max_retries=0,
-            )
-            self._router_bound = self._router_llm
-
-            # Only create a separate responder if it differs
-            # from the router model.
-            if responder_model != router_model:
-                self._responder_llm = ChatGroq(
-                    model=responder_model,
+            for model in groq_models:
+                llm = ChatGroq(
+                    model=model,
                     temperature=temperature,
                     max_retries=0,
                 )
-                self._responder_bound = self._responder_llm
-            else:
-                self._responder_llm = self._router_llm
-                self._responder_bound = self._router_bound
-
+                self._groq_tiers.append((model, llm, llm))
             _logger.info(
-                "FallbackLLM: Groq enabled — "
-                "router=%s, responder=%s (agent=%s)",
-                router_model,
-                responder_model,
+                "FallbackLLM: Groq enabled — %d tiers: " "%s (agent=%s)",
+                len(self._groq_tiers),
+                [t[0] for t in self._groq_tiers],
                 agent_id,
             )
         else:
@@ -169,17 +150,9 @@ class FallbackLLM:
         Returns:
             This :class:`FallbackLLM` instance.
         """
-        if self._router_llm is not None:
-            self._router_bound = self._router_llm.bind_tools(tools, **kwargs)
-        if (
-            self._responder_llm is not None
-            and self._responder_llm is not self._router_llm
-        ):
-            self._responder_bound = self._responder_llm.bind_tools(
-                tools, **kwargs
-            )
-        elif self._responder_llm is self._router_llm:
-            self._responder_bound = self._router_bound
+        for i, (name, raw, _bound) in enumerate(self._groq_tiers):
+            bound = raw.bind_tools(tools, **kwargs)
+            self._groq_tiers[i] = (name, raw, bound)
 
         self._anthropic_bound = self._anthropic_llm.bind_tools(tools, **kwargs)
         return self
@@ -197,18 +170,19 @@ class FallbackLLM:
 
         1. Compress messages (default 3 stages).
         2. Estimate tokens.
-        3. Build priority list (iteration-aware ordering).
-        4. For each tier: if default compression exceeds budget,
-           apply progressive compression targeting that model's
-           TPM.  Then invoke if affordable.
-        5. On budget exhaustion or ``RateLimitError``, cascade.
-        6. Anthropic as final fallback.
+        3. For each Groq tier in order: if default compression
+           exceeds budget, apply progressive compression
+           targeting 70 %% of the model's TPM.  Invoke if
+           affordable; on API error, cascade to next tier.
+        4. Anthropic as final fallback.
 
         Args:
-            messages: Ordered list of LangChain BaseMessage objects.
-            iteration: Current agentic loop iteration (1-based).
-            **kwargs: Extra keyword arguments forwarded to the
-                inner ``invoke`` call.
+            messages: Ordered list of LangChain BaseMessage
+                objects.
+            iteration: Current agentic loop iteration
+                (1-based).
+            **kwargs: Extra keyword arguments forwarded to
+                the inner ``invoke`` call.
 
         Returns:
             An AIMessage from whichever provider responded.
@@ -225,22 +199,16 @@ class FallbackLLM:
         # Step 2: Estimate tokens.
         est = self._budget.estimate_tokens(compressed)
 
-        # Step 3: Build priority list of Groq models.
-        groq_tiers = self._build_priority(est, iteration)
-
-        # Step 4: Try each Groq tier.
-        for model_name, bound_llm in groq_tiers:
+        # Step 3: Try each Groq tier in order.
+        for model_name, _raw, bound_llm in self._groq_tiers:
             cur_compressed = compressed
             cur_est = est
 
-            # If this model can't afford the default
-            # compression, try progressive compression
-            # targeting its TPM.
+            # If default compression exceeds budget, try
+            # progressive compression targeting 70% of TPM.
             if not self._budget.can_afford(model_name, cur_est):
                 tpm = self._budget.get_tpm(model_name)
                 if tpm is not None:
-                    # Target 70% of TPM to leave headroom
-                    # for estimation inaccuracy.
                     target = int(tpm * 0.70)
                     cur_compressed = self._compressor.compress(
                         messages,
@@ -295,73 +263,12 @@ class FallbackLLM:
                     continue
                 raise
 
-        # Step 5: Anthropic fallback.
+        # Step 4: Anthropic fallback.
         _logger.warning(
-            "All Groq models exhausted → Anthropic | "
+            "All Groq tiers exhausted → Anthropic | "
             "iter=%d tokens≈%d (agent=%s)",
             iteration,
             est,
             self._agent_id,
         )
         return self._anthropic_bound.invoke(compressed, **kwargs)
-
-    def _build_priority(self, _est: int, iteration: int = 1) -> List[tuple]:
-        """Build ordered list of ``(model_name, bound_llm)`` tuples.
-
-        Early iterations (< threshold) prefer the router (small,
-        high-TPM) model for tool-calling.  Later iterations
-        (>= threshold) prefer the responder (large, better-quality)
-        model for synthesis.
-
-        If router and responder are the same model, return only
-        one entry to avoid double attempts.
-
-        Args:
-            est: Estimated token count (reserved for future use).
-            iteration: Current agentic loop iteration (1-based).
-
-        Returns:
-            List of ``(model_name, bound_llm)`` pairs.
-        """
-        same_model = self._responder_model == self._router_model
-
-        # Same model — single entry, no ordering decision.
-        if same_model:
-            if self._router_bound is not None:
-                return [(self._router_model, self._router_bound)]
-            return []
-
-        router_entry = (
-            (self._router_model, self._router_bound)
-            if self._router_bound is not None
-            else None
-        )
-        responder_entry = (
-            (self._responder_model, self._responder_bound)
-            if self._responder_bound is not None
-            else None
-        )
-
-        # Late iterations → responder (large) first.
-        prefer_responder = iteration >= self._resp_iter_threshold
-
-        tiers: List[tuple] = []
-        if prefer_responder:
-            if responder_entry:
-                tiers.append(responder_entry)
-            if router_entry:
-                tiers.append(router_entry)
-        else:
-            if router_entry:
-                tiers.append(router_entry)
-            if responder_entry:
-                tiers.append(responder_entry)
-
-        if prefer_responder and tiers:
-            _logger.info(
-                "Iteration %d >= %d → responder-first " "(agent=%s)",
-                iteration,
-                self._resp_iter_threshold,
-                self._agent_id,
-            )
-        return tiers
