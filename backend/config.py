@@ -104,6 +104,14 @@ class Settings(BaseSettings):
     facebook_app_secret: str = ""
     oauth_redirect_uri: str = "http://localhost:3000/auth/oauth/callback"
 
+    # Rate limiting (slowapi format: "N/period").
+    rate_limit_login: str = "5/15minutes"
+    rate_limit_register: str = "3/hour"
+    rate_limit_oauth: str = "10/minute"
+
+    # Google JWKS verification cache TTL in seconds.
+    google_jwks_cache_ttl: int = 3600
+
     # Read from .env in the working directory; silently skip if absent.
     # Real environment variables always take precedence over .env values.
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

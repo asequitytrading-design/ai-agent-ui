@@ -256,7 +256,7 @@ class TestGetRepoRetry:
             result_first = _ss._get_repo()
         assert result_first is None
 
-        # Second call: init succeeds
+        # Second call: init succeeds (wrapped in CachedRepository)
         monkeypatch.setattr(_ss, "_STOCK_REPO", None)
         monkeypatch.setattr(_ss, "_STOCK_REPO_INIT_ATTEMPTED", False)
         fake_instance = FakeRepo()
@@ -264,7 +264,11 @@ class TestGetRepoRetry:
             "stocks.repository.StockRepository", return_value=fake_instance
         ):
             result_second = _ss._get_repo()
-        assert result_second is fake_instance
+        # _get_repo wraps in CachedRepository; verify the inner repo.
+        from stocks.cached_repository import CachedRepository
+
+        assert isinstance(result_second, CachedRepository)
+        assert result_second._repo is fake_instance
 
 
 # ---------------------------------------------------------------------------

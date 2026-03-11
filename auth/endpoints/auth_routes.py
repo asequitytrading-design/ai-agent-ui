@@ -10,7 +10,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Dict
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import OAuth2PasswordRequestForm
 
 import auth.endpoints.helpers as _helpers
@@ -24,6 +24,7 @@ from auth.models import (
     TokenResponse,
     UserContext,
 )
+from auth.rate_limit import limiter
 from auth.service import AuthService
 
 # Module-level logger; mutable but intentionally
@@ -39,7 +40,9 @@ def register(router: APIRouter) -> None:
     """
 
     @router.post("/auth/login", response_model=TokenResponse, tags=["auth"])
+    @limiter.limit("5/15minutes")
     def login(
+        request: Request,
         body: LoginRequest,
         service: AuthService = Depends(get_auth_service),
     ) -> TokenResponse:
@@ -169,7 +172,9 @@ def register(router: APIRouter) -> None:
         return {"detail": "Logged out successfully"}
 
     @router.post("/auth/password-reset/request", tags=["auth"])
+    @limiter.limit("3/hour")
     def password_reset_request(
+        request: Request,
         body: PasswordResetRequestBody,
         current_user: UserContext = Depends(get_current_user),
     ) -> Dict[str, str]:

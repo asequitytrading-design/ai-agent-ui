@@ -34,6 +34,13 @@ from urllib.parse import urlencode
 
 import httpx
 import jwt
+from jwt import PyJWKClient
+
+_logger = logging.getLogger(__name__)
+
+# Google JWKS endpoint for RS256 signature verification.
+_GOOGLE_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs"
+_jwks_client = PyJWKClient(_GOOGLE_JWKS_URL)
 
 # TTL for state tokens — 10 minutes.
 _STATE_TTL_SECONDS = 600
@@ -248,12 +255,21 @@ class OAuthService:
                 "Google token response did not include an id_token."
             )
 
-        # Decode without signature verification — trust HTTPS + Google's TLS.
-        payload = jwt.decode(
-            id_token_str,
-            options={"verify_signature": False},
-            algorithms=["RS256"],
-        )
+        # Verify signature via Google's JWKS endpoint.
+        try:
+            signing_key = _jwks_client.get_signing_key_from_jwt(
+                id_token_str,
+            )
+            payload = jwt.decode(
+                id_token_str,
+                signing_key.key,
+                algorithms=["RS256"],
+                audience=self._settings.google_client_id,
+            )
+        except jwt.ExpiredSignatureError:
+            raise ValueError("Google ID token has expired.")
+        except jwt.InvalidTokenError as exc:
+            raise ValueError(f"Invalid Google ID token: {exc}")
 
         self._logger.info(
             "Google SSO exchange: sub=%s email=%s",

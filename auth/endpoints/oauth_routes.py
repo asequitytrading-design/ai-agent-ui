@@ -9,7 +9,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Dict, List
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 import auth.endpoints.helpers as _helpers
 from auth.dependencies import get_auth_service
@@ -19,6 +19,7 @@ from auth.models import (
     OAuthProvider,
     TokenResponse,
 )
+from auth.rate_limit import limiter
 from auth.service import AuthService
 
 # Module-level logger; cannot be moved into a class
@@ -110,7 +111,9 @@ def register(router: APIRouter) -> None:
     @router.post(
         "/auth/oauth/callback", response_model=TokenResponse, tags=["oauth"]
     )
+    @limiter.limit("10/minute")
     def oauth_callback(
+        request: Request,
         body: OAuthCallbackRequest,
         service: AuthService = Depends(get_auth_service),
     ) -> TokenResponse:

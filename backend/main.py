@@ -71,6 +71,7 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 from logging_config import setup_logging  # noqa: E402
 from message_compressor import MessageCompressor  # noqa: E402
 from models import ChatRequest, ChatResponse  # noqa: E402
+from slowapi.errors import RateLimitExceeded  # noqa: E402
 from token_budget import TokenBudget  # noqa: E402
 from tools._ticker_linker import set_current_user  # noqa: E402
 from tools.agent_tool import create_search_market_news_tool  # noqa: E402
@@ -94,6 +95,10 @@ from tools.time_tool import get_current_time  # noqa: E402
 from auth.api import (  # noqa: E402
     create_auth_router,
     get_ticker_router,
+)
+from auth.rate_limit import (  # noqa: E402
+    limiter,
+    rate_limit_exceeded_handler,
 )
 
 # === END STOCK AGENT ROUTING ===
@@ -245,9 +250,7 @@ class ChatServer:
         class _SecurityHeadersMiddleware(BaseHTTPMiddleware):
             async def dispatch(self, request: Request, call_next):
                 response = await call_next(request)
-                response.headers["X-Content-Type-Options"] = (
-                    "nosniff"
-                )
+                response.headers["X-Content-Type-Options"] = "nosniff"
                 response.headers["X-Frame-Options"] = "DENY"
                 response.headers["Referrer-Policy"] = (
                     "strict-origin-when-cross-origin"
@@ -255,6 +258,13 @@ class ChatServer:
                 return response
 
         app.add_middleware(_SecurityHeadersMiddleware)
+
+        # Rate limiting (slowapi).
+        app.state.limiter = limiter
+        app.add_exception_handler(
+            RateLimitExceeded,
+            rate_limit_exceeded_handler,
+        )
 
         # Register handlers by passing bound methods to the route decorators.
         app.post("/chat", response_model=ChatResponse)(self._chat_handler)
