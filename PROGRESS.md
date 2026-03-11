@@ -2,6 +2,53 @@
 
 ---
 
+# Session: Mar 11, 2026 — Sprint execution (Phases 1–2)
+
+## Summary
+Executed the sprint plan: 6 stories across 2 phases (Phase 1
+parallel, Phase 2 sequential). Security hardening committed
+first, then Phase 1 layered on top, then Phase 2. All tests
+pass (306 total, 0 failures).
+
+### Phase 1 — Rate limiting, JWKS, caching, algo opts
+
+| # | Story | Details |
+|---|-------|---------|
+| 1.1 | Rate limiting | slowapi on login (5/15min), password-reset (3/hr), OAuth (10/min) |
+| 1.4 | JWKS verification | PyJWKClient replaces `verify_signature=False` on Google OAuth |
+| 3.1 | Iceberg caching | Column projection via `selected_fields` + CachedRepository (TTLCache) |
+| 3.2 | Algo optimizations | TokenBudget O(1) running totals, compressor early-exit, single-pass loop boundary |
+
+### Phase 2 — Decomposition + HttpOnly cookies
+
+| # | Story | Details |
+|---|-------|---------|
+| 2.1 | ChatServer decomp | Extracted `bootstrap.py` + `routes.py`; main.py ~490→~110 LOC |
+| 1.2 | HttpOnly cookies | Refresh token in HttpOnly cookie; localStorage holds access only |
+
+### Files changed (key)
+- `auth/rate_limit.py` (new), `auth/endpoints/auth_routes.py`,
+  `auth/endpoints/oauth_routes.py`, `auth/oauth_service.py`
+- `stocks/repository.py`, `stocks/cached_repository.py` (new)
+- `backend/bootstrap.py` (new), `backend/routes.py` (new),
+  `backend/main.py`, `backend/token_budget.py`,
+  `backend/message_compressor.py`, `backend/config.py`
+- `frontend/lib/auth.ts`, `frontend/lib/apiFetch.ts`,
+  `frontend/app/login/page.tsx`,
+  `frontend/app/auth/oauth/callback/page.tsx`
+- 6 new test files (23 tests added)
+
+### Branches
+- `feature/security-hardening` → `feature/phase1-sprint`
+  → `feature/phase2-sprint` (all pushed to origin)
+
+### Remaining (Phase 3)
+- Story 1.3 — Redis deny list + OAuth state
+- Story 2.2 — API versioning
+- PRs to `dev`, then promote dev → qa → release → main
+
+---
+
 # Session: Mar 10, 2026 — N-tier Groq LLM cascade
 
 ## Summary

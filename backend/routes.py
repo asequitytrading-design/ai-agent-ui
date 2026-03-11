@@ -16,7 +16,7 @@ import queue
 import threading
 import time
 
-from fastapi import FastAPI, HTTPException
+from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -94,12 +94,11 @@ def create_app(
     )
 
     # ---------------------------------------------------------------
-    # Route handlers (closures over registries / settings)
+    # Core route handlers — shared by root and /v1 mounts
     # ---------------------------------------------------------------
 
-    @app.post("/chat", response_model=ChatResponse)
-    async def chat_handler(req: ChatRequest):
-        """Handle ``POST /chat`` — sync agent dispatch."""
+    async def _chat(req: ChatRequest):
+        """Sync agent dispatch (POST /chat)."""
         agent = agent_registry.get(req.agent_id)
         if agent is None:
             raise HTTPException(
@@ -144,9 +143,8 @@ def create_app(
             agent_id=req.agent_id,
         )
 
-    @app.post("/chat/stream")
-    async def chat_stream_handler(req: ChatRequest):
-        """Handle ``POST /chat/stream`` — NDJSON streaming."""
+    async def _chat_stream(req: ChatRequest):
+        """NDJSON streaming (POST /chat/stream)."""
         agent = agent_registry.get(req.agent_id)
         if agent is None:
             raise HTTPException(
@@ -157,7 +155,7 @@ def create_app(
         timeout = settings.agent_timeout_seconds
 
         def generate():
-            """Run agent.stream() in a thread, yield events."""
+            """Run agent.stream() in a thread."""
             event_queue: queue.Queue = queue.Queue()
 
             def run() -> None:
@@ -187,7 +185,8 @@ def create_app(
                         {
                             "type": "timeout",
                             "message": (
-                                f"Agent timed out " f"after {timeout}s"
+                                "Agent timed out"
+                                f" after {timeout}s"
                             ),
                         }
                     ) + "\n"
@@ -206,7 +205,8 @@ def create_app(
                             {
                                 "type": "timeout",
                                 "message": (
-                                    f"Agent timed out " f"after {timeout}s"
+                                    "Agent timed out"
+                                    f" after {timeout}s"
                                 ),
                             }
                         ) + "\n"
@@ -219,17 +219,53 @@ def create_app(
             media_type="application/x-ndjson",
         )
 
-    @app.get("/health")
-    async def health_handler():
-        """Handle ``GET /health``."""
+    async def _health():
+        """GET /health."""
         return {"status": "ok"}
 
-    @app.get("/agents")
-    async def list_agents_handler():
-        """Handle ``GET /agents``."""
+    async def _list_agents():
+        """GET /agents."""
         return {
             "agents": agent_registry.list_agents(),
         }
+
+    # ---------------------------------------------------------------
+    # Mount at root (backward compat) and /v1 (versioned)
+    # ---------------------------------------------------------------
+
+    def _register_core_routes(router: APIRouter) -> None:
+        """Attach core endpoints to *router*."""
+        router.add_api_route(
+            "/chat",
+            _chat,
+            methods=["POST"],
+            response_model=ChatResponse,
+        )
+        router.add_api_route(
+            "/chat/stream",
+            _chat_stream,
+            methods=["POST"],
+        )
+        router.add_api_route(
+            "/health",
+            _health,
+            methods=["GET"],
+        )
+        router.add_api_route(
+            "/agents",
+            _list_agents,
+            methods=["GET"],
+        )
+
+    # Root mount — backward compatibility.
+    root_router = APIRouter()
+    _register_core_routes(root_router)
+    app.include_router(root_router)
+
+    # Versioned mount — /v1/chat, /v1/agents, etc.
+    v1_router = APIRouter(prefix="/v1")
+    _register_core_routes(v1_router)
+    app.include_router(v1_router)
 
     # Auth + user management routers.
     app.include_router(create_auth_router())

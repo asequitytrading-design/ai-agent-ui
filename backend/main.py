@@ -101,6 +101,7 @@ _env_exports = {
     "REFRESH_TOKEN_EXPIRE_DAYS": str(
         _settings.refresh_token_expire_days,
     ),
+    "REDIS_URL": _settings.redis_url,
 }
 for _key, _val in _env_exports.items():
     if _val and _key not in os.environ:

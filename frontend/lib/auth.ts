@@ -22,10 +22,9 @@ export {
   storeOAuthSession,
 } from "@/lib/oauth";
 
-const ACCESS_KEY = "auth_access_token";
+import { BACKEND_URL } from "@/lib/config";
 
-const BACKEND_URL =
-  process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://127.0.0.1:8181";
+const ACCESS_KEY = "auth_access_token";
 
 // ---------------------------------------------------------------------------
 // Storage helpers

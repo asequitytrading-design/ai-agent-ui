@@ -112,6 +112,10 @@ class Settings(BaseSettings):
     # Google JWKS verification cache TTL in seconds.
     google_jwks_cache_ttl: int = 3600
 
+    # Redis URL for token deny-list and OAuth state.
+    # Empty = in-memory fallback (single-instance dev).
+    redis_url: str = ""
+
     # Read from .env in the working directory; silently skip if absent.
     # Real environment variables always take precedence over .env values.
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
