@@ -417,9 +417,27 @@ class TestAnalyseStockPrice:
         assert isinstance(result, str)
         assert (
             "Error" in result
-            or "No local data" in result
             or "No OHLCV" in result
+            or "fetch_stock_data" in result
         )
+
+    def test_missing_data_instructs_fetch_first(self, tmp_path, monkeypatch):
+        """Missing data message must tell LLM to call fetch_stock_data."""
+        import tools._analysis_shared as _ash
+        from tools import price_analysis_tool
+
+        repo = _mock_repo()
+        repo.get_ohlcv.return_value = pd.DataFrame()
+
+        monkeypatch.setattr(_ash, "_get_repo", lambda: repo)
+        monkeypatch.setattr(_ash, "_require_repo", lambda: repo)
+        monkeypatch.setattr(_ash, "_CACHE_DIR", tmp_path / "cache")
+
+        result = price_analysis_tool.analyse_stock_price.invoke(
+            {"ticker": "AAPL"}
+        )
+        assert "fetch_stock_data" in result
+        assert "MUST" in result
 
     def test_with_data_returns_report(self, tmp_path, monkeypatch):
         """With valid Iceberg OHLCV data, tool must return a full report string."""
@@ -514,9 +532,27 @@ class TestForecastStock:
         assert isinstance(result, str)
         assert (
             "Error" in result
-            or "No local data" in result
             or "No OHLCV" in result
+            or "fetch_stock_data" in result
         )
+
+    def test_missing_data_instructs_fetch_first(self, tmp_path, monkeypatch):
+        """Missing data message must tell LLM to call fetch_stock_data."""
+        import tools._forecast_shared as _fsh
+        from tools import forecasting_tool
+
+        repo = _mock_repo()
+        repo.get_ohlcv.return_value = pd.DataFrame()
+
+        monkeypatch.setattr(_fsh, "_get_repo", lambda: repo)
+        monkeypatch.setattr(_fsh, "_require_repo", lambda: repo)
+        monkeypatch.setattr(_fsh, "_CACHE_DIR", tmp_path / "cache")
+
+        result = forecasting_tool.forecast_stock.invoke(
+            {"ticker": "AAPL", "months": 3}
+        )
+        assert "fetch_stock_data" in result
+        assert "MUST" in result
 
     def test_with_data_returns_report(self, tmp_path, monkeypatch):
         """With valid Iceberg OHLCV data, forecast_stock must return a report string."""

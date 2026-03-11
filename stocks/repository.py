@@ -147,6 +147,7 @@ class StockRepository:
     def __init__(self) -> None:
         """Initialise the repository without loading the catalog yet."""
         self._catalog = None
+        self._dirty_tables: set[str] = set()
 
     # ------------------------------------------------------------------
     # Catalog access
@@ -186,6 +187,9 @@ class StockRepository:
         """
         try:
             tbl = self._load_table(identifier)
+            if identifier in self._dirty_tables:
+                tbl.refresh()
+                self._dirty_tables.discard(identifier)
             return tbl.scan().to_pandas()
         except Exception as exc:
             _logger.warning("Could not read table %s: %s", identifier, exc)
@@ -217,10 +221,13 @@ class StockRepository:
             from pyiceberg.expressions import EqualTo
 
             tbl = self._load_table(identifier)
-            scan = tbl.scan(
-                row_filter=EqualTo("ticker", ticker),
-                selected_fields=selected_fields or (),
-            )
+            if identifier in self._dirty_tables:
+                tbl.refresh()
+                self._dirty_tables.discard(identifier)
+            scan_kwargs = {"row_filter": EqualTo("ticker", ticker)}
+            if selected_fields:
+                scan_kwargs["selected_fields"] = selected_fields
+            scan = tbl.scan(**scan_kwargs)
             return scan.to_pandas()
         except Exception as exc:
             _logger.warning(
@@ -265,6 +272,9 @@ class StockRepository:
             from pyiceberg.expressions import And, EqualTo
 
             tbl = self._load_table(identifier)
+            if identifier in self._dirty_tables:
+                tbl.refresh()
+                self._dirty_tables.discard(identifier)
             return tbl.scan(
                 row_filter=And(EqualTo(col1, val1), EqualTo(col2, val2))
             ).to_pandas()
@@ -296,6 +306,9 @@ class StockRepository:
             on read failure; the table object is always returned.
         """
         tbl = self._load_table(identifier)
+        if identifier in self._dirty_tables:
+            tbl.refresh()
+            self._dirty_tables.discard(identifier)
         try:
             df = tbl.scan().to_pandas()
         except Exception as exc:
@@ -330,6 +343,7 @@ class StockRepository:
             tbl = self._load_table(identifier)
             try:
                 getattr(tbl, operation)(*args)
+                self._dirty_tables.add(identifier)
                 return
             except CommitFailedException as exc:
                 last_exc = exc
