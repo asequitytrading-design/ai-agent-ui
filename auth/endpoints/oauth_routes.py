@@ -151,7 +151,7 @@ def register(router: APIRouter) -> None:
             )
             raise HTTPException(
                 status_code=400,
-                detail="OAuth token exchange failed: {}".format(exc),
+                detail="OAuth token exchange failed. Please try again.",
             )
         user = repo.get_or_create_by_oauth(
             provider=user_info["provider"],

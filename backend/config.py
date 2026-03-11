@@ -14,7 +14,7 @@ Typical usage::
     from config import get_settings
 
     settings = get_settings()
-    print(settings.log_level)   # "DEBUG"
+    assert settings.log_level == "DEBUG"
 """
 
 from functools import lru_cache

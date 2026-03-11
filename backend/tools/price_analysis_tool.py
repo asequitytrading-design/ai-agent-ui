@@ -116,8 +116,8 @@ def analyse_stock_price(ticker: str) -> str:
                             f"or the dashboard to view "
                             f"results."
                         )
-    except Exception:
-        pass  # non-critical; fall through to full analysis
+    except Exception as exc:
+        _logger.debug("Freshness check skipped for %s: %s", ticker, exc)
 
     try:
         df = _sh._load_parquet(ticker)

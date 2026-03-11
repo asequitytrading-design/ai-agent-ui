@@ -50,6 +50,7 @@ import queue
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 # Make the project root importable so that the auth/ package (which lives
 # alongside backend/ rather than inside it) can be found by Python.
@@ -130,6 +131,10 @@ class ChatServer:
         self.tool_registry = ToolRegistry()
         self.agent_registry = AgentRegistry()
 
+        # Bounded thread pool for agent execution — prevents
+        # unlimited thread spawning under high concurrency.
+        self.executor = ThreadPoolExecutor(max_workers=10)
+
         # Shared token budget and message compressor —
         # one instance across all agents so TPM/TPD tracking
         # is accurate at the organisation level.
@@ -205,24 +210,57 @@ class ChatServer:
     def _create_app(self) -> FastAPI:
         """Build and return the configured FastAPI ASGI application.
 
-        Attaches CORS middleware (open to all origins — tighten before
-        production deployment) and registers all HTTP route handlers.
+        Attaches CORS middleware (whitelisted origins), security
+        headers, and registers all HTTP route handlers.
 
         Returns:
             A fully configured :class:`~fastapi.FastAPI` instance.
         """
         app = FastAPI(title="AI Agent API")
+
+        # CORS: whitelist known front-end origins.
+        _allowed_origins = [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:8050",
+            "http://127.0.0.1:8050",
+        ]
         app.add_middleware(
             CORSMiddleware,
-            allow_origins=["*"],
+            allow_origins=_allowed_origins,
             allow_credentials=True,
-            allow_methods=["*"],
-            allow_headers=["*"],
+            allow_methods=["GET", "POST", "PATCH", "DELETE"],
+            allow_headers=[
+                "Authorization",
+                "Content-Type",
+            ],
         )
+
+        # Security response headers.
+        from starlette.middleware.base import (
+            BaseHTTPMiddleware,
+        )
+        from starlette.requests import Request
+
+        class _SecurityHeadersMiddleware(BaseHTTPMiddleware):
+            async def dispatch(self, request: Request, call_next):
+                response = await call_next(request)
+                response.headers["X-Content-Type-Options"] = (
+                    "nosniff"
+                )
+                response.headers["X-Frame-Options"] = "DENY"
+                response.headers["Referrer-Policy"] = (
+                    "strict-origin-when-cross-origin"
+                )
+                return response
+
+        app.add_middleware(_SecurityHeadersMiddleware)
+
         # Register handlers by passing bound methods to the route decorators.
         app.post("/chat", response_model=ChatResponse)(self._chat_handler)
         app.post("/chat/stream")(self._chat_stream_handler)
         app.get("/agents")(self._list_agents_handler)
+        app.get("/health")(self._health_handler)
 
         # Auth + user management router (mounts /auth/*, /users/*, /admin/*)
         app.include_router(create_auth_router())
@@ -272,7 +310,10 @@ class ChatServer:
         try:
             loop = asyncio.get_event_loop()
             future = loop.run_in_executor(
-                None, agent.run, req.message, req.history
+                self.executor,
+                agent.run,
+                req.message,
+                req.history,
             )
             result = await asyncio.wait_for(
                 future, timeout=self.settings.agent_timeout_seconds
@@ -361,7 +402,7 @@ class ChatServer:
                     break
                 remaining = timeout - elapsed
                 try:
-                    item = event_queue.get(timeout=min(remaining, 1.0))
+                    item = event_queue.get(timeout=remaining)
                     if item is None:
                         break
                     yield item
@@ -378,6 +419,15 @@ class ChatServer:
             worker.join(timeout=2)
 
         return StreamingResponse(generate(), media_type="application/x-ndjson")
+
+    async def _health_handler(self) -> dict:
+        """Handle ``GET /health`` requests.
+
+        Returns:
+            A dict with ``"status": "ok"`` when the service
+            is running.
+        """
+        return {"status": "ok"}
 
     async def _list_agents_handler(self) -> dict:
         """Handle ``GET /agents`` requests.

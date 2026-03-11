@@ -12,8 +12,9 @@
 ## Core Patterns
 
 - **`ChatServer`** (`backend/main.py`) — owns `ToolRegistry`,
-  `AgentRegistry`, FastAPI app. All state in this class, no
-  module-level mutable globals.
+  `AgentRegistry`, FastAPI app, bounded `ThreadPoolExecutor(10)`.
+  All state in this class, no module-level mutable globals.
+  `GET /health` endpoint returns `{"status": "ok"}`.
 - **`BaseAgent`** (`backend/agents/base.py`) — ABC with agentic loop
   (`MAX_ITERATIONS=15`) + streaming. Subclasses only override
   `_build_llm()`.

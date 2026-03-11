@@ -6,7 +6,7 @@ Functions
 """
 
 import logging
-import uuid
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Dict
 
@@ -194,7 +194,7 @@ def register(router: APIRouter) -> None:
         user = repo.get_by_id(current_user.user_id)
         if user is None:
             raise HTTPException(status_code=404, detail="User not found")
-        reset_token = str(uuid.uuid4())
+        reset_token = secrets.token_urlsafe(32)
         expiry = datetime.now(timezone.utc) + timedelta(minutes=30)
         repo.update(
             current_user.user_id,

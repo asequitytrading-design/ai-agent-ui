@@ -125,8 +125,10 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
                             f"Use the dashboard to view "
                             f"current forecast results."
                         )
-    except Exception:
-        pass  # non-critical; fall through to forecast
+    except Exception as exc:
+        _logger.debug(
+            "Cooldown check skipped for %s: %s", ticker, exc
+        )
 
     try:
         df = _sh._load_parquet(ticker)
