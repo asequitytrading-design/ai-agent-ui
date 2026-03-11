@@ -254,11 +254,18 @@ do_start() {
         "$MKDOCS" serve --dev-addr "127.0.0.1:${DOCS_PORT}"
 
     echo "  Launching dashboard…"
+    # macOS Obj-C runtime aborts forked workers unless this is set.
+    # Harmless on Linux. Gunicorn gthread uses 1 process + 4 threads
+    # so parallel E2E requests are handled without blocking.
+    OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES \
     _launch "dashboard" "${SCRIPT_DIR}" \
         "$GUNICORN" "dashboard.app:server" \
         --bind "127.0.0.1:${DASHBOARD_PORT}" \
-        --workers 2 \
+        --worker-class gthread \
+        --workers 1 \
+        --threads 4 \
         --timeout 120 \
+        --preload \
         --access-logfile -
 
     echo ""
