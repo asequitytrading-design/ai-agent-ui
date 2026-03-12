@@ -323,6 +323,12 @@ info "Upgrading pip..."
 info "Installing packages from requirements.txt (this may take a few minutes)..."
 "$VENV_PYTHON" -m pip install -r "$REQUIREMENTS" --quiet
 
+REQUIREMENTS_DEV="$SCRIPT_DIR/backend/requirements-dev.txt"
+if [[ -f "$REQUIREMENTS_DEV" ]]; then
+    info "Installing dev/test dependencies from requirements-dev.txt..."
+    "$VENV_PYTHON" -m pip install -r "$REQUIREMENTS_DEV" --quiet
+fi
+
 ok "Python dependencies installed"
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -667,10 +673,10 @@ if [[ $REDIS_INSTALLED -eq 1 ]]; then
             sudo systemctl start redis-server 2>/dev/null || true
         fi
         # Wait up to 5 seconds for Redis to accept connections
-        local attempt=0
-        while ! redis-cli ping &>/dev/null 2>&1 && (( attempt < 10 )); do
+        _attempt=0
+        while ! redis-cli ping &>/dev/null 2>&1 && (( _attempt < 10 )); do
             sleep 0.5
-            (( attempt++ ))
+            (( _attempt++ ))
         done
         if redis-cli ping &>/dev/null 2>&1; then
             ok "Redis started and responding to PING"
