@@ -2,6 +2,35 @@
 
 ---
 
+# Session: Mar 13, 2026 (cont. 2) — ASETPLTFRM-13, 20
+
+## Summary
+Tier health monitoring and full API v1 cutover.
+
+### ASETPLTFRM-13 — Groq tier health monitoring
+- Per-tier health classification: healthy/degraded/down/disabled
+  (5-min sliding window, thresholds: 1 failure = degraded, 4 = down).
+- Latency stats (avg + p95) from sliding window of recent values.
+- Admin endpoints: `GET /v1/admin/tier-health`,
+  `POST /v1/admin/tier-health/{model}/toggle`.
+- Dashboard health cards with color-coded status indicators.
+- 12 backend tests (`test_tier_health.py`), 6 dashboard tests
+  (`test_tier_health_cards.py`), 3 E2E tests.
+
+### ASETPLTFRM-20 — API v1 cutover
+- Removed root-mounted duplicate routes; all API under `/v1/`.
+- Frontend: added `API_URL` constant (`BACKEND_URL/v1`), updated
+  9 files to use `API_URL` for API calls, kept `BACKEND_URL` for
+  static assets (avatars) and WS URL derivation.
+- Dashboard: split `_BACKEND_URL` → `_BACKEND_HOST` + API URL.
+- WebSocket stays at `/ws/chat` (not versioned).
+- Rewrote `test_api_versioning.py` (8 tests), updated
+  `test_chat_stream.py` to use `/v1/` paths.
+- Python 3.9 compat: `from __future__ import annotations` in 7
+  backend files.
+
+---
+
 # Session: Mar 13, 2026 (cont.) — ASETPLTFRM-18, 19, 58
 
 ## Summary
