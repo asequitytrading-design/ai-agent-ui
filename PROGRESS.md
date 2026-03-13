@@ -2,6 +2,35 @@
 
 ---
 
+# Session: Mar 13, 2026 — ASETPLTFRM-7, 10, 12
+
+## Summary
+Implemented three Jira stories on `feature/iframe-top-navigation`:
+
+### ASETPLTFRM-7 — JWKS key rotation + iframe sign-in fix
+- JWKS rotation endpoint, iframe top-navigation sign-in fix.
+
+### ASETPLTFRM-10 — Session management (backend + frontend)
+- Backend: `GET /auth/sessions`, `DELETE /auth/sessions/{id}`,
+  `POST /auth/sessions/revoke-all` with JTI-based tracking.
+- Frontend: `SessionManagementModal` with device parsing,
+  current-session highlight, revoke/revoke-all actions.
+- 12 backend tests, 22 frontend tests passing.
+
+### ASETPLTFRM-12 — LLM observability dashboard (8 pts)
+- `ObservabilityCollector` — thread-safe cascade/request/compression
+  metrics with sliding-window RPM tracking.
+- Wired into `FallbackLLM` at 5 instrumentation points.
+- `GET /admin/metrics` endpoint (superuser only).
+- Dash "LLM Observability" tab: auto-refresh tier cards with
+  TPM/RPM gauges, cascade summary badges, event log table.
+- 8 tests (6 collector unit + 2 endpoint).
+
+### Test results
+- 391 passed, 1 pre-existing failure, 7 skipped (no regressions).
+
+---
+
 # Session: Mar 13, 2026 — Sprint 1 Branch Promotions
 
 ## Summary
