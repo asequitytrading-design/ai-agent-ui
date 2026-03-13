@@ -10,6 +10,8 @@ Example::
     from dashboard.callbacks.data_loaders import _load_raw, _add_indicators
 """
 
+from __future__ import annotations
+
 import logging
 import sys
 import time as _time

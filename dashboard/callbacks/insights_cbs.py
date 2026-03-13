@@ -11,6 +11,8 @@ Example::
     register(app)
 """
 
+from __future__ import annotations
+
 import logging
 import math
 from typing import Any, Optional
@@ -1719,6 +1721,87 @@ def register(app) -> None:
     )
     def _reset_quarterly_page_on_sort(_s):
         """Reset quarterly to page 1 on sort change."""
+        return 1
+
+    # ── Reset pagination on filter / page-size changes ─
+    @app.callback(
+        Output(
+            "screener-pagination",
+            "active_page",
+            allow_duplicate=True,
+        ),
+        Input("screener-rsi-filter", "value"),
+        Input("screener-market-filter", "value"),
+        Input("screener-sector-filter", "value"),
+        Input("screener-page-size", "value"),
+        prevent_initial_call=True,
+    )
+    def _reset_screener_page_on_filter(*_a):
+        """Reset screener to page 1 on filter change."""
+        return 1
+
+    @app.callback(
+        Output(
+            "targets-pagination",
+            "active_page",
+            allow_duplicate=True,
+        ),
+        Input("targets-ticker-dropdown", "value"),
+        Input("targets-market-filter", "value"),
+        Input("targets-sector-filter", "value"),
+        Input("targets-page-size", "value"),
+        prevent_initial_call=True,
+    )
+    def _reset_targets_page_on_filter(*_a):
+        """Reset targets to page 1 on filter change."""
+        return 1
+
+    @app.callback(
+        Output(
+            "dividends-pagination",
+            "active_page",
+            allow_duplicate=True,
+        ),
+        Input("dividends-ticker-dropdown", "value"),
+        Input("dividends-market-filter", "value"),
+        Input("dividends-sector-filter", "value"),
+        Input("dividends-page-size", "value"),
+        prevent_initial_call=True,
+    )
+    def _reset_dividends_page_on_filter(*_a):
+        """Reset dividends to page 1 on filter change."""
+        return 1
+
+    @app.callback(
+        Output(
+            "risk-pagination",
+            "active_page",
+            allow_duplicate=True,
+        ),
+        Input("risk-market-filter", "value"),
+        Input("risk-sector-filter", "value"),
+        Input("risk-page-size", "value"),
+        prevent_initial_call=True,
+    )
+    def _reset_risk_page_on_filter(*_a):
+        """Reset risk to page 1 on filter change."""
+        return 1
+
+    @app.callback(
+        Output(
+            "quarterly-pagination",
+            "active_page",
+            allow_duplicate=True,
+        ),
+        Input("quarterly-ticker-filter", "value"),
+        Input("quarterly-sector-filter", "value"),
+        Input("quarterly-market-filter", "value"),
+        Input("quarterly-statement-filter", "value"),
+        Input("quarterly-page-size", "value"),
+        prevent_initial_call=True,
+    )
+    def _reset_quarterly_page_on_filter(*_a):
+        """Reset quarterly to page 1 on filter change."""
         return 1
 
     # ── Filter insight dropdowns by user tickers ──────

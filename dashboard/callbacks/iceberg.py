@@ -15,6 +15,8 @@ Example::
     df = _get_ohlcv_cached(repo, "AAPL")
 """
 
+from __future__ import annotations
+
 import logging
 import os
 import sys

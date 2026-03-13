@@ -2,6 +2,45 @@
 
 ---
 
+# Session: Mar 13, 2026 (cont.) — ASETPLTFRM-18, 19, 58
+
+## Summary
+Bug fixes, lazy loading, forecast charts, and E2E expansion.
+
+### ASETPLTFRM-18 — Lazy tab loading (analysis page)
+- Tabs render via callback on `active_tab`; no children at init.
+- `suppress_callback_exceptions=True` enabled.
+- Bug fix: moved `analysis-refresh-store` + poll interval
+  outside tab content so they persist across tab switches.
+
+### ASETPLTFRM-19 — Forecast chart types
+- Horizon radio (3/6/9 months), view radio (standard,
+  decomposition, multi_horizon).
+- 14 new unit tests (`test_lazy_loading.py`,
+  `test_forecast_charts.py`).
+
+### Bug fixes
+- **Compare chart broken**: `analysis-refresh-store` destroyed
+  on tab switch — moved to `analysis_tabs_layout()`.
+- **Pagination reset to page 1**: phantom sort-store writes
+  from pattern-matching callbacks firing on table re-render.
+  Fixed with `if not any(n_clicks_list): return no_update`
+  guard in `sort_helpers.py`.
+- **Python 3.9 compat**: added `from __future__ import
+  annotations` to 10 dashboard files using `X | None` syntax.
+
+### ASETPLTFRM-58 — E2E test coverage (+42 tests)
+- New: `pagination.spec.ts` (10 tests) — cross-page validation.
+- Updated 6 specs: home (+4), insights (+10), marketplace (+6),
+  forecast (+6), analysis (+7), admin (+7).
+- Total E2E: ~91 tests.
+
+### Jira updates
+- ASETPLTFRM-18, 19 updated with implementation details.
+- ASETPLTFRM-58 updated with full E2E coverage breakdown.
+
+---
+
 # Session: Mar 13, 2026 — ASETPLTFRM-7, 10, 12
 
 ## Summary

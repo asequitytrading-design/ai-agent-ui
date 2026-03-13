@@ -8,6 +8,8 @@ Example::
     from dashboard.callbacks.auth_utils import _validate_token, _api_call
 """
 
+from __future__ import annotations
+
 import logging
 import os
 from typing import Any, Dict, Optional
