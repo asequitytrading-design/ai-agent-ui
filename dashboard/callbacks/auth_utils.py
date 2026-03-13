@@ -24,7 +24,10 @@ _FRONTEND_LOGIN_URL = (
     os.environ.get("FRONTEND_URL", "http://localhost:3000") + "/login"
 )
 # Module-level configuration constant — kept module-level for shared access
-_BACKEND_URL = os.environ.get("BACKEND_URL", "http://127.0.0.1:8181")
+_BACKEND_HOST = os.environ.get(
+    "BACKEND_URL", "http://127.0.0.1:8181",
+)
+_BACKEND_URL = f"{_BACKEND_HOST}/v1"
 
 
 def _validate_token(token: Optional[str]) -> Optional[Dict[str, Any]]:

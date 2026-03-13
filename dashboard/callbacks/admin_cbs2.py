@@ -31,7 +31,10 @@ _logger = logging.getLogger(__name__)
 
 # Module-level configuration constant — prefixed with _
 # to signal non-public use.
-_BACKEND_URL = os.environ.get("BACKEND_URL", "http://127.0.0.1:8181")
+_BACKEND_HOST = os.environ.get(
+    "BACKEND_URL", "http://127.0.0.1:8181",
+)
+_BACKEND_URL = f"{_BACKEND_HOST}/v1"
 
 
 def _upload_avatar_for_user(
@@ -229,7 +232,7 @@ def register(app) -> None:
             )
             if avatar_url:
                 full_url = (
-                    _BACKEND_URL + avatar_url
+                    _BACKEND_HOST + avatar_url
                     if avatar_url.startswith("/")
                     else avatar_url
                 )

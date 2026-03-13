@@ -253,7 +253,7 @@ def create_app(
         return result
 
     # ---------------------------------------------------------------
-    # Mount at root (backward compat) and /v1 (versioned)
+    # All API endpoints under /v1 (ASETPLTFRM-20)
     # ---------------------------------------------------------------
 
     def _register_core_routes(router: APIRouter) -> None:
@@ -280,19 +280,20 @@ def create_app(
             methods=["GET"],
         )
 
-    # Root mount — backward compatibility.
-    root_router = APIRouter()
-    _register_core_routes(root_router)
-    app.include_router(root_router)
-
     # Versioned mount — /v1/chat, /v1/agents, etc.
     v1_router = APIRouter(prefix="/v1")
     _register_core_routes(v1_router)
     app.include_router(v1_router)
 
-    # Auth + user management routers.
-    app.include_router(create_auth_router())
-    app.include_router(get_ticker_router())
+    # Auth + user management routers under /v1.
+    app.include_router(
+        create_auth_router(),
+        prefix="/v1",
+    )
+    app.include_router(
+        get_ticker_router(),
+        prefix="/v1",
+    )
 
     # Admin observability (superuser only).
     from auth.dependencies import superuser_only
@@ -323,11 +324,76 @@ def create_app(
             ],
         }
 
-    admin_router = APIRouter()
+    async def _admin_tier_health():
+        """GET /admin/tier-health — per-tier health status."""
+        result: dict = {"timestamp": time.time()}
+        if obs_collector is not None:
+            # Parse configured tiers from settings.
+            tiers_csv = getattr(
+                settings,
+                "groq_model_tiers",
+                "",
+            )
+            tier_models = (
+                [t.strip() for t in tiers_csv.split(",") if t.strip()]
+                if tiers_csv
+                else None
+            )
+            result["health"] = obs_collector.get_tier_health(tier_models)
+        else:
+            result["health"] = {
+                "tiers": [],
+                "summary": {
+                    "total": 0,
+                    "healthy": 0,
+                    "degraded": 0,
+                    "down": 0,
+                    "disabled": 0,
+                },
+            }
+        return result
+
+    async def _admin_tier_toggle(
+        model: str,
+        enabled: bool = True,
+    ):
+        """POST /admin/tier-toggle — enable/disable a tier.
+
+        Args:
+            model: Groq model identifier.
+            enabled: True to enable, False to disable.
+        """
+        if obs_collector is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Observability not available",
+            )
+        if enabled:
+            obs_collector.enable_tier(model)
+        else:
+            obs_collector.disable_tier(model)
+        return {
+            "model": model,
+            "enabled": enabled,
+        }
+
+    admin_router = APIRouter(prefix="/v1")
     admin_router.add_api_route(
         "/admin/metrics",
         _admin_metrics,
         methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/tier-health",
+        _admin_tier_health,
+        methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/tier-toggle",
+        _admin_tier_toggle,
+        methods=["POST"],
         dependencies=[Depends(superuser_only)],
     )
     admin_router.add_api_route(
