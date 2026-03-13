@@ -4,11 +4,12 @@ Fetches ``GET /admin/metrics`` every 10 seconds and renders
 per-model tier status cards, cascade summary, and event log.
 """
 
+import json
 import logging
 from datetime import datetime, timezone
 
 import dash_bootstrap_components as dbc
-from dash import Input, Output, State, html
+from dash import Input, Output, State, html, no_update
 
 from dashboard.callbacks.auth_utils import (
     _api_call,
@@ -141,30 +142,51 @@ def register(app) -> None:
 
     @app.callback(
         Output("obs-metrics-store", "data"),
+        Output("obs-prev-metrics-store", "data"),
         Input("obs-interval", "n_intervals"),
         State("auth-token-store", "data"),
         State("url", "search"),
+        State("obs-prev-metrics-store", "data"),
     )
-    def fetch_metrics(n, stored_token, url_search):
+    def fetch_metrics(n, stored_token, url_search, prev_data):
         """Poll ``GET /admin/metrics`` every interval.
+
+        Skips DOM update when metrics are unchanged
+        (ignores ``timestamp`` field for comparison).
 
         Args:
             n: Interval tick count.
             stored_token: JWT from client store.
             url_search: URL query string.
+            prev_data: Previous metrics for diff check.
 
         Returns:
-            Metrics dict or ``None``.
+            ``(metrics, prev)`` or ``no_update`` if
+            unchanged.
         """
         token = _resolve_token(stored_token, url_search)
         resp = _api_call("get", "/admin/metrics", token)
         if resp is None or not resp.ok:
-            return None
-        return resp.json()
+            if prev_data is None:
+                return None, None
+            return no_update, no_update
+        data = resp.json()
+
+        # Compare without volatile timestamp field.
+        def _stable(d):
+            if d is None:
+                return ""
+            c = {k: v for k, v in d.items() if k != "timestamp"}
+            return json.dumps(c, sort_keys=True)
+
+        if _stable(data) == _stable(prev_data):
+            return no_update, no_update
+        return data, data
 
     @app.callback(
         Output("obs-summary-row", "children"),
         Input("obs-metrics-store", "data"),
+        prevent_initial_call=True,
     )
     def render_summary(data):
         """Render cascade summary badges.
@@ -229,6 +251,7 @@ def register(app) -> None:
     @app.callback(
         Output("obs-tier-cards", "children"),
         Input("obs-metrics-store", "data"),
+        prevent_initial_call=True,
     )
     def render_tier_cards(data):
         """Render per-model budget status cards.
@@ -251,6 +274,7 @@ def register(app) -> None:
     @app.callback(
         Output("obs-cascade-table", "children"),
         Input("obs-metrics-store", "data"),
+        prevent_initial_call=True,
     )
     def render_cascade_log(data):
         """Render recent cascade events as a table.

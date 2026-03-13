@@ -26,14 +26,18 @@ def observability_layout() -> html.Div:
     return html.Div(
         className="mt-3",
         children=[
-            # Auto-refresh every 10 seconds.
+            # Silent background refresh every 60 seconds.
             dcc.Interval(
                 id="obs-interval",
-                interval=10_000,
+                interval=60_000,
                 n_intervals=0,
             ),
-            # Hidden store for metrics data.
+            # Hidden stores for metrics data.
             dcc.Store(id="obs-metrics-store", data=None),
+            dcc.Store(
+                id="obs-prev-metrics-store",
+                data=None,
+            ),
             # ── Summary row ────────────────────────
             html.Div(
                 id="obs-summary-row",
@@ -44,26 +48,12 @@ def observability_layout() -> html.Div:
                 "Model Budget Status",
                 className="text-muted mb-3",
             ),
-            dcc.Loading(
-                id="loading-obs-tiers",
-                type="circle",
-                color="#4f46e5",
-                children=html.Div(
-                    id="obs-tier-cards",
-                ),
-            ),
+            html.Div(id="obs-tier-cards"),
             # ── Cascade event log ──────────────────
             html.H5(
                 "Recent Cascade Events",
                 className="text-muted mb-3 mt-4",
             ),
-            dcc.Loading(
-                id="loading-obs-cascade",
-                type="circle",
-                color="#4f46e5",
-                children=html.Div(
-                    id="obs-cascade-table",
-                ),
-            ),
+            html.Div(id="obs-cascade-table"),
         ],
     )
