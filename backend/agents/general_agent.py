@@ -92,14 +92,14 @@ def create_general_agent(
         temperature=0.0,
         tool_names=["get_current_time", "search_web"],
     )
-    agent = GeneralAgent(
+    return GeneralAgent(
         config=config,
         tool_registry=tool_registry,
+        token_budget=token_budget or TokenBudget(),
+        compressor=compressor
+        or MessageCompressor(
+            max_history_turns=settings.max_history_turns,
+            max_tool_result_chars=(settings.max_tool_result_chars),
+        ),
+        obs_collector=obs_collector,
     )
-    agent.token_budget = token_budget or TokenBudget()
-    agent.compressor = compressor or MessageCompressor(
-        max_history_turns=settings.max_history_turns,
-        max_tool_result_chars=settings.max_tool_result_chars,
-    )
-    agent.obs_collector = obs_collector
-    return agent
