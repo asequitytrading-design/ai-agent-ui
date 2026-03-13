@@ -28,7 +28,7 @@ export const MessageBubble = React.memo(function MessageBubble({ message: msg, o
         </div>
       )}
 
-      <div className={`flex flex-col gap-1 max-w-[72%] ${msg.role === "user" ? "items-end" : "items-start"}`}>
+      <div className={`flex flex-col gap-1 max-w-[85%] md:max-w-[72%] ${msg.role === "user" ? "items-end" : "items-start"}`}>
         <div
           className={`px-4 py-2.5 rounded-2xl text-sm shadow-sm ${
             msg.role === "user"

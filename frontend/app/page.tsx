@@ -86,8 +86,13 @@ export default function ChatPage() {
 
   // Fix #10: stable handler reference — useCallback so identity is preserved
   // across effect re-runs when menuOpen changes.
+  // Only fires on desktop — on mobile the drawer has its own close handlers.
   const handleMenuOutsideClick = useCallback((e: MouseEvent) => {
-    if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+    if (
+      menuRef.current &&
+      menuRef.current.offsetParent !== null &&
+      !menuRef.current.contains(e.target as Node)
+    ) {
       setMenuOpen(false);
     }
   }, []);
@@ -174,11 +179,12 @@ export default function ChatPage() {
         onEditProfile={editProfile.open}
         onChangePassword={changePassword.open}
         onManageSessions={sessionMgmt.open}
+        onToggleMobileMenu={() => setMenuOpen((v) => !v)}
       />
 
       {view === "chat" ? (
         <>
-          <main className="flex-1 overflow-y-auto px-4 py-6 space-y-6">
+          <main className="flex-1 overflow-y-auto px-3 md:px-4 py-4 md:py-6 space-y-4 md:space-y-6">
             {messages.length === 0 && !loading && (
               <div className="flex flex-col items-center justify-center h-full text-center gap-4 pb-24">
                 <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center text-white text-2xl shadow-lg">
