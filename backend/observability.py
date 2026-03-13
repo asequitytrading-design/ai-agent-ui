@@ -30,7 +30,7 @@ import time
 import uuid
 from collections import deque
 from datetime import date, datetime, timezone
-from typing import Any, Dict
+from typing import Any
 
 _logger = logging.getLogger(__name__)
 
@@ -81,23 +81,23 @@ class ObservabilityCollector:
                 events are tracked in-memory only.
         """
         self._lock = threading.Lock()
-        self._requests_by_model: Dict[str, int] = {}
+        self._requests_by_model: dict[str, int] = {}
         self._cascade_count: int = 0
         self._compression_count: int = 0
         self._cascade_log: deque = deque(
             maxlen=_MAX_EVENTS,
         )
-        self._requests_minute: Dict[str, deque] = {}
+        self._requests_minute: dict[str, deque] = {}
         self._repo = repo
-        self._pricing: Dict[tuple, dict] = {}
+        self._pricing: dict[tuple, dict] = {}
         self._pending_events: list[dict] = []
         self._flush_timer: threading.Timer | None = None
 
         # Per-tier health tracking.
-        self._failures_by_model: Dict[str, deque] = {}
-        self._successes_by_model: Dict[str, deque] = {}
-        self._cascades_by_model: Dict[str, int] = {}
-        self._latency_by_model: Dict[str, deque] = {}
+        self._failures_by_model: dict[str, deque] = {}
+        self._successes_by_model: dict[str, deque] = {}
+        self._cascades_by_model: dict[str, int] = {}
+        self._latency_by_model: dict[str, deque] = {}
         self._disabled_tiers: set[str] = set()
 
         if repo is not None:
@@ -518,7 +518,7 @@ class ObservabilityCollector:
         self,
         model: str,
         now: float,
-    ) -> Dict[str, int | None]:
+    ) -> dict[str, int | None]:
         """Compute latency stats for a model.
 
         Args:
@@ -547,7 +547,7 @@ class ObservabilityCollector:
     def get_tier_health(
         self,
         tier_models: list[str] | None = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Return per-tier health status.
 
         Args:
@@ -631,7 +631,7 @@ class ObservabilityCollector:
     # Stats
     # ----------------------------------------------------------
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Return current observability metrics.
 
         Returns:
@@ -643,7 +643,7 @@ class ObservabilityCollector:
         now = time.monotonic()
         with self._lock:
             total = sum(self._requests_by_model.values())
-            rpm: Dict[str, int] = {}
+            rpm: dict[str, int] = {}
             cutoff = now - _MINUTE
             for model, dq in self._requests_minute.items():
                 while dq and dq[0] < cutoff:

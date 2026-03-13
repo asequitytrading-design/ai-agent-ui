@@ -55,10 +55,7 @@ def forecast_layout() -> html.Div:
                         [
                             html.Label(
                                 "Forecast Horizon",
-                                className=(
-                                    "text-muted small"
-                                    " fw-semibold"
-                                ),
+                                className=("text-muted small" " fw-semibold"),
                             ),
                             dbc.RadioItems(
                                 id="forecast-horizon-radio",
@@ -89,10 +86,7 @@ def forecast_layout() -> html.Div:
                         [
                             html.Label(
                                 "Chart View",
-                                className=(
-                                    "text-muted small"
-                                    " fw-semibold"
-                                ),
+                                className=("text-muted small" " fw-semibold"),
                             ),
                             dbc.RadioItems(
                                 id="forecast-view-radio",

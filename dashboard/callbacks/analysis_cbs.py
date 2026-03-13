@@ -81,12 +81,14 @@ def register(app, mgr: RefreshManager) -> None:
             from dashboard.layouts.forecast import (  # noqa
                 forecast_layout,
             )
+
             return forecast_layout()
 
         if active_tab == "compare-tab":
             from dashboard.layouts.compare import (  # noqa
                 compare_layout,
             )
+
             return compare_layout()
 
         # Default: analysis-tab

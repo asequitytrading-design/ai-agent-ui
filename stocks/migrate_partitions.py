@@ -31,9 +31,7 @@ import logging
 import os
 import sys
 
-_SCRIPT_DIR = os.path.dirname(
-    os.path.dirname(os.path.abspath(__file__))
-)
+_SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _BACKEND_DIR = os.path.join(_SCRIPT_DIR, "backend")
 if _BACKEND_DIR not in sys.path:
     sys.path.insert(0, _BACKEND_DIR)
@@ -120,16 +118,12 @@ def report_partitions() -> dict:
         f"{_NAMESPACE}.dividends": {
             "recommended": ["ticker"],
             "reason": (
-                "Queries filter by ticker; "
-                "partition enables pruning"
+                "Queries filter by ticker; " "partition enables pruning"
             ),
         },
         f"{_NAMESPACE}.technical_indicators": {
             "recommended": ["ticker"],
-            "reason": (
-                "Already optimal; mirrors OHLCV "
-                "partition strategy"
-            ),
+            "reason": ("Already optimal; mirrors OHLCV " "partition strategy"),
         },
         f"{_NAMESPACE}.analysis_summary": {
             "recommended": ["ticker"],
@@ -152,8 +146,7 @@ def report_partitions() -> dict:
         f"{_NAMESPACE}.quarterly_results": {
             "recommended": ["ticker"],
             "reason": (
-                "Queries filter by ticker; "
-                "enables efficient scoped upserts"
+                "Queries filter by ticker; " "enables efficient scoped upserts"
             ),
         },
         f"{_NAMESPACE}.llm_pricing": {
@@ -204,11 +197,11 @@ def _count_rows(table) -> int:
     """
     try:
         df = table.scan(
-            selected_fields=["ticker"]
-            if "ticker" in [
-                f.name for f in table.schema().fields
-            ]
-            else [],
+            selected_fields=(
+                ["ticker"]
+                if "ticker" in [f.name for f in table.schema().fields]
+                else []
+            ),
         ).to_pandas()
         return len(df)
     except Exception:
@@ -221,67 +214,66 @@ def print_report(report: dict) -> None:
     Args:
         report: Output from :func:`report_partitions`.
     """
-    print("\n" + "=" * 60)
-    print("Iceberg Partition Report")
-    print("=" * 60)
+    _logger.info("\n" + "=" * 60)
+    _logger.info("Iceberg Partition Report")
+    _logger.info("=" * 60)
 
     for table_id, info in sorted(report.items()):
         status = info["status"]
         icon = "OK" if status == "OK" else "!!"
-        print(
-            f"\n[{icon}] {table_id}"
-            f"  ({info['row_count']} rows)"
+        _logger.info(
+            "\n[%s] %s  (%d rows)",
+            icon,
+            table_id,
+            info["row_count"],
         )
-        print(
-            f"  Current:     "
-            f"{info['current'] or '(none)'}"
+        _logger.info(
+            "  Current:     %s",
+            info["current"] or "(none)",
         )
-        print(
-            f"  Recommended: "
-            f"{info['recommended'] or '(none)'}"
+        _logger.info(
+            "  Recommended: %s",
+            info["recommended"] or "(none)",
         )
-        print(f"  Reason:      {info['reason']}")
+        _logger.info(
+            "  Reason:      %s",
+            info["reason"],
+        )
 
     needs_update = [
-        t
-        for t, i in report.items()
-        if i["status"] == "NEEDS_UPDATE"
+        t for t, i in report.items() if i["status"] == "NEEDS_UPDATE"
     ]
     if needs_update:
-        print(
-            f"\n{len(needs_update)} table(s) could "
-            f"benefit from partition changes:"
+        _logger.info(
+            "\n%d table(s) could benefit from " "partition changes:",
+            len(needs_update),
         )
         for t in needs_update:
-            print(f"  - {t}")
-        print(
+            _logger.info("  - %s", t)
+        _logger.info(
             "\nNote: Partition evolution on existing "
-            "tables with data requires table recreation."
+            "tables with data requires table "
+            "recreation.",
         )
-        print(
+        _logger.info(
             "For new deployments, update "
-            "stocks/create_tables.py before first run."
+            "stocks/create_tables.py before first run.",
         )
     else:
-        print(
-            "\nAll tables have optimal partition specs."
+        _logger.info(
+            "\nAll tables have optimal partition " "specs.",
         )
 
-    print("=" * 60)
+    _logger.info("=" * 60)
 
 
 if __name__ == "__main__":
     logging.basicConfig(
         level=logging.INFO,
-        format=(
-            "%(asctime)s | %(levelname)-8s | "
-            "%(name)s | %(message)s"
-        ),
+        format=("%(asctime)s | %(levelname)-8s | " "%(name)s | %(message)s"),
     )
 
-    project_root = os.path.dirname(
-        os.path.dirname(os.path.abspath(__file__))
-    )
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     os.chdir(project_root)
 
     report = report_partitions()

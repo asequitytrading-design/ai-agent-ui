@@ -240,7 +240,8 @@ def analysis_tabs_layout() -> html.Div:
             # Shared stores — live outside tab content
             # so they persist across tab switches.
             dcc.Store(
-                id="analysis-refresh-store", data=0,
+                id="analysis-refresh-store",
+                data=0,
             ),
             dcc.Interval(
                 id="analysis-refresh-poll",

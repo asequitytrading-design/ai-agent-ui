@@ -29,7 +29,7 @@ Configuration is via ``backend/config.py`` Settings:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, timedelta
 
 _logger = logging.getLogger(__name__)
@@ -73,9 +73,11 @@ class RetentionResult:
 
 
 # Tables that must NEVER be cleaned up.
-_PROTECTED_TABLES = frozenset({
-    "stocks.registry",
-})
+_PROTECTED_TABLES = frozenset(
+    {
+        "stocks.registry",
+    }
+)
 
 
 class RetentionManager:
@@ -125,9 +127,7 @@ class RetentionManager:
                 RetentionPolicy(
                     table_id="stocks.analysis_summary",
                     date_column="analysis_date",
-                    days_to_keep=(
-                        s.retention_analysis_summary_days
-                    ),
+                    days_to_keep=(s.retention_analysis_summary_days),
                 )
             )
 
@@ -136,9 +136,7 @@ class RetentionManager:
                 RetentionPolicy(
                     table_id="stocks.forecast_runs",
                     date_column="run_date",
-                    days_to_keep=(
-                        s.retention_forecast_runs_days
-                    ),
+                    days_to_keep=(s.retention_forecast_runs_days),
                 )
             )
 
@@ -147,9 +145,7 @@ class RetentionManager:
                 RetentionPolicy(
                     table_id="stocks.company_info",
                     date_column="fetched_at",
-                    days_to_keep=(
-                        s.retention_company_info_days
-                    ),
+                    days_to_keep=(s.retention_company_info_days),
                 )
             )
 
@@ -172,6 +168,7 @@ class RetentionManager:
 
         if dry_run is None:
             from config import get_settings
+
             dry_run = get_settings().retention_dry_run
 
         repo = StockRepository()
@@ -179,7 +176,9 @@ class RetentionManager:
 
         for policy in self._policies:
             result = self._apply_policy(
-                repo, policy, dry_run,
+                repo,
+                policy,
+                dry_run,
             )
             results.append(result)
 
@@ -247,8 +246,9 @@ class RetentionManager:
     ) -> RetentionResult:
         """Delete rows where date_column < cutoff.
 
-        For ``company_info`` the date column is a timestamp,
-        so we compare the date portion.
+        Uses column projection to count rows efficiently
+        (only reads the date column) and public repository
+        methods for all operations.
 
         Args:
             repo: StockRepository instance.
@@ -263,13 +263,16 @@ class RetentionManager:
         import pandas as pd
         from pyiceberg.expressions import LessThan
 
-        tbl = repo._load_table(table_id)
-        df = tbl.scan().to_pandas()
+        tbl = repo.load_table(table_id)
+        # Project only the date column for counting.
+        df = tbl.scan(
+            selected_fields=[date_column],
+        ).to_pandas()
         total_rows = len(df)
 
         if df.empty:
             _logger.info(
-                "Retention: %s is empty — nothing to do.",
+                "Retention: %s is empty — nothing " "to do.",
                 table_id,
             )
             return RetentionResult(
@@ -281,22 +284,15 @@ class RetentionManager:
             )
 
         # Count rows that would be deleted.
-        if date_column == "fetched_at":
-            # Timestamp column — compare date portion.
-            col_dates = pd.to_datetime(
-                df[date_column],
-            ).dt.date
-        else:
-            col_dates = pd.to_datetime(
-                df[date_column],
-            ).dt.date
-
+        col_dates = pd.to_datetime(
+            df[date_column],
+        ).dt.date
         old_mask = col_dates < cutoff
         rows_to_delete = int(old_mask.sum())
 
         if rows_to_delete == 0:
             _logger.info(
-                "Retention: %s has no rows older than %s.",
+                "Retention: %s has no rows older " "than %s.",
                 table_id,
                 cutoff,
             )
@@ -326,13 +322,12 @@ class RetentionManager:
             )
 
         # Actual delete via Iceberg row-level delete.
-        repo._delete_rows(
+        repo.delete_rows(
             table_id,
             LessThan(date_column, cutoff),
         )
         _logger.info(
-            "Retention: %s — deleted %d/%d rows "
-            "older than %s.",
+            "Retention: %s — deleted %d/%d rows " "older than %s.",
             table_id,
             rows_to_delete,
             total_rows,

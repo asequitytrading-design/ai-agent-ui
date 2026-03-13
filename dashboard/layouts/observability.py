@@ -39,7 +39,8 @@ def observability_layout() -> html.Div:
                 data=None,
             ),
             dcc.Store(
-                id="obs-health-store", data=None,
+                id="obs-health-store",
+                data=None,
             ),
             # ── Summary row ────────────────────────
             html.Div(

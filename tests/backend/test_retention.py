@@ -12,15 +12,12 @@ from datetime import date, timedelta
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
-import pytest
 
 from stocks.retention import (
+    _PROTECTED_TABLES,
     RetentionManager,
     RetentionPolicy,
-    RetentionResult,
-    _PROTECTED_TABLES,
 )
-
 
 # ------------------------------------------------------------------
 # Helpers
@@ -55,8 +52,8 @@ def _mock_repo_with_data(
     mock_tbl.scan.return_value = mock_scan
 
     repo = MagicMock()
-    repo._load_table.return_value = mock_tbl
-    repo._delete_rows = MagicMock()
+    repo.load_table.return_value = mock_tbl
+    repo.delete_rows = MagicMock()
 
     return repo
 
@@ -112,7 +109,7 @@ class TestDryRun:
 
     def test_dry_run_does_not_delete(self):
         """Dry-run should count rows but not call
-        _delete_rows."""
+        delete_rows."""
         today = date.today()
         old_dates = [
             today - timedelta(days=100),
@@ -138,7 +135,7 @@ class TestDryRun:
         assert result.dry_run is True
         assert result.rows_before == 3
         assert result.rows_deleted == 2  # 100d + 200d old
-        repo._delete_rows.assert_not_called()
+        repo.delete_rows.assert_not_called()
 
     def test_dry_run_audit_result(self):
         """Dry-run result should have correct audit fields."""
@@ -173,7 +170,7 @@ class TestLiveCleanup:
     """Tests for actual deletion mode."""
 
     def test_cleanup_deletes_old_rows(self):
-        """Live cleanup should call _delete_rows for old
+        """Live cleanup should call delete_rows for old
         data."""
         today = date.today()
         dates = [
@@ -199,7 +196,7 @@ class TestLiveCleanup:
 
         assert result.dry_run is False
         assert result.rows_deleted == 1  # Only 100d old row
-        repo._delete_rows.assert_called_once()
+        repo.delete_rows.assert_called_once()
 
     def test_no_old_rows_skips_delete(self):
         """When no rows are old enough, should not delete."""
@@ -225,7 +222,7 @@ class TestLiveCleanup:
         result = mgr._apply_policy(repo, policy, dry_run=False)
 
         assert result.rows_deleted == 0
-        repo._delete_rows.assert_not_called()
+        repo.delete_rows.assert_not_called()
 
 
 # ------------------------------------------------------------------
@@ -255,8 +252,8 @@ class TestProtectedTables:
         result = mgr._apply_policy(repo, policy, dry_run=False)
 
         assert "Protected" in result.error
-        repo._load_table.assert_not_called()
-        repo._delete_rows.assert_not_called()
+        repo.load_table.assert_not_called()
+        repo.delete_rows.assert_not_called()
 
 
 # ------------------------------------------------------------------
@@ -277,7 +274,7 @@ class TestEmptyTable:
         mock_tbl.scan.return_value = mock_scan
 
         repo = MagicMock()
-        repo._load_table.return_value = mock_tbl
+        repo.load_table.return_value = mock_tbl
 
         policy = RetentionPolicy(
             table_id="stocks.llm_usage",
@@ -290,7 +287,7 @@ class TestEmptyTable:
 
         assert result.rows_before == 0
         assert result.rows_deleted == 0
-        repo._delete_rows.assert_not_called()
+        repo.delete_rows.assert_not_called()
 
 
 # ------------------------------------------------------------------
@@ -305,9 +302,7 @@ class TestErrorHandling:
         """Errors during cleanup should be captured, not
         raised."""
         repo = MagicMock()
-        repo._load_table.side_effect = Exception(
-            "catalog down"
-        )
+        repo.load_table.side_effect = Exception("catalog down")
 
         policy = RetentionPolicy(
             table_id="stocks.llm_usage",

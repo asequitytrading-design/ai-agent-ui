@@ -10,7 +10,7 @@ Functions
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from auth.repo.catalog import scan_all_users, users_table
 from auth.repo.schemas import _row_to_dict
@@ -20,7 +20,7 @@ from auth.repo.schemas import _row_to_dict
 _logger = logging.getLogger(__name__)
 
 
-def get_by_email(cat, email: str) -> Optional[Dict[str, Any]]:
+def get_by_email(cat, email: str) -> dict[str, Any] | None:
     """Fetch a single user by email address.
 
     Attempts a predicate-push-down scan first; falls back to a full scan
@@ -54,7 +54,7 @@ def get_by_email(cat, email: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def get_by_id(cat, user_id: str) -> Optional[Dict[str, Any]]:
+def get_by_id(cat, user_id: str) -> dict[str, Any] | None:
     """Fetch a single user by UUID.
 
     Args:
@@ -84,7 +84,7 @@ def get_by_id(cat, user_id: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def list_all(cat) -> List[Dict[str, Any]]:
+def list_all(cat) -> list[dict[str, Any]]:
     """Return all users from the ``auth.users`` table.
 
     Args:

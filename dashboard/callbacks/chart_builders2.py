@@ -241,7 +241,8 @@ def _build_decomposition_fig(
             y=forecast_df["yhat"],
             name="Trend (Forecast)",
             line=dict(
-                color="#4caf50", width=2.5,
+                color="#4caf50",
+                width=2.5,
             ),
             mode="lines",
         ),
@@ -278,9 +279,15 @@ def _build_decomposition_fig(
     hist = prophet_df.copy()
     hist = hist.set_index("ds").sort_index()
     window = min(63, max(5, len(hist) // 10))
-    trend_line = hist["y"].rolling(
-        window=window, center=True, min_periods=1,
-    ).mean()
+    trend_line = (
+        hist["y"]
+        .rolling(
+            window=window,
+            center=True,
+            min_periods=1,
+        )
+        .mean()
+    )
     seasonality = hist["y"] - trend_line
 
     fig.add_trace(
@@ -431,7 +438,8 @@ def _build_multi_horizon_fig(
         text="Today",
         showarrow=False,
         font=dict(
-            color="rgba(0,0,0,0.6)", size=10,
+            color="rgba(0,0,0,0.6)",
+            size=10,
         ),
         xanchor="left",
     )
@@ -442,10 +450,7 @@ def _build_multi_horizon_fig(
         plot_bgcolor="#f9fafb",
         font=dict(color="#111827"),
         title=dict(
-            text=(
-                f"{ticker} — Multi-Horizon"
-                " Forecast Comparison"
-            ),
+            text=(f"{ticker} — Multi-Horizon" " Forecast Comparison"),
             font=dict(size=16),
         ),
         height=550,

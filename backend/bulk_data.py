@@ -17,6 +17,7 @@ from __future__ import annotations
 import io
 import logging
 from datetime import date
+from urllib.parse import quote
 
 import pandas as pd
 from fastapi import (
@@ -28,6 +29,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import StreamingResponse
+from validation import validate_ticker
 
 from auth.dependencies import get_current_user
 from auth.models import UserContext
@@ -57,10 +59,10 @@ def create_bulk_router() -> APIRouter:
 
     Returns:
         :class:`~fastapi.APIRouter` with import/export
-        endpoints.
+        endpoints.  Mounted at ``/v1`` by the caller in
+        ``routes.py``.
     """
     router = APIRouter(
-        prefix="/v1",
         tags=["bulk-data"],
     )
 
@@ -87,13 +89,25 @@ def create_bulk_router() -> APIRouter:
                 detail="Filename is required.",
             )
 
+        # Check Content-Length before reading body.
+        if file.size is not None and file.size > _MAX_IMPORT_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    "File too large. Maximum size "
+                    f"is {_MAX_IMPORT_BYTES // (1024*1024)}"
+                    " MB."
+                ),
+            )
+
         content = await file.read()
         if len(content) > _MAX_IMPORT_BYTES:
             raise HTTPException(
                 status_code=413,
                 detail=(
-                    f"File too large. Maximum size is "
-                    f"{_MAX_IMPORT_BYTES // (1024*1024)} MB."
+                    "File too large. Maximum size "
+                    f"is {_MAX_IMPORT_BYTES // (1024*1024)}"
+                    " MB."
                 ),
             )
 
@@ -110,8 +124,7 @@ def create_bulk_router() -> APIRouter:
                 raise HTTPException(
                     status_code=422,
                     detail=(
-                        "Unsupported file format. "
-                        "Use .csv or .parquet."
+                        "Unsupported file format. " "Use .csv or .parquet."
                     ),
                 )
         except HTTPException:
@@ -123,10 +136,7 @@ def create_bulk_router() -> APIRouter:
             )
 
         # Normalise column names to lowercase.
-        df.columns = [
-            c.strip().lower().replace(" ", "_")
-            for c in df.columns
-        ]
+        df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
 
         # Validate required columns.
         missing = _REQUIRED_COLUMNS - set(df.columns)
@@ -141,9 +151,7 @@ def create_bulk_router() -> APIRouter:
             )
 
         # Drop unknown columns.
-        valid_cols = [
-            c for c in df.columns if c in _VALID_COLUMNS
-        ]
+        valid_cols = [c for c in df.columns if c in _VALID_COLUMNS]
         df = df[valid_cols]
 
         if df.empty:
@@ -161,36 +169,48 @@ def create_bulk_router() -> APIRouter:
         except Exception:
             raise HTTPException(
                 status_code=422,
-                detail=(
-                    "Column 'date' contains invalid "
-                    "date values."
-                ),
+                detail=("Column 'date' contains invalid " "date values."),
             )
 
         for col in ("open", "high", "low", "close", "volume"):
             try:
                 df[col] = pd.to_numeric(
-                    df[col], errors="coerce",
+                    df[col],
+                    errors="coerce",
                 )
             except Exception:
                 raise HTTPException(
                     status_code=422,
                     detail=(
-                        f"Column '{col}' contains "
-                        f"non-numeric values."
+                        f"Column '{col}' contains " f"non-numeric values."
                     ),
                 )
 
         if "adj_close" in df.columns:
             df["adj_close"] = pd.to_numeric(
-                df["adj_close"], errors="coerce",
+                df["adj_close"],
+                errors="coerce",
             )
 
-        # Validate tickers exist in registry.
-        from stocks.repository import StockRepository
-
-        repo = StockRepository()
+        # Validate ticker format.
         tickers = df["ticker"].str.upper().unique().tolist()
+        for t in tickers:
+            err = validate_ticker(t)
+            if err:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Invalid ticker '{t}': {err}",
+                )
+
+        # Validate tickers exist in registry.
+        from tools._stock_shared import _get_repo
+
+        repo = _get_repo()
+        if repo is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Stock repository unavailable.",
+            )
         registry = repo.get_registry()
 
         if not registry.empty:
@@ -215,9 +235,7 @@ def create_bulk_router() -> APIRouter:
         results_per_ticker = {}
 
         for ticker in tickers:
-            ticker_df = df[
-                df["ticker"].str.upper() == ticker
-            ].copy()
+            ticker_df = df[df["ticker"].str.upper() == ticker].copy()
 
             # Prepare DataFrame in yfinance format.
             import_df = pd.DataFrame(
@@ -233,9 +251,7 @@ def create_bulk_router() -> APIRouter:
                 ),
             )
             if "adj_close" in ticker_df.columns:
-                import_df["Adj Close"] = (
-                    ticker_df["adj_close"].values
-                )
+                import_df["Adj Close"] = ticker_df["adj_close"].values
 
             count = repo.insert_ohlcv(ticker, import_df)
             total_imported += count
@@ -257,11 +273,13 @@ def create_bulk_router() -> APIRouter:
     @router.get("/bulk-export")
     async def bulk_export(
         ticker: str = Query(
-            ..., description="Stock ticker symbol",
+            ...,
+            description="Stock ticker symbol",
         ),
-        format: str = Query(
+        output_format: str = Query(
             "csv",
             description="Export format: csv or parquet",
+            alias="format",
         ),
         start: date | None = Query(
             None,
@@ -285,19 +303,21 @@ def create_bulk_router() -> APIRouter:
         Returns:
             Streaming file download.
         """
-        fmt = format.lower().strip()
+        fmt = output_format.lower().strip()
         if fmt not in ("csv", "parquet"):
             raise HTTPException(
                 status_code=422,
-                detail=(
-                    "Unsupported format. Use 'csv' "
-                    "or 'parquet'."
-                ),
+                detail=("Unsupported format. Use 'csv' " "or 'parquet'."),
             )
 
-        from stocks.repository import StockRepository
+        from tools._stock_shared import _get_repo
 
-        repo = StockRepository()
+        repo = _get_repo()
+        if repo is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Stock repository unavailable.",
+            )
         ticker = ticker.upper()
 
         # Verify ticker exists.
@@ -309,14 +329,15 @@ def create_bulk_router() -> APIRouter:
             )
 
         df = repo.get_ohlcv(
-            ticker, start=start, end=end,
+            ticker,
+            start=start,
+            end=end,
         )
         if df.empty:
             raise HTTPException(
                 status_code=404,
                 detail=(
-                    f"No OHLCV data for '{ticker}' "
-                    f"in the specified range."
+                    f"No OHLCV data for '{ticker}' " f"in the specified range."
                 ),
             )
 
@@ -328,6 +349,8 @@ def create_bulk_router() -> APIRouter:
             fmt,
         )
 
+        safe_ticker = quote(ticker, safe="")
+
         if fmt == "csv":
             buf = io.StringIO()
             df.to_csv(buf, index=False)
@@ -337,8 +360,7 @@ def create_bulk_router() -> APIRouter:
                 media_type="text/csv",
                 headers={
                     "Content-Disposition": (
-                        f"attachment; "
-                        f"filename={ticker}_ohlcv.csv"
+                        "attachment; " f"filename={safe_ticker}" "_ohlcv.csv"
                     ),
                 },
             )
@@ -352,8 +374,7 @@ def create_bulk_router() -> APIRouter:
             media_type="application/octet-stream",
             headers={
                 "Content-Disposition": (
-                    f"attachment; "
-                    f"filename={ticker}_ohlcv.parquet"
+                    "attachment; " f"filename={safe_ticker}" "_ohlcv.parquet"
                 ),
             },
         )

@@ -13,7 +13,6 @@ Example::
 from __future__ import annotations
 
 import logging
-from typing import Optional
 from urllib.parse import parse_qs
 
 import pandas as pd
@@ -81,9 +80,9 @@ def register(app, mgr: RefreshManager) -> None:
         State("nav-ticker-store", "data"),
     )
     def sync_forecast_ticker(
-        search: Optional[str],
-        pathname: Optional[str],
-        stored_ticker: Optional[str],
+        search: str | None,
+        pathname: str | None,
+        stored_ticker: str | None,
     ):
         """Pre-select the forecast dropdown when navigating from a stock card.
 
@@ -137,10 +136,12 @@ def register(app, mgr: RefreshManager) -> None:
         [
             Output("forecast-chart", "figure"),
             Output(
-                "forecast-target-cards", "children",
+                "forecast-target-cards",
+                "children",
             ),
             Output(
-                "forecast-accuracy-row", "children",
+                "forecast-accuracy-row",
+                "children",
             ),
         ],
         [
@@ -155,12 +156,12 @@ def register(app, mgr: RefreshManager) -> None:
         ],
     )
     def update_forecast_chart(
-        ticker: Optional[str],
-        horizon: Optional[str],
-        view: Optional[str],
+        ticker: str | None,
+        horizon: str | None,
+        view: str | None,
         refresh_trigger,
-        token: Optional[str],
-        search: Optional[str] = None,
+        token: str | None,
+        search: str | None = None,
     ):
         """Reload and render the forecast chart.
 
@@ -208,10 +209,7 @@ def register(app, mgr: RefreshManager) -> None:
             )
 
         # Build prophet-format historical series.
-        if (
-            "Adj Close" in df_raw.columns
-            and df_raw["Adj Close"].notna().any()
-        ):
+        if "Adj Close" in df_raw.columns and df_raw["Adj Close"].notna().any():
             price_col = "Adj Close"
         else:
             price_col = "Close"
@@ -230,8 +228,7 @@ def register(app, mgr: RefreshManager) -> None:
         if prophet_df.empty:
             return (
                 _empty_fig(
-                    f"No valid price data for"
-                    f" '{ticker}'.",
+                    f"No valid price data for" f" '{ticker}'.",
                 ),
                 [],
                 [],
@@ -250,13 +247,8 @@ def register(app, mgr: RefreshManager) -> None:
             ):
                 fc = _load_forecast(ticker, h)
                 if fc is not None:
-                    cutoff = (
-                        pd.Timestamp.now()
-                        + pd.DateOffset(months=h)
-                    )
-                    forecasts[label] = fc[
-                        fc["ds"] <= cutoff
-                    ].copy()
+                    cutoff = pd.Timestamp.now() + pd.DateOffset(months=h)
+                    forecasts[label] = fc[fc["ds"] <= cutoff].copy()
             if not forecasts:
                 msg = (
                     f"No forecast for '{ticker}'. "
@@ -269,9 +261,7 @@ def register(app, mgr: RefreshManager) -> None:
                     [
                         html.P(
                             msg,
-                            className=(
-                                "text-muted small"
-                            ),
+                            className=("text-muted small"),
                         ),
                     ],
                 )
@@ -285,7 +275,8 @@ def register(app, mgr: RefreshManager) -> None:
 
         # ── Load forecast for standard/decomposition ─
         forecast_df = _load_forecast(
-            ticker, horizon_months,
+            ticker,
+            horizon_months,
         )
         if forecast_df is None:
             msg = (
@@ -304,18 +295,15 @@ def register(app, mgr: RefreshManager) -> None:
                 ],
             )
 
-        cutoff = (
-            pd.Timestamp.now()
-            + pd.DateOffset(months=horizon_months)
-        )
-        forecast_df = forecast_df[
-            forecast_df["ds"] <= cutoff
-        ].copy()
+        cutoff = pd.Timestamp.now() + pd.DateOffset(months=horizon_months)
+        forecast_df = forecast_df[forecast_df["ds"] <= cutoff].copy()
 
         # ── Decomposition view ───────────────────────
         if view == "decomposition":
             fig = _build_decomposition_fig(
-                prophet_df, forecast_df, ticker,
+                prophet_df,
+                forecast_df,
+                ticker,
             )
             return fig, [], _accuracy_note()
 
@@ -334,7 +322,9 @@ def register(app, mgr: RefreshManager) -> None:
             summary,
         )
         target_cards = _build_target_cards(
-            summary, current_price, ticker,
+            summary,
+            current_price,
+            ticker,
         )
         return fig, target_cards, _accuracy_note()
 

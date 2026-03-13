@@ -362,12 +362,12 @@ class StockRepository:
                 self._dirty_tables.discard(identifier)
 
             row_filter = EqualTo("ticker", ticker)
-            if start:
+            if start is not None:
                 row_filter = And(
                     row_filter,
                     GreaterThanOrEqual(date_col, start),
                 )
-            if end:
+            if end is not None:
                 row_filter = And(
                     row_filter,
                     LessThanOrEqual(date_col, end),
@@ -377,9 +377,7 @@ class StockRepository:
                 "row_filter": row_filter,
             }
             if selected_fields:
-                scan_kwargs["selected_fields"] = (
-                    selected_fields
-                )
+                scan_kwargs["selected_fields"] = selected_fields
             return tbl.scan(**scan_kwargs).to_pandas()
         except Exception as exc:
             _logger.warning(
@@ -390,20 +388,16 @@ class StockRepository:
                 exc,
             )
             df = self._scan_ticker(
-                identifier, ticker, selected_fields,
+                identifier,
+                ticker,
+                selected_fields,
             )
             if df.empty:
                 return df
-            if start:
-                df = df[
-                    pd.to_datetime(df[date_col]).dt.date
-                    >= start
-                ]
-            if end:
-                df = df[
-                    pd.to_datetime(df[date_col]).dt.date
-                    <= end
-                ]
+            if start is not None:
+                df = df[pd.to_datetime(df[date_col]).dt.date >= start]
+            if end is not None:
+                df = df[pd.to_datetime(df[date_col]).dt.date <= end]
             return df
 
     def _scan_date_range(
@@ -444,14 +438,10 @@ class StockRepository:
                 self._dirty_tables.discard(identifier)
 
             filters = []
-            if start:
-                filters.append(
-                    GreaterThanOrEqual(date_col, start)
-                )
-            if end:
-                filters.append(
-                    LessThanOrEqual(date_col, end)
-                )
+            if start is not None:
+                filters.append(GreaterThanOrEqual(date_col, start))
+            if end is not None:
+                filters.append(LessThanOrEqual(date_col, end))
 
             if len(filters) == 2:
                 row_filter = And(filters[0], filters[1])
@@ -465,17 +455,16 @@ class StockRepository:
             ).to_pandas()
         except Exception as exc:
             _logger.warning(
-                "Iceberg date-range scan failed for "
-                "%s (%s); falling back.",
+                "Iceberg date-range scan failed for " "%s (%s); falling back.",
                 identifier,
                 exc,
             )
             df = self._table_to_df(identifier)
             if df.empty:
                 return df
-            if start:
+            if start is not None:
                 df = df[df[date_col] >= start]
-            if end:
+            if end is not None:
                 df = df[df[date_col] <= end]
             return df
 
@@ -571,6 +560,34 @@ class StockRepository:
             "delete",
             delete_filter=delete_filter,
         )
+
+    # ------------------------------------------------------------------
+    # Public wrappers for retention / admin callers
+    # ------------------------------------------------------------------
+
+    def load_table(self, identifier: str):
+        """Load an Iceberg table (public API).
+
+        Args:
+            identifier: e.g. ``"stocks.ohlcv"``.
+
+        Returns:
+            The loaded Iceberg table object.
+        """
+        return self._load_table(identifier)
+
+    def delete_rows(
+        self,
+        identifier: str,
+        delete_filter,
+    ) -> None:
+        """Delete rows matching *delete_filter* (public API).
+
+        Args:
+            identifier: Fully-qualified table name.
+            delete_filter: PyIceberg expression.
+        """
+        self._delete_rows(identifier, delete_filter)
 
     # ------------------------------------------------------------------
     # Registry
@@ -1461,7 +1478,8 @@ class StockRepository:
             )
         else:
             df = self._scan_ticker(
-                _TECHNICAL_INDICATORS, ticker.upper(),
+                _TECHNICAL_INDICATORS,
+                ticker.upper(),
             )
         if df.empty:
             return df

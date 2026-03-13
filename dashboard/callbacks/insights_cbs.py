@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Any, Optional
+from typing import Any
 
 import dash_bootstrap_components as dbc
 import pandas as pd
@@ -103,8 +103,8 @@ def register(app) -> None:
         market_filter: str,
         sector_filter: str,
         active_tab: str,
-        page: Optional[int],
-        page_size_str: Optional[str],
+        page: int | None,
+        page_size_str: str | None,
         sort_state: dict | None = None,
         token: str | None = None,
     ) -> Any:
@@ -334,8 +334,8 @@ def register(app) -> None:
         market_filter: str,
         sector_filter: str,
         active_tab: str,
-        page: Optional[int],
-        page_size_str: Optional[str],
+        page: int | None,
+        page_size_str: str | None,
         sort_state: dict | None = None,
         token: str | None = None,
     ) -> Any:
@@ -560,8 +560,8 @@ def register(app) -> None:
         market_filter: str,
         sector_filter: str,
         active_tab: str,
-        page: Optional[int],
-        page_size_str: Optional[str],
+        page: int | None,
+        page_size_str: str | None,
         sort_state: dict | None = None,
         token: str | None = None,
     ) -> Any:
@@ -722,8 +722,8 @@ def register(app) -> None:
         market_filter: str,
         sector_filter: str,
         active_tab: str,
-        page: Optional[int],
-        page_size_str: Optional[str],
+        page: int | None,
+        page_size_str: str | None,
         sort_state: dict | None = None,
         token: str | None = None,
     ) -> Any:

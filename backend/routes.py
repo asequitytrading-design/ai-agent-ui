@@ -329,16 +329,20 @@ def create_app(
         result: dict = {"timestamp": time.time()}
         if obs_collector is not None:
             # Parse configured tiers from settings.
-            tiers_csv = getattr(
+            # groq_model_tiers is a CSV string on Settings.
+            raw_tiers = getattr(
                 settings,
                 "groq_model_tiers",
                 "",
             )
-            tier_models = (
-                [t.strip() for t in tiers_csv.split(",") if t.strip()]
-                if tiers_csv
-                else None
-            )
+            if isinstance(raw_tiers, list):
+                tier_models = raw_tiers or None
+            elif isinstance(raw_tiers, str) and raw_tiers:
+                tier_models = [
+                    t.strip() for t in raw_tiers.split(",") if t.strip()
+                ]
+            else:
+                tier_models = None
             result["health"] = obs_collector.get_tier_health(tier_models)
         else:
             result["health"] = {
@@ -407,7 +411,10 @@ def create_app(
     # Bulk data import/export endpoints.
     from bulk_data import create_bulk_router
 
-    app.include_router(create_bulk_router())
+    app.include_router(
+        create_bulk_router(),
+        prefix="/v1",
+    )
 
     # WebSocket streaming endpoint.
     from ws import register_ws_routes

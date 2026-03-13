@@ -196,18 +196,15 @@ def _build_health_card(tier: dict) -> dbc.Col:
         html.Div(
             [
                 html.Small(
-                    f"Failures (5m): "
-                    f"{tier.get('failures_5m', 0)}",
+                    f"Failures (5m): " f"{tier.get('failures_5m', 0)}",
                     className="text-muted d-block",
                 ),
                 html.Small(
-                    f"Successes (5m): "
-                    f"{tier.get('successes_5m', 0)}",
+                    f"Successes (5m): " f"{tier.get('successes_5m', 0)}",
                     className="text-muted d-block",
                 ),
                 html.Small(
-                    f"Cascades: "
-                    f"{tier.get('cascade_count', 0)}",
+                    f"Cascades: " f"{tier.get('cascade_count', 0)}",
                     className="text-muted d-block",
                 ),
                 html.Small(
@@ -276,7 +273,9 @@ def register(app) -> None:
         # Fetch tier health in parallel.
         health_data = None
         health_resp = _api_call(
-            "get", "/admin/tier-health", token,
+            "get",
+            "/admin/tier-health",
+            token,
         )
         if health_resp and health_resp.ok:
             health_data = health_resp.json()
@@ -285,11 +284,7 @@ def register(app) -> None:
         def _stable(d):
             if d is None:
                 return ""
-            c = {
-                k: v
-                for k, v in d.items()
-                if k != "timestamp"
-            }
+            c = {k: v for k, v in d.items() if k != "timestamp"}
             return json.dumps(c, sort_keys=True)
 
         if _stable(data) == _stable(prev_data):
@@ -496,7 +491,8 @@ def register(app) -> None:
                 className="text-muted",
             )
         tiers = data.get("health", {}).get(
-            "tiers", [],
+            "tiers",
+            [],
         )
         if not tiers:
             return html.P(
@@ -504,30 +500,28 @@ def register(app) -> None:
                 className="text-muted",
             )
         summary = data.get("health", {}).get(
-            "summary", {},
+            "summary",
+            {},
         )
         summary_row = dbc.Row(
             [
                 dbc.Col(
                     dbc.Badge(
-                        f"{summary.get('healthy', 0)}"
-                        " Healthy",
+                        f"{summary.get('healthy', 0)}" " Healthy",
                         color="success",
                         className="me-2 px-3 py-2",
                     ),
                 ),
                 dbc.Col(
                     dbc.Badge(
-                        f"{summary.get('degraded', 0)}"
-                        " Degraded",
+                        f"{summary.get('degraded', 0)}" " Degraded",
                         color="warning",
                         className="me-2 px-3 py-2",
                     ),
                 ),
                 dbc.Col(
                     dbc.Badge(
-                        f"{summary.get('down', 0)}"
-                        " Down",
+                        f"{summary.get('down', 0)}" " Down",
                         color="danger",
                         className="me-2 px-3 py-2",
                     ),
@@ -535,9 +529,7 @@ def register(app) -> None:
             ],
             className="mb-3",
         )
-        cards = [
-            _build_health_card(t) for t in tiers
-        ]
+        cards = [_build_health_card(t) for t in tiers]
         return html.Div(
             [summary_row, dbc.Row(cards)],
         )

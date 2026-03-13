@@ -17,12 +17,9 @@ from datetime import date
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
-import pytest
+from bulk_data import create_bulk_router
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-
-from bulk_data import create_bulk_router
-
 
 # ------------------------------------------------------------------
 # Fixtures
@@ -36,7 +33,10 @@ def _make_app() -> FastAPI:
         Configured FastAPI app.
     """
     app = FastAPI()
-    app.include_router(create_bulk_router())
+    app.include_router(
+        create_bulk_router(),
+        prefix="/v1",
+    )
     return app
 
 
@@ -104,23 +104,21 @@ def _registry_df(tickers: list[str]) -> pd.DataFrame:
 class TestBulkImport:
     """Tests for POST /v1/bulk-import."""
 
-    @patch("stocks.repository.StockRepository")
+    @patch("tools._stock_shared._get_repo")
     def test_import_csv_creates_records(
-        self, mock_repo_cls,
+        self,
+        mock_get_repo,
     ):
         """Valid CSV should import OHLCV records."""
         app = _make_app()
         from auth.dependencies import get_current_user
-        app.dependency_overrides[
-            get_current_user
-        ] = lambda: _mock_user()
+
+        app.dependency_overrides[get_current_user] = lambda: _mock_user()
 
         mock_repo = MagicMock()
-        mock_repo.get_registry.return_value = (
-            _registry_df(["AAPL"])
-        )
+        mock_repo.get_registry.return_value = _registry_df(["AAPL"])
         mock_repo.insert_ohlcv.return_value = 2
-        mock_repo_cls.return_value = mock_repo
+        mock_get_repo.return_value = mock_repo
 
         client = TestClient(app)
         csv_data = _make_csv()
@@ -128,7 +126,11 @@ class TestBulkImport:
         resp = client.post(
             "/v1/bulk-import",
             files={
-                "file": ("data.csv", csv_data, "text/csv"),
+                "file": (
+                    "data.csv",
+                    csv_data,
+                    "text/csv",
+                ),
             },
         )
 
@@ -138,16 +140,16 @@ class TestBulkImport:
         assert body["tickers"]["AAPL"] == 2
         mock_repo.insert_ohlcv.assert_called_once()
 
-    @patch("stocks.repository.StockRepository")
+    @patch("tools._stock_shared._get_repo")
     def test_import_validates_columns(
-        self, mock_repo_cls,
+        self,
+        mock_get_repo,
     ):
         """CSV missing required columns returns 422."""
         app = _make_app()
         from auth.dependencies import get_current_user
-        app.dependency_overrides[
-            get_current_user
-        ] = lambda: _mock_user()
+
+        app.dependency_overrides[get_current_user] = lambda: _mock_user()
 
         # CSV missing 'volume' column.
         bad_csv = (
@@ -160,7 +162,9 @@ class TestBulkImport:
             "/v1/bulk-import",
             files={
                 "file": (
-                    "bad.csv", bad_csv, "text/csv",
+                    "bad.csv",
+                    bad_csv,
+                    "text/csv",
                 ),
             },
         )
@@ -168,22 +172,22 @@ class TestBulkImport:
         assert resp.status_code == 422
         assert "volume" in resp.json()["detail"].lower()
 
-    @patch("stocks.repository.StockRepository")
+    @patch("tools._stock_shared._get_repo")
     def test_import_validates_ticker_exists(
-        self, mock_repo_cls,
+        self,
+        mock_get_repo,
     ):
         """Unknown ticker returns 404."""
         app = _make_app()
         from auth.dependencies import get_current_user
-        app.dependency_overrides[
-            get_current_user
-        ] = lambda: _mock_user()
+
+        app.dependency_overrides[get_current_user] = lambda: _mock_user()
 
         mock_repo = MagicMock()
-        mock_repo.get_registry.return_value = (
-            _registry_df(["MSFT"])  # AAPL not registered
-        )
-        mock_repo_cls.return_value = mock_repo
+        mock_repo.get_registry.return_value = _registry_df(
+            ["MSFT"]
+        )  # AAPL not registered
+        mock_get_repo.return_value = mock_repo
 
         csv_data = _make_csv()
         client = TestClient(app)
@@ -191,7 +195,9 @@ class TestBulkImport:
             "/v1/bulk-import",
             files={
                 "file": (
-                    "data.csv", csv_data, "text/csv",
+                    "data.csv",
+                    csv_data,
+                    "text/csv",
                 ),
             },
         )
@@ -199,16 +205,16 @@ class TestBulkImport:
         assert resp.status_code == 404
         assert "AAPL" in resp.json()["detail"]
 
-    @patch("stocks.repository.StockRepository")
+    @patch("tools._stock_shared._get_repo")
     def test_import_unsupported_format(
-        self, mock_repo_cls,
+        self,
+        mock_get_repo,
     ):
         """Non-CSV/Parquet file returns 422."""
         app = _make_app()
         from auth.dependencies import get_current_user
-        app.dependency_overrides[
-            get_current_user
-        ] = lambda: _mock_user()
+
+        app.dependency_overrides[get_current_user] = lambda: _mock_user()
 
         client = TestClient(app)
         resp = client.post(
@@ -225,16 +231,16 @@ class TestBulkImport:
         assert resp.status_code == 422
         assert "Unsupported" in resp.json()["detail"]
 
-    @patch("stocks.repository.StockRepository")
+    @patch("tools._stock_shared._get_repo")
     def test_import_invalid_dates(
-        self, mock_repo_cls,
+        self,
+        mock_get_repo,
     ):
         """CSV with invalid dates returns 422."""
         app = _make_app()
         from auth.dependencies import get_current_user
-        app.dependency_overrides[
-            get_current_user
-        ] = lambda: _mock_user()
+
+        app.dependency_overrides[get_current_user] = lambda: _mock_user()
 
         bad_csv = (
             b"ticker,date,open,high,low,close,volume\n"
@@ -242,24 +248,24 @@ class TestBulkImport:
         )
 
         mock_repo = MagicMock()
-        mock_repo.get_registry.return_value = (
-            _registry_df(["AAPL"])
-        )
-        mock_repo_cls.return_value = mock_repo
+        mock_repo.get_registry.return_value = _registry_df(["AAPL"])
+        mock_get_repo.return_value = mock_repo
 
         client = TestClient(app)
         resp = client.post(
             "/v1/bulk-import",
             files={
                 "file": (
-                    "bad.csv", bad_csv, "text/csv",
+                    "bad.csv",
+                    bad_csv,
+                    "text/csv",
                 ),
             },
         )
 
-        # pandas may parse "not-a-date" as NaT or raise
-        # Either way, it should not succeed silently.
-        assert resp.status_code in (422, 200)
+        # pandas parses "not-a-date" as NaT which fails
+        # downstream validation.
+        assert resp.status_code == 422
 
 
 # ------------------------------------------------------------------
@@ -270,21 +276,19 @@ class TestBulkImport:
 class TestBulkExport:
     """Tests for GET /v1/bulk-export."""
 
-    @patch("stocks.repository.StockRepository")
+    @patch("tools._stock_shared._get_repo")
     def test_export_csv_returns_file(
-        self, mock_repo_cls,
+        self,
+        mock_get_repo,
     ):
         """CSV export returns valid CSV with headers."""
         app = _make_app()
         from auth.dependencies import get_current_user
-        app.dependency_overrides[
-            get_current_user
-        ] = lambda: _mock_user()
+
+        app.dependency_overrides[get_current_user] = lambda: _mock_user()
 
         mock_repo = MagicMock()
-        mock_repo.get_registry.return_value = (
-            _registry_df(["AAPL"])
-        )
+        mock_repo.get_registry.return_value = _registry_df(["AAPL"])
         mock_repo.get_ohlcv.return_value = pd.DataFrame(
             {
                 "ticker": ["AAPL"],
@@ -297,7 +301,7 @@ class TestBulkExport:
                 "volume": [1000000],
             }
         )
-        mock_repo_cls.return_value = mock_repo
+        mock_get_repo.return_value = mock_repo
 
         client = TestClient(app)
         resp = client.get(
@@ -307,7 +311,8 @@ class TestBulkExport:
         assert resp.status_code == 200
         assert "text/csv" in resp.headers["content-type"]
         assert "attachment" in resp.headers.get(
-            "content-disposition", "",
+            "content-disposition",
+            "",
         )
 
         # Parse the CSV to verify content.
@@ -315,21 +320,19 @@ class TestBulkExport:
         assert len(result_df) == 1
         assert "ticker" in result_df.columns
 
-    @patch("stocks.repository.StockRepository")
+    @patch("tools._stock_shared._get_repo")
     def test_export_parquet_returns_file(
-        self, mock_repo_cls,
+        self,
+        mock_get_repo,
     ):
         """Parquet export returns valid Parquet file."""
         app = _make_app()
         from auth.dependencies import get_current_user
-        app.dependency_overrides[
-            get_current_user
-        ] = lambda: _mock_user()
+
+        app.dependency_overrides[get_current_user] = lambda: _mock_user()
 
         mock_repo = MagicMock()
-        mock_repo.get_registry.return_value = (
-            _registry_df(["AAPL"])
-        )
+        mock_repo.get_registry.return_value = _registry_df(["AAPL"])
         mock_repo.get_ohlcv.return_value = pd.DataFrame(
             {
                 "ticker": ["AAPL"],
@@ -341,18 +344,15 @@ class TestBulkExport:
                 "volume": [1000000],
             }
         )
-        mock_repo_cls.return_value = mock_repo
+        mock_get_repo.return_value = mock_repo
 
         client = TestClient(app)
         resp = client.get(
-            "/v1/bulk-export"
-            "?ticker=AAPL&format=parquet",
+            "/v1/bulk-export" "?ticker=AAPL&format=parquet",
         )
 
         assert resp.status_code == 200
-        assert "octet-stream" in resp.headers[
-            "content-type"
-        ]
+        assert "octet-stream" in resp.headers["content-type"]
 
         # Parse the Parquet to verify content.
         result_df = pd.read_parquet(
@@ -360,21 +360,19 @@ class TestBulkExport:
         )
         assert len(result_df) == 1
 
-    @patch("stocks.repository.StockRepository")
+    @patch("tools._stock_shared._get_repo")
     def test_export_filters_by_date_range(
-        self, mock_repo_cls,
+        self,
+        mock_get_repo,
     ):
         """Date params should be passed to get_ohlcv."""
         app = _make_app()
         from auth.dependencies import get_current_user
-        app.dependency_overrides[
-            get_current_user
-        ] = lambda: _mock_user()
+
+        app.dependency_overrides[get_current_user] = lambda: _mock_user()
 
         mock_repo = MagicMock()
-        mock_repo.get_registry.return_value = (
-            _registry_df(["AAPL"])
-        )
+        mock_repo.get_registry.return_value = _registry_df(["AAPL"])
         mock_repo.get_ohlcv.return_value = pd.DataFrame(
             {
                 "ticker": ["AAPL"],
@@ -386,7 +384,7 @@ class TestBulkExport:
                 "volume": [900000],
             }
         )
-        mock_repo_cls.return_value = mock_repo
+        mock_get_repo.return_value = mock_repo
 
         client = TestClient(app)
         resp = client.get(
@@ -403,22 +401,20 @@ class TestBulkExport:
             end=date(2024, 12, 31),
         )
 
-    @patch("stocks.repository.StockRepository")
+    @patch("tools._stock_shared._get_repo")
     def test_export_unknown_ticker(
-        self, mock_repo_cls,
+        self,
+        mock_get_repo,
     ):
         """Export for unknown ticker returns 404."""
         app = _make_app()
         from auth.dependencies import get_current_user
-        app.dependency_overrides[
-            get_current_user
-        ] = lambda: _mock_user()
+
+        app.dependency_overrides[get_current_user] = lambda: _mock_user()
 
         mock_repo = MagicMock()
-        mock_repo.get_registry.return_value = (
-            pd.DataFrame()  # empty registry
-        )
-        mock_repo_cls.return_value = mock_repo
+        mock_repo.get_registry.return_value = pd.DataFrame()  # empty registry
+        mock_get_repo.return_value = mock_repo
 
         client = TestClient(app)
         resp = client.get(
@@ -427,16 +423,16 @@ class TestBulkExport:
 
         assert resp.status_code == 404
 
-    @patch("stocks.repository.StockRepository")
+    @patch("tools._stock_shared._get_repo")
     def test_export_unsupported_format(
-        self, mock_repo_cls,
+        self,
+        mock_get_repo,
     ):
         """Unsupported format returns 422."""
         app = _make_app()
         from auth.dependencies import get_current_user
-        app.dependency_overrides[
-            get_current_user
-        ] = lambda: _mock_user()
+
+        app.dependency_overrides[get_current_user] = lambda: _mock_user()
 
         client = TestClient(app)
         resp = client.get(
