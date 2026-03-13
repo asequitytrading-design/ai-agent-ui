@@ -17,6 +17,7 @@ import { useSendMessage } from "@/hooks/useSendMessage";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useEditProfile, type UserProfile } from "@/hooks/useEditProfile";
 import { useChangePassword } from "@/hooks/useChangePassword";
+import { useSessionManagement } from "@/hooks/useSessionManagement";
 import { StatusBadge } from "@/components/StatusBadge";
 import { ChatHeader } from "@/components/ChatHeader";
 import { ChatInput } from "@/components/ChatInput";
@@ -25,7 +26,9 @@ import { IFrameView } from "@/components/IFrameView";
 import { NavigationMenu } from "@/components/NavigationMenu";
 import { EditProfileModal } from "@/components/EditProfileModal";
 import { ChangePasswordModal } from "@/components/ChangePasswordModal";
+import { SessionManagementModal } from "@/components/SessionManagementModal";
 import { BACKEND_URL, DASHBOARD_URL, DOCS_URL } from "@/lib/config";
+import { getSessionIdFromToken } from "@/lib/auth";
 
 export default function ChatPage() {
   useAuthGuard();
@@ -62,6 +65,7 @@ export default function ChatPage() {
 
   const editProfile = useEditProfile();
   const changePassword = useChangePassword();
+  const sessionMgmt = useSessionManagement();
 
   // Fetch user profile on mount — Fix #17: AbortController cancels if unmounted
   useEffect(() => {
@@ -169,6 +173,7 @@ export default function ChatPage() {
         profile={profile}
         onEditProfile={editProfile.open}
         onChangePassword={changePassword.open}
+        onManageSessions={sessionMgmt.open}
       />
 
       {view === "chat" ? (
@@ -255,6 +260,19 @@ export default function ChatPage() {
         error={changePassword.error}
         onClose={changePassword.close}
         onSave={handleChangePasswordSave}
+      />
+
+      <SessionManagementModal
+        isOpen={sessionMgmt.isOpen}
+        sessions={sessionMgmt.sessions}
+        loading={sessionMgmt.loading}
+        revoking={sessionMgmt.revoking}
+        revokingAll={sessionMgmt.revokingAll}
+        error={sessionMgmt.error}
+        currentSessionId={getSessionIdFromToken()}
+        onClose={sessionMgmt.close}
+        onRevoke={sessionMgmt.revokeSession}
+        onRevokeAll={sessionMgmt.revokeAllSessions}
       />
     </div>
   );

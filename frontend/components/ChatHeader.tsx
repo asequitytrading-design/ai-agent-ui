@@ -23,6 +23,7 @@ interface ChatHeaderProps {
   profile: UserProfile | null;
   onEditProfile: () => void;
   onChangePassword: () => void;
+  onManageSessions: () => void;
 }
 
 export function ChatHeader({
@@ -34,6 +35,7 @@ export function ChatHeader({
   profile,
   onEditProfile,
   onChangePassword,
+  onManageSessions,
 }: ChatHeaderProps) {
   const router = useRouter();
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -194,6 +196,19 @@ export function ChatHeader({
                   <path d="M7 11V7a5 5 0 0 1 10 0v4" />
                 </svg>
                 Change Password
+              </button>
+
+              {/* Manage Sessions */}
+              <button
+                onClick={() => { setDropdownOpen(false); onManageSessions(); }}
+                className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 hover:text-indigo-600 transition-colors text-left"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                  <line x1="8" y1="21" x2="16" y2="21" />
+                  <line x1="12" y1="17" x2="12" y2="21" />
+                </svg>
+                Manage Sessions
               </button>
 
               <div className="border-t border-gray-100" />
