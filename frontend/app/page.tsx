@@ -138,7 +138,11 @@ export default function ChatPage() {
 
   // Fix #7: memoize iframeSrc — avoids calling getAccessToken() on every render
   const iframeSrc = useMemo(() => {
-    if (view === "docs") return iframeUrl ?? DOCS_URL;
+    if (view === "docs") {
+      const base = iframeUrl ?? DOCS_URL;
+      const sep = base.includes("?") ? "&" : "?";
+      return `${base}${sep}theme=${theme.resolvedTheme}`;
+    }
     const defaultUrl =
       view === "admin" ? `${DASHBOARD_URL}/admin/users` :
       view === "insights" ? `${DASHBOARD_URL}/insights` :
