@@ -119,16 +119,16 @@ prompt_required() {
     if [[ $NON_INTERACTIVE -eq 1 ]]; then
         value="${!var_name:-}"
         if [[ -z "$value" ]]; then
-            fail "$var_name is required in --non-interactive mode. Export it before running."
+            fail "$var_name is required in --non-interactive mode."
         fi
         echo "$value"
         return
     fi
     while [[ -z "$value" ]]; do
-        printf "  %s: " "$prompt_text"
+        printf "  %s: " "$prompt_text" >&2
         read -r value
         if [[ -z "$value" ]]; then
-            echo -e "  ${R}This field is required. Please enter a value.${N}"
+            echo -e "  ${R}Required. Please enter a value.${N}" >&2
         fi
     done
     echo "$value"
@@ -140,7 +140,7 @@ prompt_optional() {
         echo "${!var_name:-}"
         return
     fi
-    printf "  %s (Enter to skip): " "$prompt_text"
+    printf "  %s (Enter to skip): " "$prompt_text" >&2
     read -r value
     echo "$value"
 }
@@ -150,19 +150,20 @@ prompt_secret() {
     if [[ $NON_INTERACTIVE -eq 1 ]]; then
         value="${!var_name:-}"
         if [[ -z "$value" ]]; then
-            fail "$var_name is required in --non-interactive mode. Export it before running."
+            fail "$var_name is required in --non-interactive mode."
         fi
         echo "$value"
         return
     fi
     while [[ -z "$value" ]]; do
-        printf "  %s: " "$prompt_text"
+        printf "  %s: " "$prompt_text" >&2
         read -rs value
-        echo ""
+        echo "" >&2
         if [[ -z "$value" ]]; then
-            echo -e "  ${R}This field is required. Please enter a value.${N}"
+            echo -e "  ${R}Required. Please enter a value.${N}" >&2
         fi
     done
+    echo -e "  ${G}[set]${N}" >&2
     echo "$value"
 }
 
@@ -172,9 +173,12 @@ prompt_optional_secret() {
         echo "${!var_name:-}"
         return
     fi
-    printf "  %s (Enter to skip): " "$prompt_text"
+    printf "  %s (Enter to skip): " "$prompt_text" >&2
     read -rs value
-    echo ""
+    echo "" >&2
+    if [[ -n "$value" ]]; then
+        echo -e "  ${G}[set]${N}" >&2
+    fi
     echo "$value"
 }
 
@@ -461,62 +465,96 @@ ok "All directories created"
 step "9/12" "Configuring API keys and secrets"
 
 # Auto-generate JWT_SECRET_KEY
-JWT_SECRET_KEY="$("$VENV_PYTHON" -c "import secrets; print(secrets.token_hex(32))")"
+JWT_SECRET_KEY="$("$VENV_PYTHON" -c \
+    "import secrets; print(secrets.token_hex(32))")"
 ok "JWT_SECRET_KEY auto-generated (64 hex chars)"
 
-# Required
+# ── API Keys (numbered prompts) ──────────────────────────────
 echo ""
-echo -e "  ${B}Required:${N}"
-ANTHROPIC_API_KEY="$(prompt_secret "ANTHROPIC_API_KEY" "Anthropic API key (sk-ant-...)")"
-ok "ANTHROPIC_API_KEY set"
-
-# Optional LLM / tools
+echo -e "  ${B}API Keys${N} (6 items — press Enter to skip optional)"
 echo ""
-echo -e "  ${B}Optional (press Enter to skip):${N}"
-GROQ_API_KEY="$(prompt_optional_secret "GROQ_API_KEY" "Groq API key (LLM fallback)")"
-SERPAPI_API_KEY="$(prompt_optional_secret "SERPAPI_API_KEY" "SerpAPI key (web search tool)")"
 
-# Optional SSO
+# 1. Required
+ANTHROPIC_API_KEY="$(prompt_secret \
+    "ANTHROPIC_API_KEY" "[1/6] Anthropic API key (sk-ant-...)")"
+
+# 2-3. Optional LLM / tools
+GROQ_API_KEY="$(prompt_optional_secret \
+    "GROQ_API_KEY" "[2/6] Groq API key — LLM fallback")"
+SERPAPI_API_KEY="$(prompt_optional_secret \
+    "SERPAPI_API_KEY" "[3/6] SerpAPI key — web search tool")"
+
+# 4-5. Optional Google SSO
+GOOGLE_CLIENT_ID="$(prompt_optional \
+    "GOOGLE_CLIENT_ID" "[4/6] Google Client ID — SSO")"
+GOOGLE_CLIENT_SECRET="$(prompt_optional_secret \
+    "GOOGLE_CLIENT_SECRET" "[5/6] Google Client Secret — SSO")"
+
+# 6. Optional Facebook SSO (ID + secret together)
+FACEBOOK_APP_ID="$(prompt_optional \
+    "FACEBOOK_APP_ID" "[6/6] Facebook App ID — SSO")"
+FACEBOOK_APP_SECRET=""
+if [[ -n "$FACEBOOK_APP_ID" ]]; then
+    FACEBOOK_APP_SECRET="$(prompt_optional_secret \
+        "FACEBOOK_APP_SECRET" "      Facebook App Secret")"
+fi
+
+# ── Superuser account ────────────────────────────────────────
 echo ""
-echo -e "  ${B}Optional — Google SSO:${N}"
-GOOGLE_CLIENT_ID="$(prompt_optional "GOOGLE_CLIENT_ID" "Google Client ID")"
-GOOGLE_CLIENT_SECRET="$(prompt_optional_secret "GOOGLE_CLIENT_SECRET" "Google Client Secret")"
-
+echo -e "  ${B}Superuser Account${N}"
 echo ""
-echo -e "  ${B}Optional — Facebook SSO:${N}"
-FACEBOOK_APP_ID="$(prompt_optional "FACEBOOK_APP_ID" "Facebook App ID")"
-FACEBOOK_APP_SECRET="$(prompt_optional_secret "FACEBOOK_APP_SECRET" "Facebook App Secret")"
 
-# Optional admin seed
-echo ""
-echo -e "  ${B}Optional — Superuser account:${N}"
-ADMIN_EMAIL="$(prompt_optional "ADMIN_EMAIL" "Admin email")"
-ADMIN_PASSWORD=""
-ADMIN_FULL_NAME=""
+# Defaults
+_DEFAULT_ADMIN_EMAIL="admin@demo.local"
+_DEFAULT_ADMIN_PASS="Admin123!"
+_DEFAULT_ADMIN_NAME="Admin User"
 
-if [[ -n "$ADMIN_EMAIL" ]]; then
-    # Validate admin password
-    while true; do
-        ADMIN_PASSWORD="$(prompt_optional_secret "ADMIN_PASSWORD" "Admin password (min 8 chars, 1 digit)")"
-        if [[ -z "$ADMIN_PASSWORD" ]]; then
-            warn "No password provided — skipping admin account creation"
-            ADMIN_EMAIL=""
+if [[ $NON_INTERACTIVE -eq 1 ]]; then
+    # Non-interactive: use env vars or defaults
+    ADMIN_EMAIL="${ADMIN_EMAIL:-$_DEFAULT_ADMIN_EMAIL}"
+    ADMIN_PASSWORD="${ADMIN_PASSWORD:-$_DEFAULT_ADMIN_PASS}"
+    ADMIN_FULL_NAME="${ADMIN_FULL_NAME:-$_DEFAULT_ADMIN_NAME}"
+    info "Admin: $ADMIN_EMAIL (non-interactive defaults)"
+else
+    echo -e "  ${C}[1]${N} Use defaults" \
+        "(${_DEFAULT_ADMIN_EMAIL} / ${_DEFAULT_ADMIN_PASS})"
+    echo -e "  ${C}[2]${N} Custom email and password"
+    printf "  Choose [1]: " >&2
+    read -r _admin_choice
+    _admin_choice="${_admin_choice:-1}"
+
+    if [[ "$_admin_choice" == "2" ]]; then
+        # Custom admin
+        echo ""
+        echo -e "  Password rules:" \
+            "min 8 chars, at least 1 digit" >&2
+        ADMIN_EMAIL="$(prompt_required \
+            "ADMIN_EMAIL" "  Admin email")"
+        while true; do
+            ADMIN_PASSWORD="$(prompt_secret \
+                "ADMIN_PASSWORD" "  Admin password")"
+            if [[ ${#ADMIN_PASSWORD} -lt 8 ]]; then
+                echo -e \
+                    "  ${R}Must be 8+ characters.${N}" >&2
+                continue
+            fi
+            if ! [[ "$ADMIN_PASSWORD" =~ [0-9] ]]; then
+                echo -e \
+                    "  ${R}Must contain a digit.${N}" >&2
+                continue
+            fi
             break
-        fi
-        if [[ ${#ADMIN_PASSWORD} -lt 8 ]]; then
-            echo -e "  ${R}Password must be at least 8 characters.${N}"
-            continue
-        fi
-        if ! [[ "$ADMIN_PASSWORD" =~ [0-9] ]]; then
-            echo -e "  ${R}Password must contain at least one digit.${N}"
-            continue
-        fi
-        break
-    done
-    if [[ -n "$ADMIN_EMAIL" ]]; then
-        ADMIN_FULL_NAME="$(prompt_optional "ADMIN_FULL_NAME" "Admin full name")"
-        [[ -z "$ADMIN_FULL_NAME" ]] && ADMIN_FULL_NAME="Admin User"
+        done
+        ADMIN_FULL_NAME="$(prompt_optional \
+            "ADMIN_FULL_NAME" "  Admin full name")"
+        [[ -z "$ADMIN_FULL_NAME" ]] \
+            && ADMIN_FULL_NAME="$_DEFAULT_ADMIN_NAME"
+    else
+        ADMIN_EMAIL="$_DEFAULT_ADMIN_EMAIL"
+        ADMIN_PASSWORD="$_DEFAULT_ADMIN_PASS"
+        ADMIN_FULL_NAME="$_DEFAULT_ADMIN_NAME"
     fi
+    ok "Admin: $ADMIN_EMAIL"
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -608,12 +646,17 @@ fi
 # Write master file if it doesn't exist (or overwrite if requested)
 if [[ -f "$BACKEND_ENV_REAL" ]]; then
     if [[ $NON_INTERACTIVE -eq 1 ]]; then
-        info "~/.ai-agent-ui/backend.env exists — overwriting (non-interactive)"
+        info "backend.env exists — overwriting (non-interactive)"
         _write_backend_env
     else
-        printf "  ~/.ai-agent-ui/backend.env already exists. Overwrite? [y/N]: "
-        read -r OVERWRITE
-        if [[ "$OVERWRITE" =~ ^[Yy] ]]; then
+        echo ""
+        echo "  ~/.ai-agent-ui/backend.env already exists."
+        echo -e "  ${C}[1]${N} Keep existing"
+        echo -e "  ${C}[2]${N} Overwrite with new values"
+        printf "  Choose [1]: " >&2
+        read -r _env_choice
+        _env_choice="${_env_choice:-1}"
+        if [[ "$_env_choice" == "2" ]]; then
             _write_backend_env
         else
             ok "~/.ai-agent-ui/backend.env kept unchanged"
@@ -845,15 +888,34 @@ else
 fi
 
 # ── Seed demo data ────────────────────────────────────────────────────────────
-if [[ "${SKIP_SEED:-}" != "1" ]]; then
-    info "Seeding demo data (5 tickers + 2 users)..."
-    if (cd "$SCRIPT_DIR" && "$VENV_PYTHON" scripts/seed_demo_data.py 2>&1); then
-        ok "Demo data seeded (admin@demo.local / Admin123!, test@demo.local / Test1234!)"
-    else
-        warn "scripts/seed_demo_data.py had issues (data may already exist)"
-    fi
-else
+if [[ "${SKIP_SEED:-}" == "1" ]]; then
     info "SKIP_SEED=1 — skipping demo data seed"
+else
+    _do_seed=1
+    # Check if catalog already has data (re-run scenario)
+    if [[ -f "$HOME/.ai-agent-ui/data/iceberg/catalog.db" ]] \
+       && [[ $NON_INTERACTIVE -eq 0 ]]; then
+        echo ""
+        echo "  Demo data may already exist."
+        echo -e "  ${C}[1]${N} Skip (keep existing data)"
+        echo -e "  ${C}[2]${N} Re-seed (overwrite)"
+        printf "  Choose [1]: " >&2
+        read -r _seed_choice
+        _seed_choice="${_seed_choice:-1}"
+        [[ "$_seed_choice" != "2" ]] && _do_seed=0
+    fi
+    if [[ $_do_seed -eq 1 ]]; then
+        info "Seeding demo data (5 tickers + 2 users)..."
+        if (cd "$SCRIPT_DIR" \
+            && "$VENV_PYTHON" scripts/seed_demo_data.py 2>&1)
+        then
+            ok "Demo data seeded"
+        else
+            warn "seed_demo_data.py had issues (may exist)"
+        fi
+    else
+        ok "Keeping existing demo data"
+    fi
 fi
 
 # ── Git hooks ─────────────────────────────────────────────────────────────────
@@ -916,6 +978,11 @@ else
     echo -e "${Y}  $PASS/$TOTAL checks passed. Review any failures above.${N}"
 fi
 echo "════════════════════════════════════════════════════════════════════"
+echo ""
+echo -e "  ${B}Admin login:${N}"
+echo -e "    Email:    ${C}${ADMIN_EMAIL}${N}"
+echo -e "    Password: ${C}${ADMIN_PASSWORD}${N}"
+echo -e "    ${Y}Change your password on first login.${N}"
 echo ""
 echo -e "  ${B}Next steps:${N}"
 echo ""
