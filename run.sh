@@ -665,17 +665,19 @@ case "${1:-help}" in
     stop)    do_stop    ;;
     status)  do_status  ;;
     restart) do_stop; sleep 1; do_start ;;
-    logs)    do_logs "${2:-}" "${3:-}" ;;
-    doctor)  do_doctor  ;;
+    logs)       do_logs "${2:-}" "${3:-}" ;;
+    doctor)     do_doctor  ;;
+    docs-check) "$PYTHON" "${SCRIPT_DIR}/scripts/docs_drift_check.py" ;;
     *)
-        echo -e "${B}Usage:${N} $(basename "$0") {start|stop|status|restart|logs|doctor}"
+        echo -e "${B}Usage:${N} $(basename "$0") {start|stop|status|restart|logs|doctor|docs-check}"
         echo ""
-        echo "  start    Start all services in the background"
-        echo "  stop     Stop all running services"
-        echo "  status   Show PID, URL, and health for each service"
-        echo "  restart  Stop then start"
-        echo "  logs     Tail service logs"
-        echo "  doctor   Run diagnostic checks with fix suggestions"
+        echo "  start      Start all services in the background"
+        echo "  stop       Stop all running services"
+        echo "  status     Show PID, URL, and health for each service"
+        echo "  restart    Stop then start"
+        echo "  logs       Tail service logs"
+        echo "  doctor     Run diagnostic checks with fix suggestions"
+        echo "  docs-check Detect documentation drift vs code"
         echo ""
         echo "  Logs usage:"
         echo "    ./run.sh logs              All service logs (last 50 lines)"
