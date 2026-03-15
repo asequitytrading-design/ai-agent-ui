@@ -26,31 +26,71 @@ fi
 
 # ── Parse flags ───────────────────────────────────────────────────────────────
 NON_INTERACTIVE=0
+FORCE_SETUP=0
+REPAIR_MODE=0
 for arg in "$@"; do
     case "$arg" in
         --non-interactive) NON_INTERACTIVE=1 ;;
+        --force)           FORCE_SETUP=1 ;;
+        --repair)          REPAIR_MODE=1 ;;
         -h|--help)
-            echo "Usage: ./setup.sh [--non-interactive]"
-            echo ""
-            echo "  --non-interactive   Read all secrets from environment variables (for CI/Docker)"
-            echo "  -h, --help          Show this help message"
+            cat <<HELPEOF
+Usage: ./setup.sh [OPTIONS]
+
+Options:
+  --non-interactive  Read secrets from env vars (CI/Docker)
+  --force            Reset state and re-run everything
+  --repair           Fix symlinks, env files, and hooks only
+  -h, --help         Show this help message
+
+Examples:
+  ./setup.sh                  # interactive first-time setup
+  ./setup.sh --repair         # fix broken symlinks/hooks
+  ./setup.sh --force          # redo everything from scratch
+HELPEOF
             exit 0
             ;;
         *)
             echo -e "${R}Unknown option: $arg${N}"
-            echo "Usage: ./setup.sh [--non-interactive]"
+            echo "Usage: ./setup.sh [--non-interactive] [--force] [--repair]"
             exit 1
             ;;
     esac
 done
 
+# ── Setup state (crash-resume) ─────────────────────────────────
+SETUP_STATE="${HOME}/.ai-agent-ui/.setup_state"
+mkdir -p "$(dirname "$SETUP_STATE")"
+
+if [[ $FORCE_SETUP -eq 1 ]]; then rm -f "$SETUP_STATE"; fi
+[[ -f "$SETUP_STATE" ]] || touch "$SETUP_STATE"
+
+# Mark a step complete / check if already done
+_mark_done() { echo "${1}=done" >> "$SETUP_STATE"; }
+_is_done()   { grep -q "^${1}=done$" "$SETUP_STATE" 2>/dev/null; }
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+_STEP_SKIPPED=0
 step() {
+    local label="$1" desc="$2" key="$3"
+    # If a state key is provided and already done, skip
+    if [[ -n "${key:-}" ]] && _is_done "$key" \
+       && [[ $FORCE_SETUP -eq 0 ]]; then
+        echo ""
+        echo -e "${B}[$label]${N} $desc"
+        echo -e "  ${G}[SKIP]${N} Already completed"
+        _STEP_SKIPPED=1
+        return 0
+    fi
+    _STEP_SKIPPED=0
     echo ""
-    echo -e "${B}[$1]${N} $2"
-    echo "────────────────────────────────────────────────────────────────"
+    echo -e "${B}[$label]${N} $desc"
+    echo "──────────────────────────────────────────────────────────"
 }
+
+# Mark current step done (call at end of each step)
+done_step() { _mark_done "$1"; }
 
 ok()   { echo -e "  ${G}[OK]${N} $1"; }
 warn() { echo -e "  ${Y}[WARN]${N} $1"; }
@@ -182,13 +222,109 @@ prompt_optional_secret() {
     echo "$value"
 }
 
+# ── Repair mode (early exit) ──────────────────────────────────
+if [[ $REPAIR_MODE -eq 1 ]]; then
+    echo ""
+    echo "╔════════════════════════════════════════════════════════════╗"
+    echo "║           AI Agent UI — Repair Mode                       ║"
+    echo "╚════════════════════════════════════════════════════════════╝"
+    echo ""
+
+    ENV_HOME="$HOME/.ai-agent-ui"
+    BACKEND_ENV_REAL="$ENV_HOME/backend.env"
+    FRONTEND_ENV_REAL="$ENV_HOME/frontend.env.local"
+    BACKEND_ENV_LINK="$SCRIPT_DIR/backend/.env"
+    FRONTEND_ENV_LINK="$SCRIPT_DIR/frontend/.env.local"
+    HOOKS_DIR="$SCRIPT_DIR/.git/hooks"
+
+    # Master env files must exist
+    if [[ ! -f "$BACKEND_ENV_REAL" ]]; then
+        fail "~/.ai-agent-ui/backend.env missing. Run: ./setup.sh"
+    fi
+    if [[ ! -f "$FRONTEND_ENV_REAL" ]]; then
+        fail "~/.ai-agent-ui/frontend.env.local missing. Run: ./setup.sh"
+    fi
+
+    REPAIRED=0
+
+    # ── backend/.env ──
+    echo -e "${B}[1/3]${N} Checking backend/.env"
+    _clean_symlink "$BACKEND_ENV_LINK"
+    if [[ -L "$BACKEND_ENV_LINK" ]]; then
+        LT="$(readlink "$BACKEND_ENV_LINK")"
+        if [[ "$LT" == "$BACKEND_ENV_REAL" ]]; then
+            ok "symlink OK"
+        else
+            rm "$BACKEND_ENV_LINK"
+            _try_symlink "$BACKEND_ENV_REAL" "$BACKEND_ENV_LINK"
+            ok "link repaired"; REPAIRED=$((REPAIRED + 1))
+        fi
+    elif [[ -f "$BACKEND_ENV_LINK" ]]; then
+        cp -f "$BACKEND_ENV_REAL" "$BACKEND_ENV_LINK"
+        ok "copy refreshed"; REPAIRED=$((REPAIRED + 1))
+    else
+        _try_symlink "$BACKEND_ENV_REAL" "$BACKEND_ENV_LINK"
+        ok "link created"; REPAIRED=$((REPAIRED + 1))
+    fi
+
+    # ── frontend/.env.local ──
+    echo -e "${B}[2/3]${N} Checking frontend/.env.local"
+    _clean_symlink "$FRONTEND_ENV_LINK"
+    if [[ -L "$FRONTEND_ENV_LINK" ]]; then
+        LT="$(readlink "$FRONTEND_ENV_LINK")"
+        if [[ "$LT" == "$FRONTEND_ENV_REAL" ]]; then
+            ok "symlink OK"
+        else
+            rm "$FRONTEND_ENV_LINK"
+            _try_symlink "$FRONTEND_ENV_REAL" "$FRONTEND_ENV_LINK"
+            ok "link repaired"; REPAIRED=$((REPAIRED + 1))
+        fi
+    elif [[ -f "$FRONTEND_ENV_LINK" ]]; then
+        cp -f "$FRONTEND_ENV_REAL" "$FRONTEND_ENV_LINK"
+        ok "copy refreshed"; REPAIRED=$((REPAIRED + 1))
+    else
+        _try_symlink "$FRONTEND_ENV_REAL" "$FRONTEND_ENV_LINK"
+        ok "link created"; REPAIRED=$((REPAIRED + 1))
+    fi
+
+    # ── Git hooks ──
+    echo -e "${B}[3/3]${N} Checking git hooks"
+    if [[ -d "$HOOKS_DIR" ]]; then
+        for h in pre-commit pre-push; do
+            if [[ -x "$HOOKS_DIR/$h" ]]; then
+                ok "$h hook OK"
+            else
+                cp "$SCRIPT_DIR/hooks/$h" "$HOOKS_DIR/$h"
+                chmod +x "$HOOKS_DIR/$h"
+                ok "$h hook installed"
+                REPAIRED=$((REPAIRED + 1))
+            fi
+        done
+    else
+        warn ".git/hooks not found — not a git repo?"
+    fi
+
+    echo ""
+    echo "══════════════════════════════════════════════════════════════"
+    if [[ $REPAIRED -eq 0 ]]; then
+        echo -e "${G}  Everything OK — nothing to repair.${N}"
+    else
+        echo -e "${G}  Repaired $REPAIRED item(s).${N}"
+    fi
+    echo "══════════════════════════════════════════════════════════════"
+    echo ""
+    exit 0
+fi
+
 # ── Banner ────────────────────────────────────────────────────────────────────
 echo ""
 echo "╔══════════════════════════════════════════════════════════════════╗"
 echo "║               AI Agent UI — First-Time Setup                    ║"
 echo "╚══════════════════════════════════════════════════════════════════╝"
 echo ""
-if [[ $NON_INTERACTIVE -eq 1 ]]; then
+if [[ $FORCE_SETUP -eq 1 ]]; then
+    info "Running with --force (all steps will re-run)"
+elif [[ $NON_INTERACTIVE -eq 1 ]]; then
     info "Running in non-interactive mode (reading secrets from env vars)"
 fi
 
@@ -264,12 +400,19 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 3: Ensure Python 3.12
 # ══════════════════════════════════════════════════════════════════════════════
-step "3/12" "Ensuring Python 3.12 is available"
+step "3/12" "Ensuring Python 3.12 is available" "STEP_03"
 
 PYTHON312=""
 
 # Check if python3.12 already exists
-if command -v python3.12 &>/dev/null; then
+if [[ $_STEP_SKIPPED -eq 1 ]]; then
+    # Still resolve PYTHON312 for later steps
+    if command -v python3.12 &>/dev/null; then
+        PYTHON312="$(command -v python3.12)"
+    elif [[ -f "$HOME/.pyenv/versions/3.12.9/bin/python3.12" ]]; then
+        PYTHON312="$HOME/.pyenv/versions/3.12.9/bin/python3.12"
+    fi
+elif command -v python3.12 &>/dev/null; then
     PYTHON312="$(command -v python3.12)"
     ok "Python 3.12 found at $PYTHON312 ($(python3.12 --version 2>&1))"
 elif [[ -f "$HOME/.pyenv/versions/3.12.9/bin/python3.12" ]]; then
@@ -333,83 +476,83 @@ else
         fail "Python 3.12 installation failed. Check pyenv output above."
     fi
 fi
+[[ $_STEP_SKIPPED -eq 0 ]] && done_step "STEP_03"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 4: Create virtualenv
 # ══════════════════════════════════════════════════════════════════════════════
-step "4/12" "Creating Python virtualenv (~/.ai-agent-ui/venv)"
+step "4/12" "Creating Python virtualenv (~/.ai-agent-ui/venv)" "STEP_04"
 
 VENV_DIR="${APP_DATA_HOME:-$HOME/.ai-agent-ui}/venv"
-
-# Migrate: if old venv exists at backend/demoenv but new one does not,
-# move it and leave a symlink for backwards compatibility.
-OLD_VENV_DIR="$SCRIPT_DIR/backend/demoenv"
-_clean_symlink "$OLD_VENV_DIR"
-if [[ -d "$OLD_VENV_DIR" ]] && [[ ! -L "$OLD_VENV_DIR" ]] && [[ ! -d "$VENV_DIR" ]]; then
-    info "Migrating virtualenv from backend/demoenv → $VENV_DIR"
-    mv "$OLD_VENV_DIR" "$VENV_DIR"
-    _try_symlink "$VENV_DIR" "$OLD_VENV_DIR"
-    ok "Virtualenv migrated (link left at backend/demoenv)"
-fi
 VENV_PYTHON="$VENV_DIR/bin/python"
 
-if [[ -f "$VENV_PYTHON" ]]; then
-    # Verify it's actually Python 3.12.x
-    VENV_VERSION="$("$VENV_PYTHON" --version 2>&1)"
-    if [[ "$VENV_VERSION" == *"3.12"* ]]; then
-        ok "Virtualenv already exists ($VENV_VERSION)"
-    else
-        warn "Virtualenv exists but is $VENV_VERSION (expected 3.12.x) — recreating"
-        rm -rf "$VENV_DIR"
-        "$PYTHON312" -m venv "$VENV_DIR"
-        ok "Virtualenv recreated with $("$VENV_PYTHON" --version 2>&1)"
+if [[ $_STEP_SKIPPED -eq 0 ]]; then
+    # Migrate old venv location
+    OLD_VENV_DIR="$SCRIPT_DIR/backend/demoenv"
+    _clean_symlink "$OLD_VENV_DIR"
+    if [[ -d "$OLD_VENV_DIR" ]] && [[ ! -L "$OLD_VENV_DIR" ]] && [[ ! -d "$VENV_DIR" ]]; then
+        info "Migrating virtualenv from backend/demoenv → $VENV_DIR"
+        mv "$OLD_VENV_DIR" "$VENV_DIR"
+        _try_symlink "$VENV_DIR" "$OLD_VENV_DIR"
+        ok "Virtualenv migrated (link left at backend/demoenv)"
     fi
-else
-    "$PYTHON312" -m venv "$VENV_DIR"
-    ok "Virtualenv created ($("$VENV_PYTHON" --version 2>&1))"
+
+    if [[ -f "$VENV_PYTHON" ]]; then
+        VENV_VERSION="$("$VENV_PYTHON" --version 2>&1)"
+        if [[ "$VENV_VERSION" == *"3.12"* ]]; then
+            ok "Virtualenv already exists ($VENV_VERSION)"
+        else
+            warn "Virtualenv is $VENV_VERSION (expected 3.12.x) — recreating"
+            rm -rf "$VENV_DIR"
+            "$PYTHON312" -m venv "$VENV_DIR"
+            ok "Virtualenv recreated with $("$VENV_PYTHON" --version 2>&1)"
+        fi
+    else
+        "$PYTHON312" -m venv "$VENV_DIR"
+        ok "Virtualenv created ($("$VENV_PYTHON" --version 2>&1))"
+    fi
+    done_step "STEP_04"
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 5: Install Python dependencies
 # ══════════════════════════════════════════════════════════════════════════════
-step "5/12" "Installing Python dependencies"
+step "5/12" "Installing Python dependencies" "STEP_05"
 
-REQUIREMENTS="$SCRIPT_DIR/backend/requirements.txt"
-if [[ ! -f "$REQUIREMENTS" ]]; then
-    fail "backend/requirements.txt not found"
+if [[ $_STEP_SKIPPED -eq 0 ]]; then
+    REQUIREMENTS="$SCRIPT_DIR/backend/requirements.txt"
+    if [[ ! -f "$REQUIREMENTS" ]]; then
+        fail "backend/requirements.txt not found"
+    fi
+    info "Upgrading pip..."
+    "$VENV_PYTHON" -m pip install --upgrade pip --quiet
+    info "Installing packages (this may take a few minutes)..."
+    "$VENV_PYTHON" -m pip install -r "$REQUIREMENTS" --quiet
+    REQUIREMENTS_DEV="$SCRIPT_DIR/backend/requirements-dev.txt"
+    if [[ -f "$REQUIREMENTS_DEV" ]]; then
+        info "Installing dev/test dependencies..."
+        "$VENV_PYTHON" -m pip install -r "$REQUIREMENTS_DEV" --quiet
+    fi
+    ok "Python dependencies installed"
+    done_step "STEP_05"
 fi
-
-info "Upgrading pip..."
-"$VENV_PYTHON" -m pip install --upgrade pip --quiet
-
-info "Installing packages from requirements.txt (this may take a few minutes)..."
-"$VENV_PYTHON" -m pip install -r "$REQUIREMENTS" --quiet
-
-REQUIREMENTS_DEV="$SCRIPT_DIR/backend/requirements-dev.txt"
-if [[ -f "$REQUIREMENTS_DEV" ]]; then
-    info "Installing dev/test dependencies from requirements-dev.txt..."
-    "$VENV_PYTHON" -m pip install -r "$REQUIREMENTS_DEV" --quiet
-fi
-
-ok "Python dependencies installed"
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Step 6: Check Node.js
+# Step 6: Check Node.js (always runs — validates prerequisite)
 # ══════════════════════════════════════════════════════════════════════════════
 step "6/12" "Checking Node.js"
 
 if command -v node &>/dev/null; then
     NODE_VERSION="$(node --version)"
-    # Extract major version number (v18.17.0 -> 18)
     NODE_MAJOR="${NODE_VERSION#v}"
     NODE_MAJOR="${NODE_MAJOR%%.*}"
     if [[ "$NODE_MAJOR" -ge 18 ]]; then
         ok "Node.js $NODE_VERSION"
     else
-        fail "Node.js $NODE_VERSION is too old. Version 18.17+ required."
+        fail "Node.js $NODE_VERSION is too old. 18.17+ required."
     fi
 else
-    fail "Node.js is not installed. Install Node.js 18.17+ from https://nodejs.org or via nvm/fnm."
+    fail "Node.js not installed. Install 18.17+ from https://nodejs.org"
 fi
 
 if command -v npm &>/dev/null; then
@@ -421,20 +564,23 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 7: Install frontend dependencies
 # ══════════════════════════════════════════════════════════════════════════════
-step "7/12" "Installing frontend dependencies"
+step "7/12" "Installing frontend dependencies" "STEP_07"
 
 FRONTEND_DIR="$SCRIPT_DIR/frontend"
 
-if [[ -d "$FRONTEND_DIR/node_modules" ]]; then
-    ok "node_modules already exists — skipping (delete frontend/node_modules to force reinstall)"
-else
-    info "Running npm ci in frontend/..."
-    (cd "$FRONTEND_DIR" && npm ci --loglevel=warn)
-    ok "Frontend dependencies installed"
+if [[ $_STEP_SKIPPED -eq 0 ]]; then
+    if [[ -d "$FRONTEND_DIR/node_modules" ]]; then
+        ok "node_modules already exists"
+    else
+        info "Running npm ci in frontend/..."
+        (cd "$FRONTEND_DIR" && npm ci --loglevel=warn)
+        ok "Frontend dependencies installed"
+    fi
+    done_step "STEP_07"
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Step 8: Create project directories
+# Step 8: Create project directories (always runs — idempotent)
 # ══════════════════════════════════════════════════════════════════════════════
 step "8/12" "Creating project directories"
 
@@ -462,7 +608,17 @@ ok "All directories created"
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 9: Prompt for API keys and secrets
 # ══════════════════════════════════════════════════════════════════════════════
-step "9/12" "Configuring API keys and secrets"
+step "9/12" "Configuring API keys and secrets" "STEP_09"
+
+if [[ $_STEP_SKIPPED -eq 1 ]]; then
+    # Source existing env to get vars for later steps
+    if [[ -f "$HOME/.ai-agent-ui/backend.env" ]]; then
+        set -a
+        # shellcheck disable=SC1091
+        source "$HOME/.ai-agent-ui/backend.env"
+        set +a
+    fi
+else  # ── begin step 9 body ──
 
 # Auto-generate JWT_SECRET_KEY
 JWT_SECRET_KEY="$("$VENV_PYTHON" -c \
@@ -556,15 +712,15 @@ else
     fi
     ok "Admin: $ADMIN_EMAIL"
 fi
+done_step "STEP_09"
+fi  # end step 9 skip-check
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 10: Generate config files
 # ══════════════════════════════════════════════════════════════════════════════
-step "10/12" "Generating config files"
+step "10/12" "Generating config files" "STEP_10"
 
-# ── External env directory ────────────────────────────────────────────────────
-# Secrets live outside the repo so git checkout / merge never overwrites them.
-# The project files (backend/.env, frontend/.env.local) are symlinks.
+# Always set path variables (needed by later steps and repair)
 ENV_HOME="$HOME/.ai-agent-ui"
 mkdir -p "$ENV_HOME"
 
@@ -573,6 +729,7 @@ FRONTEND_ENV_REAL="$ENV_HOME/frontend.env.local"
 BACKEND_ENV_LINK="$SCRIPT_DIR/backend/.env"
 FRONTEND_ENV_LINK="$SCRIPT_DIR/frontend/.env.local"
 
+if [[ $_STEP_SKIPPED -eq 0 ]]; then
 # ── backend/.env ──────────────────────────────────────────────────────────────
 
 _write_backend_env() {
@@ -760,12 +917,15 @@ catalog:
 ICEEOF
     ok ".pyiceberg.yaml created (warehouse: ${HOME}/.ai-agent-ui/data/iceberg/warehouse)"
 fi
+done_step "STEP_10"
+fi  # end step 10 skip-check
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 11: Install and configure Redis
 # ══════════════════════════════════════════════════════════════════════════════
-step "11/12" "Installing Redis (token store backend)"
+step "11/12" "Installing Redis (token store backend)" "STEP_11"
 
+if [[ $_STEP_SKIPPED -eq 0 ]]; then
 REDIS_INSTALLED=0
 
 if command -v redis-server &>/dev/null; then
@@ -833,19 +993,22 @@ if [[ $REDIS_INSTALLED -eq 1 ]]; then
         ok "AOF persistence already enabled"
     fi
 fi
+done_step "STEP_11"
+fi  # end step 11 skip-check
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Step 12: Initialise Iceberg + seed admin + install hooks
 # ══════════════════════════════════════════════════════════════════════════════
-step "12/12" "Initialising database, git hooks, and running verification"
+step "12/12" "Initialising database, git hooks, and running verification" "STEP_12"
 
-# Export env vars so init scripts can find them
-export JWT_SECRET_KEY
+# Always export env vars (may have been sourced from existing env)
+export JWT_SECRET_KEY="${JWT_SECRET_KEY:-}"
 export ADMIN_EMAIL="${ADMIN_EMAIL:-}"
 export ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"
 export ADMIN_FULL_NAME="${ADMIN_FULL_NAME:-Admin User}"
-export ANTHROPIC_API_KEY
+export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
 
+if [[ $_STEP_SKIPPED -eq 0 ]]; then
 # ── Iceberg tables ────────────────────────────────────────────────────────────
 info "Creating auth Iceberg tables..."
 if (cd "$SCRIPT_DIR" && "$VENV_PYTHON" auth/create_tables.py 2>&1); then
@@ -930,8 +1093,10 @@ if [[ -d "$HOOKS_DIR" ]]; then
 else
     warn ".git/hooks directory not found — are you in a git repository?"
 fi
+done_step "STEP_12"
+fi  # end step 12 skip-check
 
-# ── Verification ──────────────────────────────────────────────────────────────
+# ── Verification (always runs) ────────────────────────────────────────────────
 echo ""
 echo -e "${B}Verification:${N}"
 echo "────────────────────────────────────────────────────────────────"
