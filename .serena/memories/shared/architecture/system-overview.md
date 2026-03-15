@@ -25,11 +25,22 @@
 - **`BaseAgent`** (`backend/agents/base.py`) — ABC with agentic loop
   (`MAX_ITERATIONS=15`) + streaming. Subclasses only override
   `_build_llm()`.
-- **LLM**: N-tier Groq cascade + Anthropic Claude Sonnet 4.6 fallback
-  via `FallbackLLM` in `backend/llm_fallback.py`. Config: `AgentConfig.
-  groq_model_tiers` list, parsed from `GROQ_MODEL_TIERS` CSV env var.
-  Default: llama-3.3-70b → kimi-k2 → gpt-oss-120b → scout-17b →
-  claude-sonnet-4-6.
+- **LLM**: Split cascade profiles via `FallbackLLM` in
+  `backend/llm_fallback.py`:
+  - **Tool cascade**: llama-3.3-70b → kimi-k2 → scout (for tool-calling
+    iterations). Skips gpt-oss-120b to preserve synthesis budget.
+  - **Synthesis cascade**: gpt-oss-120b → kimi-k2 → Anthropic (for
+    final response when no more tool calls).
+  - **Test cascade** (`AI_AGENT_UI_ENV=test`): free tiers only, no
+    Anthropic. RuntimeError if all exhausted.
+  Config: `GROQ_MODEL_TIERS`, `SYNTHESIS_MODEL_TIERS`,
+  `TEST_MODEL_TIERS` CSV env vars. `BaseAgent` has `llm_with_tools`
+  + `llm_synthesis` attributes.
+- **Report builder**: `backend/agents/report_builder.py` — parses
+  tool text output, renders 5 deterministic markdown sections
+  (header, technicals, forecast, calendar, charts). LLM produces
+  verdict only (~150-250 tokens vs ~800-1200). `StockAgent.
+  format_response()` prepends template to LLM response.
 - **Observability**: `backend/observability.py` — `ObservabilityCollector`
   tracks per-tier health (healthy/degraded/down/disabled), latency
   (avg + p95), cascade counts. Admin endpoints:

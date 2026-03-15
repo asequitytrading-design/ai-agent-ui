@@ -2,24 +2,81 @@
 
 ---
 
-# Session: Mar 14, 2026 — ASETPLTFRM-61
+# Session: Mar 15, 2026 — WSL2 compat, LLM cascade, report template, auto-docs
 
 ## Summary
-Dark mode CSS bug fix for Compare Stocks dropdown badge.
+WSL2 installation fixes, DevOps UX overhaul (setup.sh + run.sh), LLM cascade split into tool/synthesis/test profiles, deterministic report template, auto-generated API/config docs, and drift detection CLI.
 
-### ASETPLTFRM-61 — Fix: Dark mode "2 selected" badge font color
-- **Bug:** `.dash-dropdown-value-count` (Dash 4 class) used built-in
-  CSS vars (`--Dash-Text-Weak`, `--Dash-Fill-Interactive-Weak`) that
-  aren't overridden in dark mode, resulting in dark text on dark bg.
-- **Fix:** Added `body.dark-mode .dash-dropdown-value-count` rule in
-  `dashboard/assets/custom.css` — `color: var(--text-primary)`,
-  `background: var(--border)`.
-- Jira: created, Sprint 1, In Progress, 1 SP, assigned Abhay Singh.
-- **Status:** Fix applied, visually verified. Not yet committed.
+### Completed tickets
 
-### Sprint 1 status check
-- 47 Done, 2 In Progress (ASETPLTFRM-60, ASETPLTFRM-27), + new -61.
-- Sprint ends 2026-03-18 (4 days remaining).
+#### PR #92 — WSL2 compatibility + DevOps UX (merged)
+- **ASETPLTFRM-67** (3 SP) — Fix setup.sh prompt stdout leak, default superuser menu, numbered API key prompts
+- **ASETPLTFRM-68** (3 SP) — Crash-resume via .setup_state markers, --repair mode for symlinks/hooks/env
+- **ASETPLTFRM-69** (5 SP) — run.sh: reliable 3-state status (up/listening/down), logs command, doctor diagnostics
+- **ASETPLTFRM-70** (3 SP) — Cross-platform install guides: macOS, Linux, Windows 11 (WSL2 full walkthrough)
+
+#### PR #93 — LLM cascade + report template + bug fix (merged)
+- **ASETPLTFRM-66** (3 SP) — Split LLM cascade: tool (llama→kimi→scout), synthesis (gpt-oss→kimi→Anthropic), test (free-only)
+- **ASETPLTFRM-65** (3 SP) — Deterministic report_builder.py: 5 markdown sections parsed from tool output + LLM verdict-only
+- **ASETPLTFRM-71** (2 SP, Bug) — Fix synthesis double-invoke (save 1 API call), cap news agent to 2 iterations, reinforce pipeline prompt
+
+#### PR #94 — Auto-gen docs + drift checker (pending merge)
+- **ASETPLTFRM-63** (3 SP) — gen_api_docs.py + gen_config_docs.py via mkdocs-gen-files plugin
+- **ASETPLTFRM-64** (2 SP) — docs_drift_check.py + ./run.sh docs-check command
+
+### Key metrics
+- Sprint 1: 11 stories + 1 bug = 28 SP total, all implemented
+- Stock analysis API calls: 10 → 5 (50% reduction, verified TITAN.NS)
+- Token usage: ~28K → ~14.6K per analysis (48% reduction)
+- Report consistency: 100% deterministic (model-independent)
+
+---
+
+# Session: Mar 14, 2026 — ASETPLTFRM-60, 61, 62 + Sprint planning
+
+## Summary
+Dark mode fixes, MkDocs theme sync, Sprint 1 planning & brainstorming.
+
+### Completed tickets (merged in PR #90 and #91)
+
+#### ASETPLTFRM-60 — Superuser cap + E2E reliability (PR #90)
+- Superuser cap counts only active users.
+- Shared wait helpers in `e2e/utils/wait.helper.ts`.
+- Refactored all 6 page objects + 14 test files.
+
+#### ASETPLTFRM-61 — Dark mode "2 selected" badge fix (PR #90)
+- Added `body.dark-mode .dash-dropdown-value-count` in `custom.css`.
+
+#### ASETPLTFRM-27 — E2E test stabilization (PR #90)
+- Marked Done — all parallel worker flakiness resolved.
+
+#### ASETPLTFRM-62 — MkDocs dark mode sync (PR #91)
+- `mkdocs.yml` — added `custom_dir: docs/overrides`.
+- `docs/overrides/main.html` — reads `?theme=` URL param, sets
+  Material palette localStorage + `data-md-color-scheme`.
+- `frontend/app/page.tsx` — docs iframe appends theme param.
+- Key discovery: Material stores palette as
+  `{index, color: {scheme}}` in localStorage.
+
+### New Sprint 1 stories (brainstormed + created)
+
+| Key | Summary | SP | Epic |
+|-----|---------|---:|------|
+| ASETPLTFRM-63 | Auto-gen API + config docs (mkdocs-gen-files) | 3 | -4 |
+| ASETPLTFRM-64 | CLI docs drift detection (`./run.sh docs-check`) | 2 | -6 |
+| ASETPLTFRM-65 | Deterministic report template + LLM verdict-only | 3 | -2 |
+| ASETPLTFRM-66 | Split LLM cascade: tool/synthesis/test profiles | 3 | -2 |
+
+### Key design decisions
+- **Report builder**: Tools return structured dicts → Python template
+  renders sections 1-5 → separate small LLM call for verdict only
+  (~150-250 tokens vs ~800-1200 today). 80% token reduction.
+- **Cascade split**: Tool-calling uses llama/kimi/scout, synthesis
+  uses gpt-oss-120b exclusively, tests use free-tier-only cascade
+  (no gpt-oss, no Anthropic). Detected via `AI_AGENT_UI_ENV=test`.
+
+### Sprint 1 status
+- 51 Done, 4 To Do (63, 64, 65, 66). Sprint ends 2026-03-18.
 
 ---
 
