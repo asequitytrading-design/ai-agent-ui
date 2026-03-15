@@ -27,6 +27,13 @@ theme:
     - search.highlight
     - content.code.copy
 
+plugins:
+  - search
+  - gen-files:
+      scripts:
+        - scripts/gen_api_docs.py
+        - scripts/gen_config_docs.py
+
 markdown_extensions:
   - pymdownx.highlight:
       anchor_linenums: true
@@ -48,11 +55,13 @@ nav:
   - Backend:
       - Overview: backend/overview.md
       - API Reference: backend/api.md
+      - API Reference (Auto): backend/api-reference.md
       - Auth & Users: backend/auth.md
       - OAuth / SSO: backend/oauth.md
       - Agents: backend/agents.md
       - Tools: backend/tools.md
       - Configuration: backend/config.md
+      - Config Reference (Auto): backend/config-reference.md
       - Logging: backend/logging.md
   - Stock Agent:
       - Overview: stock_agent.md
