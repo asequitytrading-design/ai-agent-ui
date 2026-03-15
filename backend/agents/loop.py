@@ -123,8 +123,16 @@ def run(agent: "BaseAgent", user_input: str, history: List[Dict]) -> str:
         agent.config.agent_id,
         iteration,
     )
-    return (
+    final_text = (
         (response.content or "No response")
         if response is not None
         else "No response"
     )
+
+    # Post-process with report template if available.
+    if hasattr(agent, "format_response"):
+        final_text = agent.format_response(
+            final_text, messages
+        )
+
+    return final_text

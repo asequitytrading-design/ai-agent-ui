@@ -143,6 +143,13 @@ def stream(
         if response is not None
         else "No response"
     )
+
+    # Post-process with report template if available.
+    if hasattr(agent, "format_response"):
+        final_response = agent.format_response(
+            final_response, messages
+        )
+
     agent.logger.info(
         "Stream end | agent=%s | iterations=%d",
         agent.config.agent_id,
