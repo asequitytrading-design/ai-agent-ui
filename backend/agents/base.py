@@ -168,12 +168,19 @@ class BaseAgent(ABC):
         messages.append(HumanMessage(content=user_input))
         return messages
 
-    def run(self, user_input: str, history: List[Dict] = []) -> str:
+    def run(
+        self,
+        user_input: str,
+        history: List[Dict] = [],
+        max_iterations: int | None = None,
+    ) -> str:
         """Execute the agentic loop and return the final text response.
 
         Args:
             user_input: The user's latest message.
             history: Prior conversation turns as raw dicts.
+            max_iterations: Override the default iteration
+                cap (default :data:`MAX_ITERATIONS` = 15).
 
         Returns:
             The final natural-language response.
@@ -181,7 +188,9 @@ class BaseAgent(ABC):
         Raises:
             Exception: Any LLM or tool exception is re-raised.
         """
-        return _loop.run(self, user_input, history)
+        return _loop.run(
+            self, user_input, history, max_iterations
+        )
 
     def stream(
         self, user_input: str, history: List[Dict] = []
