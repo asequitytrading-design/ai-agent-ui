@@ -147,3 +147,30 @@ export interface ChatSessionSummary {
 export interface ChatSessionDetail extends ChatSessionSummary {
   messages: ChatMessage[];
 }
+
+// ---------------------------------------------------------------
+// Compare
+// ---------------------------------------------------------------
+
+export interface CompareSeriesItem {
+  ticker: string;
+  dates: string[];
+  normalized: number[];
+}
+
+export interface CompareMetric {
+  ticker: string;
+  annualized_return_pct: number | null;
+  annualized_volatility_pct: number | null;
+  sharpe_ratio: number | null;
+  max_drawdown_pct: number | null;
+  current_price: number | null;
+  currency: string;
+}
+
+export interface CompareResponse {
+  tickers: string[];
+  series: CompareSeriesItem[];
+  correlation: number[][];
+  metrics: CompareMetric[];
+}

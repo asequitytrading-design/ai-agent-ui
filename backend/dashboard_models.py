@@ -143,3 +143,36 @@ class RegistryResponse(BaseModel):
     tickers: list[RegistryTicker] = Field(
         default_factory=list,
     )
+
+
+# ---------------------------------------------------------------
+# Compare
+# ---------------------------------------------------------------
+
+class CompareSeriesItem(BaseModel):
+    ticker: str
+    dates: list[str]
+    normalized: list[float]
+
+
+class CompareMetric(BaseModel):
+    ticker: str
+    annualized_return_pct: float | None = None
+    annualized_volatility_pct: float | None = None
+    sharpe_ratio: float | None = None
+    max_drawdown_pct: float | None = None
+    current_price: float | None = None
+    currency: str = "USD"
+
+
+class CompareResponse(BaseModel):
+    tickers: list[str]
+    series: list[CompareSeriesItem] = Field(
+        default_factory=list,
+    )
+    correlation: list[list[float]] = Field(
+        default_factory=list,
+    )
+    metrics: list[CompareMetric] = Field(
+        default_factory=list,
+    )

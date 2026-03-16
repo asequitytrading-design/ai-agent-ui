@@ -8,13 +8,16 @@ usage summary.  Queries the Iceberg data layer via
 
 import logging
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 import auth.endpoints.helpers as _helpers
 from auth.dependencies import get_current_user
 from auth.models import UserContext
 from dashboard_models import (
     AnalysisResponse,
+    CompareMetric,
+    CompareResponse,
+    CompareSeriesItem,
     ForecastsResponse,
     ForecastTarget,
     LLMUsageResponse,
@@ -396,6 +399,141 @@ def create_dashboard_router() -> APIRouter:
 
         items.sort(key=lambda t: t.ticker)
         return RegistryResponse(tickers=items)
+
+    @router.get(
+        "/compare",
+        response_model=CompareResponse,
+    )
+    async def get_compare(
+        tickers: str = Query(
+            ...,
+            description="Comma-separated ticker symbols",
+        ),
+        _user: UserContext = Depends(get_current_user),
+    ):
+        """Normalized price comparison + correlation."""
+        import numpy as np
+        import pandas as pd
+
+        stock_repo = _get_stock_repo()
+        symbols = [
+            t.strip().upper()
+            for t in tickers.split(",")
+            if t.strip()
+        ]
+        if len(symbols) < 2:
+            return CompareResponse(tickers=symbols)
+
+        series: list[CompareSeriesItem] = []
+        metrics: list[CompareMetric] = []
+        returns_map: dict[str, pd.Series] = {}
+
+        for sym in symbols:
+            ohlcv = stock_repo.get_ohlcv(sym)
+            if ohlcv.empty or len(ohlcv) < 2:
+                continue
+
+            close = ohlcv["close"].astype(float)
+            first = close.iloc[0]
+            if not first or first == 0:
+                continue
+
+            norm = (close / first * 100).tolist()
+            dates = [
+                str(d) for d in ohlcv["date"].tolist()
+            ]
+
+            series.append(
+                CompareSeriesItem(
+                    ticker=sym,
+                    dates=dates,
+                    normalized=[
+                        round(v, 4) for v in norm
+                    ],
+                )
+            )
+
+            daily_ret = close.pct_change().dropna()
+            returns_map[sym] = daily_ret
+
+            # Metrics from analysis_summary
+            summary = (
+                stock_repo
+                .get_latest_analysis_summary(sym)
+            )
+            cur_price = round(float(close.iloc[-1]), 2)
+            ccy = "USD"
+            info = (
+                stock_repo
+                .get_dashboard_company_info(sym)
+            )
+            if info:
+                ccy = str(
+                    info.get("currency", "USD")
+                    or "USD"
+                )
+
+            if summary:
+                metrics.append(
+                    CompareMetric(
+                        ticker=sym,
+                        annualized_return_pct=_safe(
+                            summary.get(
+                                "annualized_return_pct"
+                            )
+                        ),
+                        annualized_volatility_pct=_safe(
+                            summary.get(
+                                "annualized_volatility_pct"
+                            )
+                        ),
+                        sharpe_ratio=_safe(
+                            summary.get("sharpe_ratio")
+                        ),
+                        max_drawdown_pct=_safe(
+                            summary.get(
+                                "max_drawdown_pct"
+                            )
+                        ),
+                        current_price=cur_price,
+                        currency=ccy,
+                    )
+                )
+            else:
+                metrics.append(
+                    CompareMetric(
+                        ticker=sym,
+                        current_price=cur_price,
+                        currency=ccy,
+                    )
+                )
+
+        # Build correlation matrix
+        corr_matrix: list[list[float]] = []
+        valid = [
+            s for s in symbols if s in returns_map
+        ]
+        if len(valid) >= 2:
+            ret_df = pd.DataFrame(
+                {s: returns_map[s] for s in valid},
+            )
+            corr = ret_df.corr().values
+            corr_matrix = [
+                [
+                    round(float(v), 4)
+                    if not np.isnan(v)
+                    else 0.0
+                    for v in row
+                ]
+                for row in corr
+            ]
+
+        return CompareResponse(
+            tickers=valid,
+            series=series,
+            correlation=corr_matrix,
+            metrics=metrics,
+        )
 
     return router
 
