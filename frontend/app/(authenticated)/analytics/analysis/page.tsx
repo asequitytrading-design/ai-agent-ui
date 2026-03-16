@@ -500,17 +500,28 @@ function AnalysisTab({ ticker }: { ticker: string }) {
         </h3>
         <PlotlyChart
           data={priceTraces}
-          height={480}
+          height={640}
           config={{ scrollZoom: true }}
           layout={{
             hovermode: "x unified",
+            margin: { t: 50, r: 60, b: 40, l: 10 },
+            legend: {
+              orientation: "h",
+              x: 0.5,
+              xanchor: "center",
+              y: 1.08,
+              font: { size: 11 },
+            },
             yaxis: {
               side: "right",
-              domain: [0.25, 1],
+              domain: [0.18, 1],
+              tickformat: ",.0f",
+              dtick: undefined,
+              nticks: 12,
             },
             yaxis2: {
               side: "right",
-              domain: [0, 0.2],
+              domain: [0, 0.14],
               showgrid: false,
             },
             xaxis: {
@@ -557,7 +568,7 @@ function AnalysisTab({ ticker }: { ticker: string }) {
                 ],
                 font: { size: 11 },
                 x: 0,
-                y: 1.15,
+                y: 1.08,
               },
             },
           }}
