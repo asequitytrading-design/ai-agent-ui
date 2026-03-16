@@ -154,17 +154,6 @@ export function CompareContent() {
   // ----------------------------------------------------------
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div>
-        <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">
-          Compare Stocks
-        </h1>
-        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-          Select 2-7 tickers to compare normalized performance,
-          correlations, and key metrics.
-        </p>
-      </div>
-
       {/* Ticker selector */}
       <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900">
         <div className="flex items-center justify-between mb-3">
