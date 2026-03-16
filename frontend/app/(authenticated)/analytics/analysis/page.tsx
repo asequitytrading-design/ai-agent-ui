@@ -148,20 +148,21 @@ function AnalysisTab({ ticker }: { ticker: string }) {
     };
   }, [ticker]);
 
-  // --- Price chart traces ---
+  // --- Price chart traces (candlestick + SMAs) ---
   const priceTraces = useMemo(() => {
     if (!ohlcv || !indicators) return [];
     const dates = ohlcv.data.map((d) => d.date);
     return [
       {
         x: dates,
-        y: ohlcv.data.map((d) => d.close),
-        type: "scatter",
-        mode: "lines",
-        name: "Close",
-        line: { color: CHART_COLORS[0], width: 2 },
-        hovertemplate:
-          "%{x}<br>%{y:.2f}<extra></extra>",
+        open: ohlcv.data.map((d) => d.open),
+        high: ohlcv.data.map((d) => d.high),
+        low: ohlcv.data.map((d) => d.low),
+        close: ohlcv.data.map((d) => d.close),
+        type: "candlestick",
+        name: "OHLC",
+        increasing: { line: { color: "#10b981" } },
+        decreasing: { line: { color: "#ef4444" } },
       },
       {
         x: dates,
@@ -171,7 +172,7 @@ function AnalysisTab({ ticker }: { ticker: string }) {
         name: "SMA 50",
         line: {
           color: CHART_COLORS[3],
-          width: 1,
+          width: 1.5,
           dash: "dot",
         },
       },
@@ -183,7 +184,7 @@ function AnalysisTab({ ticker }: { ticker: string }) {
         name: "SMA 200",
         line: {
           color: CHART_COLORS[4],
-          width: 1,
+          width: 1.5,
           dash: "dash",
         },
       },
@@ -424,7 +425,13 @@ function AnalysisTab({ ticker }: { ticker: string }) {
         >
           Price &amp; Moving Averages
         </h3>
-        <PlotlyChart data={priceTraces} height={340} />
+        <PlotlyChart
+          data={priceTraces}
+          height={400}
+          layout={{
+            xaxis: { rangeslider: { visible: false } },
+          }}
+        />
       </div>
 
       {/* RSI chart */}
@@ -900,8 +907,8 @@ function AnalysisPageInner() {
           sm:items-center sm:justify-between gap-4
         "
       >
-        {/* Ticker dropdown */}
-        <div className="flex items-center gap-2">
+        {/* Ticker dropdown (hidden on Compare tab) */}
+        <div className={`flex items-center gap-2 ${activeTab === "compare" ? "invisible" : ""}`}>
           <label
             htmlFor="ticker-select"
             className="
