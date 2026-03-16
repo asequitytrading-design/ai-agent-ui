@@ -46,7 +46,7 @@ const DARK_THEME = {
   bg: "transparent",
   paper: "transparent",
   text: "#9ca3af",
-  grid: "#374151",
+  grid: "rgba(156,163,175,0.15)",
   line: "#818cf8",
 };
 

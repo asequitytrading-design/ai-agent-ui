@@ -11,6 +11,7 @@ import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { CompareContent } from "../compare/page";
 import { apiFetch } from "@/lib/apiFetch";
+import { useTheme } from "@/hooks/useTheme";
 import { API_URL } from "@/lib/config";
 import {
   PlotlyChart,
@@ -156,6 +157,8 @@ function AnalysisTab({ ticker }: { ticker: string }) {
   }, [ticker]);
 
   const sym = tickerCurrency(ticker);
+  const { resolvedTheme } = useTheme();
+  const isDark = resolvedTheme === "dark";
 
   // Shared 6M default range for all charts
   const defaultRange = useMemo(() => [
@@ -221,7 +224,12 @@ function AnalysisTab({ ticker }: { ticker: string }) {
         type: "scatter",
         mode: "lines",
         name: "BB Upper",
-        line: { color: "rgba(99,102,241,0.25)", width: 1 },
+        line: {
+          color: isDark
+            ? "rgba(165,180,252,0.45)"
+            : "rgba(99,102,241,0.25)",
+          width: 1,
+        },
         showlegend: false,
       },
       // Bollinger lower band (with fill to upper)
@@ -232,8 +240,15 @@ function AnalysisTab({ ticker }: { ticker: string }) {
         mode: "lines",
         name: "Bollinger",
         fill: "tonexty",
-        fillcolor: "rgba(99,102,241,0.06)",
-        line: { color: "rgba(99,102,241,0.25)", width: 1 },
+        fillcolor: isDark
+          ? "rgba(165,180,252,0.12)"
+          : "rgba(99,102,241,0.06)",
+        line: {
+          color: isDark
+            ? "rgba(165,180,252,0.45)"
+            : "rgba(99,102,241,0.25)",
+          width: 1,
+        },
       },
       // SMA 50
       {
@@ -262,7 +277,7 @@ function AnalysisTab({ ticker }: { ticker: string }) {
         },
       },
     ] as Plotly.Data[];
-  }, [ohlcv, indicators]);
+  }, [ohlcv, indicators, isDark, sym]);
 
   // --- RSI chart traces ---
   const rsiTraces = useMemo(() => {
