@@ -9,7 +9,11 @@
 // Types
 // ---------------------------------------------------------------------------
 
-export type View = "chat" | "docs" | "dashboard" | "insights" | "admin";
+export type View =
+  | "dashboard"
+  | "analytics"
+  | "docs"
+  | "admin";
 
 export interface Message {
   role: "user" | "assistant";
@@ -34,24 +38,39 @@ import { type ReactNode } from "react";
 
 export interface NavItem {
   view: View;
+  href: string;
   label: string;
   superuserOnly?: boolean;
-  requiresInsights?: boolean;
   icon: ReactNode;
 }
 
 export const NAV_ITEMS: NavItem[] = [
   {
-    view: "chat",
-    label: "Chat",
+    view: "dashboard",
+    href: "/dashboard",
+    label: "Portfolio",
     icon: (
       <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+        <rect x="3" y="3" width="18" height="18" rx="2" />
+        <path d="M3 9h18M9 21V9" />
+      </svg>
+    ),
+  },
+  {
+    view: "analytics",
+    href: "/analytics",
+    label: "Dashboard",
+    icon: (
+      <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <line x1="18" y1="20" x2="18" y2="10" />
+        <line x1="12" y1="20" x2="12" y2="4" />
+        <line x1="6" y1="20" x2="6" y2="14" />
       </svg>
     ),
   },
   {
     view: "docs",
+    href: "/docs",
     label: "Docs",
     icon: (
       <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -61,12 +80,13 @@ export const NAV_ITEMS: NavItem[] = [
     ),
   },
   {
-    view: "dashboard",
-    label: "Dashboard",
+    view: "admin",
+    href: "/admin",
+    label: "Admin",
+    superuserOnly: true,
     icon: (
       <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <rect x="3" y="3" width="18" height="18" rx="2" />
-        <path d="M3 9h18M9 21V9" />
+        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
       </svg>
     ),
   },

@@ -72,6 +72,7 @@ _ANALYSIS_SUMMARY = f"{_NAMESPACE}.analysis_summary"
 _FORECAST_RUNS = f"{_NAMESPACE}.forecast_runs"
 _FORECASTS = f"{_NAMESPACE}.forecasts"
 _QUARTERLY_RESULTS = f"{_NAMESPACE}.quarterly_results"
+_CHAT_AUDIT_LOG = f"{_NAMESPACE}.chat_audit_log"
 
 
 def _now_utc() -> datetime:
@@ -2459,3 +2460,530 @@ class StockRepository:
             end=end,
         )
         return df.reset_index(drop=True) if not df.empty else df
+
+    # ------------------------------------------------------------------
+    # Dashboard helpers
+    # ------------------------------------------------------------------
+
+    def get_dashboard_ohlcv(
+        self,
+        ticker: str,
+        limit: int = 30,
+    ) -> pd.DataFrame:
+        """Get last N OHLCV rows for sparkline charts.
+
+        Args:
+            ticker: Stock ticker symbol.
+            limit: Maximum rows to return (most recent).
+
+        Returns:
+            DataFrame sorted by date ascending with at
+            most *limit* rows.
+        """
+        try:
+            df = self._scan_ticker(_OHLCV, ticker)
+            if df.empty:
+                return df
+            df = df.sort_values("date", ascending=False)
+            df = df.head(limit)
+            return (
+                df.sort_values("date", ascending=True)
+                .reset_index(drop=True)
+            )
+        except Exception as exc:
+            _logger.warning(
+                "get_dashboard_ohlcv failed for %s: %s",
+                ticker,
+                exc,
+            )
+            return pd.DataFrame()
+
+    def get_dashboard_company_info(
+        self,
+        ticker: str,
+    ) -> dict | None:
+        """Get the most recent company_info snapshot.
+
+        Args:
+            ticker: Stock ticker symbol.
+
+        Returns:
+            Dict of company info fields, or ``None``
+            if no data exists.
+        """
+        try:
+            df = self._scan_ticker(_COMPANY_INFO, ticker)
+            if df.empty:
+                return None
+            df = df.sort_values(
+                "fetched_at", ascending=False,
+            )
+            return df.iloc[0].to_dict()
+        except Exception as exc:
+            _logger.warning(
+                "get_dashboard_company_info failed"
+                " for %s: %s",
+                ticker,
+                exc,
+            )
+            return None
+
+    def get_dashboard_forecast_runs(
+        self,
+        tickers: list[str],
+    ) -> pd.DataFrame:
+        """Get latest forecast_runs per ticker.
+
+        Reads the full forecast_runs table, filters to
+        the requested tickers, and keeps only the row
+        with the maximum ``run_date`` for each ticker.
+
+        Args:
+            tickers: List of ticker symbols to include.
+
+        Returns:
+            DataFrame with one row per ticker (latest
+            run), or empty DataFrame.
+        """
+        try:
+            df = self._table_to_df(_FORECAST_RUNS)
+            if df.empty:
+                return df
+            df = df[df["ticker"].isin(tickers)]
+            if df.empty:
+                return df
+            idx = df.groupby("ticker")[
+                "run_date"
+            ].idxmax()
+            return (
+                df.loc[idx].reset_index(drop=True)
+            )
+        except Exception as exc:
+            _logger.warning(
+                "get_dashboard_forecast_runs"
+                " failed: %s",
+                exc,
+            )
+            return pd.DataFrame()
+
+    def get_dashboard_analysis(
+        self,
+        tickers: list[str],
+    ) -> pd.DataFrame:
+        """Get latest analysis_summary per ticker.
+
+        Reads the full analysis_summary table, filters
+        to the requested tickers, and keeps the row with
+        the maximum ``analysis_date`` per ticker.
+
+        Args:
+            tickers: List of ticker symbols to include.
+
+        Returns:
+            DataFrame with one row per ticker (latest
+            analysis), or empty DataFrame.
+        """
+        try:
+            df = self._table_to_df(_ANALYSIS_SUMMARY)
+            if df.empty:
+                return df
+            df = df[df["ticker"].isin(tickers)]
+            if df.empty:
+                return df
+            idx = df.groupby("ticker")[
+                "analysis_date"
+            ].idxmax()
+            return (
+                df.loc[idx].reset_index(drop=True)
+            )
+        except Exception as exc:
+            _logger.warning(
+                "get_dashboard_analysis failed: %s",
+                exc,
+            )
+            return pd.DataFrame()
+
+    def get_dashboard_llm_usage(
+        self,
+        user_id: str | None = None,
+        days: int = 30,
+    ) -> dict:
+        """Aggregate LLM usage statistics for dashboard.
+
+        Reads the ``llm_usage`` table and computes
+        summary metrics including totals, per-model
+        breakdown, and daily trend.
+
+        Args:
+            user_id: Optional user filter.  ``None``
+                returns usage across all users.
+            days: Number of trailing days for the daily
+                trend series.
+
+        Returns:
+            Dict with keys ``total_requests``,
+            ``total_cost``, ``avg_latency_ms``,
+            ``per_model``, and ``daily_trend``.
+        """
+        empty: dict = {
+            "total_requests": 0,
+            "total_cost": 0.0,
+            "avg_latency_ms": 0.0,
+            "per_model": {},
+            "daily_trend": [],
+        }
+        try:
+            df = self._table_to_df(self._LLM_USAGE)
+            if df.empty:
+                return empty
+            if user_id is not None:
+                df = df[df["user_id"] == user_id]
+            if df.empty:
+                return empty
+
+            total_requests = len(df)
+            total_cost = float(
+                df["estimated_cost_usd"]
+                .sum(skipna=True)
+            )
+            avg_latency = float(
+                df["latency_ms"].mean(skipna=True)
+            )
+            if math.isnan(avg_latency):
+                avg_latency = 0.0
+
+            # Per-model breakdown
+            per_model: dict = {}
+            if "model" in df.columns:
+                for model, grp in df.groupby("model"):
+                    per_model[str(model)] = {
+                        "requests": len(grp),
+                        "cost": float(
+                            grp["estimated_cost_usd"]
+                            .sum(skipna=True)
+                        ),
+                    }
+
+            # Daily trend (last N days)
+            cutoff = (
+                datetime.now(tz=timezone.utc)
+                - timedelta(days=days)
+            ).date()
+            daily_trend: list[dict] = []
+            if "request_date" in df.columns:
+                recent = df[
+                    df["request_date"] >= cutoff
+                ]
+                if not recent.empty:
+                    agg = (
+                        recent.groupby("request_date")
+                        .agg(
+                            requests=(
+                                "usage_id", "count"
+                            ),
+                            cost=(
+                                "estimated_cost_usd",
+                                "sum",
+                            ),
+                        )
+                        .reset_index()
+                        .sort_values("request_date")
+                    )
+                    for _, row in agg.iterrows():
+                        daily_trend.append({
+                            "date": str(
+                                row["request_date"]
+                            ),
+                            "requests": int(
+                                row["requests"]
+                            ),
+                            "cost": float(
+                                row["cost"]
+                            ),
+                        })
+
+            return {
+                "total_requests": total_requests,
+                "total_cost": total_cost,
+                "avg_latency_ms": avg_latency,
+                "per_model": per_model,
+                "daily_trend": daily_trend,
+            }
+        except Exception as exc:
+            _logger.warning(
+                "get_dashboard_llm_usage failed: %s",
+                exc,
+            )
+            return empty
+
+    # ------------------------------------------------------------------
+    # Chat audit log
+    # ------------------------------------------------------------------
+
+    def _ensure_chat_audit_table(self) -> None:
+        """Create the chat_audit_log table if absent.
+
+        Schema:
+            session_id (string), user_id (string),
+            started_at (timestamp), ended_at (timestamp),
+            message_count (int32), messages_json (string),
+            agent_ids_used (string), created_at (timestamp).
+
+        Partitioned by identity on ``user_id``.
+        """
+        try:
+            from pyiceberg.partitioning import (
+                PartitionField,
+                PartitionSpec,
+            )
+            from pyiceberg.schema import Schema
+            from pyiceberg.transforms import (
+                IdentityTransform,
+            )
+            from pyiceberg.types import (
+                IntegerType,
+                NestedField,
+                StringType,
+                TimestampType,
+            )
+
+            catalog = self._get_catalog()
+            try:
+                catalog.load_table(_CHAT_AUDIT_LOG)
+                return  # already exists
+            except Exception:
+                pass  # table not found — create it
+
+            schema = Schema(
+                NestedField(
+                    1, "session_id", StringType(),
+                    required=True,
+                ),
+                NestedField(
+                    2, "user_id", StringType(),
+                    required=True,
+                ),
+                NestedField(
+                    3, "started_at",
+                    TimestampType(),
+                ),
+                NestedField(
+                    4, "ended_at",
+                    TimestampType(),
+                ),
+                NestedField(
+                    5, "message_count",
+                    IntegerType(),
+                ),
+                NestedField(
+                    6, "messages_json",
+                    StringType(),
+                ),
+                NestedField(
+                    7, "agent_ids_used",
+                    StringType(),
+                ),
+                NestedField(
+                    8, "created_at",
+                    TimestampType(),
+                ),
+            )
+            partition_spec = PartitionSpec(
+                PartitionField(
+                    source_id=2,
+                    field_id=1000,
+                    transform=IdentityTransform(),
+                    name="user_id",
+                ),
+            )
+            catalog.create_table(
+                _CHAT_AUDIT_LOG,
+                schema=schema,
+                partition_spec=partition_spec,
+            )
+            _logger.info(
+                "Created table %s", _CHAT_AUDIT_LOG,
+            )
+        except Exception as exc:
+            _logger.error(
+                "Failed to create %s: %s",
+                _CHAT_AUDIT_LOG,
+                exc,
+            )
+            raise
+
+    def save_chat_session(
+        self,
+        session: dict,
+    ) -> None:
+        """Append a chat transcript to the audit log.
+
+        Ensures the table exists, then builds a
+        single-row PyArrow table from *session* and
+        appends it.
+
+        Args:
+            session: Dict with keys ``session_id``,
+                ``user_id``, ``started_at``,
+                ``ended_at``, ``message_count``,
+                ``messages_json``, ``agent_ids_used``.
+        """
+        try:
+            self._ensure_chat_audit_table()
+            now = _now_utc()
+            arrays = {
+                "session_id": pa.array(
+                    [session["session_id"]],
+                    type=pa.string(),
+                ),
+                "user_id": pa.array(
+                    [session["user_id"]],
+                    type=pa.string(),
+                ),
+                "started_at": pa.array(
+                    [session.get("started_at", now)],
+                    type=pa.timestamp("us"),
+                ),
+                "ended_at": pa.array(
+                    [session.get("ended_at", now)],
+                    type=pa.timestamp("us"),
+                ),
+                "message_count": pa.array(
+                    [session.get(
+                        "message_count", 0
+                    )],
+                    type=pa.int32(),
+                ),
+                "messages_json": pa.array(
+                    [session.get(
+                        "messages_json", "[]"
+                    )],
+                    type=pa.string(),
+                ),
+                "agent_ids_used": pa.array(
+                    [session.get(
+                        "agent_ids_used", "[]"
+                    )],
+                    type=pa.string(),
+                ),
+                "created_at": pa.array(
+                    [now],
+                    type=pa.timestamp("us"),
+                ),
+            }
+            self._append_rows(
+                _CHAT_AUDIT_LOG, pa.table(arrays),
+            )
+        except Exception as exc:
+            _logger.error(
+                "save_chat_session failed: %s", exc,
+            )
+            raise
+
+    def list_chat_sessions(
+        self,
+        user_id: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        keyword: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[dict]:
+        """Query chat sessions for a user.
+
+        Args:
+            user_id: Filter to this user's sessions.
+            start_date: Optional ISO date lower bound
+                on ``started_at``.
+            end_date: Optional ISO date upper bound
+                on ``started_at``.
+            keyword: Optional keyword to match within
+                ``messages_json`` (case-insensitive).
+            limit: Max results to return.
+            offset: Number of results to skip.
+
+        Returns:
+            List of dicts with ``session_id``,
+            ``started_at``, ``ended_at``,
+            ``message_count``, ``preview``,
+            ``agent_ids_used``.
+        """
+        try:
+            self._ensure_chat_audit_table()
+            from pyiceberg.expressions import EqualTo
+
+            tbl = self._load_table(_CHAT_AUDIT_LOG)
+            if _CHAT_AUDIT_LOG in self._dirty_tables:
+                tbl.refresh()
+                self._dirty_tables.discard(
+                    _CHAT_AUDIT_LOG,
+                )
+            df = tbl.scan(
+                row_filter=EqualTo(
+                    "user_id", user_id,
+                ),
+            ).to_pandas()
+        except Exception as exc:
+            _logger.warning(
+                "list_chat_sessions scan failed: %s",
+                exc,
+            )
+            df = self._table_to_df(_CHAT_AUDIT_LOG)
+            if not df.empty:
+                df = df[
+                    df["user_id"] == user_id
+                ].copy()
+
+        if df.empty:
+            return []
+
+        # Date filters
+        if start_date is not None:
+            ts = pd.Timestamp(start_date, tz="UTC")
+            df = df[df["started_at"] >= ts]
+        if end_date is not None:
+            ts = pd.Timestamp(end_date, tz="UTC")
+            df = df[df["started_at"] <= ts]
+
+        # Keyword filter
+        if keyword is not None:
+            kw = keyword.lower()
+            df = df[
+                df["messages_json"]
+                .str.lower()
+                .str.contains(kw, na=False)
+            ]
+
+        # Sort by most recent first
+        df = df.sort_values(
+            "started_at", ascending=False,
+        )
+
+        # Paginate
+        df = df.iloc[offset: offset + limit]
+
+        results: list[dict] = []
+        for _, row in df.iterrows():
+            msgs = str(
+                row.get("messages_json", "")
+            )
+            preview = msgs[:200] if msgs else ""
+            results.append({
+                "session_id": str(
+                    row["session_id"]
+                ),
+                "started_at": str(
+                    row.get("started_at", "")
+                ),
+                "ended_at": str(
+                    row.get("ended_at", "")
+                ),
+                "message_count": int(
+                    row.get("message_count", 0)
+                ),
+                "preview": preview,
+                "agent_ids_used": str(
+                    row.get("agent_ids_used", "[]")
+                ),
+            })
+        return results

@@ -102,7 +102,7 @@ function OAuthCallbackInner() {
         clearOAuthSession();
 
         // Redirect to the main app.
-        router.replace("/");
+        router.replace("/dashboard");
       } catch {
         if (!cancelled) {
           setErrorMsg("Could not reach the server. Is the backend running?");

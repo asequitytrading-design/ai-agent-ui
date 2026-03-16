@@ -408,6 +408,19 @@ def create_app(
     )
     app.include_router(admin_router)
 
+    # Dashboard + audit endpoints.
+    from dashboard_routes import create_dashboard_router
+    from audit_routes import create_audit_router
+
+    app.include_router(
+        create_dashboard_router(),
+        prefix="/v1",
+    )
+    app.include_router(
+        create_audit_router(),
+        prefix="/v1",
+    )
+
     # Bulk data import/export endpoints.
     from bulk_data import create_bulk_router
 
