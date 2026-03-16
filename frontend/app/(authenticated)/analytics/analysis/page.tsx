@@ -557,7 +557,7 @@ function AnalysisTab({ ticker }: { ticker: string }) {
                 xref: "paper",
                 y0: 70, y1: 70,
                 yref: "y3",
-                line: { color: "#ef4444", width: 1, dash: "dot" },
+                line: { color: "rgba(251,191,36,0.6)", width: 1, dash: "dash" },
               },
               {
                 type: "line",
@@ -565,7 +565,7 @@ function AnalysisTab({ ticker }: { ticker: string }) {
                 xref: "paper",
                 y0: 30, y1: 30,
                 yref: "y3",
-                line: { color: "#10b981", width: 1, dash: "dot" },
+                line: { color: "rgba(251,191,36,0.6)", width: 1, dash: "dash" },
               },
             ],
             // Annotations for subplot labels
