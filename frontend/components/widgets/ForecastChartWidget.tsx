@@ -355,24 +355,54 @@ function ForecastSVGChart({
             />
             {/* Tooltip (hidden, shown on hover) */}
             <g
-              className="opacity-0 group-hover:opacity-100 transition-opacity duration-150"
+              className="opacity-0 group-hover:opacity-100 transition-opacity duration-200"
               style={{ pointerEvents: "none" }}
             >
+              {/* Shadow */}
               <rect
-                x={xScale(d.m) - 52}
-                y={yScale(d.p) - 44}
-                width={104}
-                height={34}
-                rx={6}
-                fill="#18181b"
-                fillOpacity={0.92}
+                x={xScale(d.m) - 58}
+                y={yScale(d.p) - 50}
+                width={116}
+                height={40}
+                rx={8}
+                className="fill-black/10 dark:fill-black/30"
+                transform="translate(1,1)"
+              />
+              {/* Background */}
+              <rect
+                x={xScale(d.m) - 58}
+                y={yScale(d.p) - 50}
+                width={116}
+                height={40}
+                rx={8}
+                className="fill-white dark:fill-gray-800"
+              />
+              {/* Border */}
+              <rect
+                x={xScale(d.m) - 58}
+                y={yScale(d.p) - 50}
+                width={116}
+                height={40}
+                rx={8}
+                fill="none"
+                className="stroke-gray-200 dark:stroke-gray-600"
+                strokeWidth={1}
+              />
+              {/* Color accent */}
+              <rect
+                x={xScale(d.m) - 58}
+                y={yScale(d.p) - 50}
+                width={3}
+                height={40}
+                rx={1.5}
+                fill="#7c3aed"
               />
               {/* Date */}
               <text
                 x={xScale(d.m)}
-                y={yScale(d.p) - 30}
+                y={yScale(d.p) - 35}
                 textAnchor="middle"
-                fill="#a1a1aa"
+                className="fill-gray-500 dark:fill-gray-400"
                 style={{
                   fontSize: "9px",
                   fontFamily:
@@ -384,11 +414,11 @@ function ForecastSVGChart({
               {/* Price */}
               <text
                 x={xScale(d.m)}
-                y={yScale(d.p) - 17}
+                y={yScale(d.p) - 20}
                 textAnchor="middle"
-                fill="white"
+                className="fill-gray-900 dark:fill-white"
                 style={{
-                  fontSize: "11px",
+                  fontSize: "12px",
                   fontWeight: 700,
                   fontFamily:
                     "'IBM Plex Mono', monospace",
