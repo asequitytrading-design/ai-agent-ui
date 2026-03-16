@@ -4,6 +4,41 @@ Session-by-session record of what was built, changed, and fixed.
 
 ---
 
+## Mar 16, 2026 — Dashboard UI Overhaul + Dash-to-Next.js Migration
+
+### Added
+- Native portfolio dashboard with 7 widgets (hero, watchlist, analysis signals, LLM usage, forecast chart)
+- Collapsible sidebar navigation with Dashboard sub-pages
+- Chat side panel (FAB-triggered, resizable, past sessions)
+- react-plotly.js chart integration with dark/light theming
+- Native Link Ticker page (replaces Dash Marketplace)
+- Native Dashboard Home (stock cards, search/analyse)
+- Native Compare page (normalized price chart, correlation heatmap)
+- Native Analysis page (tabbed: candlestick+RSI+MACD, forecast, compare)
+- 6 dashboard API endpoints + 3 chart data endpoints
+- Chat audit log (Iceberg table + flush on logout)
+- India/US country filter with ₹/$ currency support
+- Breadcrumb titles in header (Dashboard → Home, etc.)
+
+### Changed
+- Post-login landing: chat → portfolio dashboard
+- Sidebar: floating grid button → persistent collapsible sidebar
+- Dashboard renamed to "Portfolio", Analytics renamed to "Dashboard"
+- Removed Insights from top-level nav (now under Dashboard group)
+- Removed Dash header (Next.js handles all navigation)
+
+### Fixed
+- SSR hydration mismatch from crypto.randomUUID()
+- Content clipped behind fixed sidebar (missing margin-left)
+- All stocks showing $ regardless of market
+- Analysis signals showing N/A (fetches from technical_indicators)
+- Iframe pages not filling viewport height
+
+Tickets: ASETPLTFRM-82 to 114 (33 tickets, 25 Done)
+Files: ~60 new/modified across frontend + backend
+
+---
+
 ## Mar 15, 2026 — WSL2 Compat, LLM Cascade Split, Report Template, Auto-Docs
 
 ### PR #92 — WSL2 Compatibility + DevOps UX

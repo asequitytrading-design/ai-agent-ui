@@ -8,9 +8,9 @@ A fullstack agentic chat application powered by LangChain, FastAPI, and Next.js.
 
 | Service | Stack | Port | Purpose |
 |---------|-------|------|---------|
-| **Frontend** | Next.js 16 + React 19 + Tailwind 4 | `3000` | Chat UI + SPA shell (login, chat, docs, dashboard, admin) |
+| **Frontend** | Next.js 16 + React 19 + Tailwind 4 | `3000` | Portfolio dashboard, native charts (react-plotly.js), collapsible sidebar, chat side panel, login |
 | **Backend** | FastAPI + LangChain + N-tier Groq/Anthropic | `8181` | Agentic loop + REST/WebSocket API + Auth endpoints |
-| **Dashboard** | Plotly Dash + Dash Bootstrap (FLATLY) | `8050` | Stock analysis dashboard (Home / Analysis / Forecast / Compare / Marketplace / 7 Insights tabs) + Admin UI |
+| **Dashboard** | Plotly Dash + Dash Bootstrap (FLATLY) | `8050` | Legacy Dash pages (Insights, Admin) — Home, Analysis, Compare, Link Ticker migrated to native Next.js |
 | **Docs** | MkDocs Material | `8000` | Project documentation |
 
 ---
@@ -273,23 +273,25 @@ graph TD
 
 ## Frontend SPA
 
-The entire UI is one mounted React component. The `view` state switches between chat, docs, dashboard, and admin without unmounting — chat history is always preserved.
+The frontend is a full SPA with a **collapsible sidebar** for navigation and a **native portfolio dashboard** as the post-login landing page. Four Dash pages (Home, Analysis, Compare, Link Ticker) have been migrated to native Next.js with **react-plotly.js** charts. A **chat side panel** (FAB-triggered, resizable drawer) provides access to the agentic chat from any page.
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│  ✦ AI Agent  [General | Stock Analysis]  [Sign out]  [🗑]    │ ← header
-│           (breadcrumb label when view ≠ chat)                │
-├──────────────────────────────────────────────────────────────┤
-│                                                              │
-│  view = "chat"            │  view = "docs" / "dashboard"    │
-│  ─────────────────────    │    / "admin"                    │
-│  scrollable messages      │  <iframe src={iframeUrl ??      │
-│  + StatusBadge (stream)   │    baseServiceUrl}?token=jwt>   │
-│  + input textarea         │                                  │
-│                                                              │
-└──────────────────────────────────────────────────────────────┘
-                                              [⊞] ← FAB (bottom-right)
-                                         Chat / Docs / Dashboard / Admin
+┌────┬───────────────────────────────────────────────────────────┐
+│ ◀  │  ✦ AI Agent  Dashboard › Home         [Sign out]  [🗑]   │ ← header + breadcrumb
+│    ├───────────────────────────────────────────────────────────┤
+│ P  │                                                           │
+│ o  │  /portfolio    → Native portfolio dashboard (widgets)     │
+│ r  │  /dashboard/*  → Native pages: Home, Analysis, Compare,  │
+│ t  │                  Link Ticker (react-plotly.js charts)     │
+│ f  │  /dashboard/*  → Iframe: Insights, Admin (Dash :8050)    │
+│ o  │  /docs         → Iframe: MkDocs (:8000)                  │
+│ l  │                                                           │
+│ i  │                              ┌─────────────────┐          │
+│ o  │                              │ Chat Side Panel │ ← FAB   │
+│    │                              │ (resizable)     │          │
+│ ▼  │                              └─────────────────┘          │
+└────┴───────────────────────────────────────────────────────────┘
+  ↑ collapsible sidebar
 ```
 
 ---
@@ -447,6 +449,7 @@ ai-agent-ui/
 | Next.js | 16 | Framework |
 | React | 19 | UI |
 | Tailwind CSS | 4 | Styling |
+| react-plotly.js | 2 | Interactive charts (candlestick, heatmap, line) |
 | react-markdown + remark-gfm | 10 / 4 | Markdown rendering |
 | TypeScript | 5 | Type safety |
 

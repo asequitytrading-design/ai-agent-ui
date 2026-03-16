@@ -2,6 +2,32 @@
 
 ---
 
+# Session: Mar 16, 2026 — Dashboard UI Overhaul + Dash-to-Next.js Migration
+
+## 2026-03-16 — Dashboard UI Overhaul + Dash-to-Next.js Migration
+
+### Sprint 1 Complete (ASETPLTFRM-82 to 106)
+- **Native portfolio dashboard** replacing chat-first landing page with widgets (watchlist, analysis signals, LLM usage donut, forecast chart)
+- **Collapsible sidebar navigation**: Portfolio, Dashboard (collapsible: Home, Analysis, Insights, Link Ticker), Docs, Admin
+- **Chat side panel**: FAB-triggered resizable drawer with past sessions, agent switcher, WebSocket streaming
+- **Global India/US country filter** with correct ₹/$ currency symbols across all widgets
+- **6 backend dashboard endpoints** + Iceberg chat_audit_log table
+- **14 backend + 22 frontend tests**
+- Removed Dash header, consolidated navigation to Next.js sidebar
+- Bug fixes: hydration mismatch, sidebar layout, iframe height, currency display, signal N/A values
+
+### Sprint 2 In Progress (ASETPLTFRM-107 to 114)
+- **react-plotly.js** chart wrapper with auto dark/light theming
+- **4 Dash pages migrated to native Next.js**: Home (stock cards), Link Ticker (paginated table), Compare (charts + heatmap), Analysis (tabbed: candlestick+RSI+MACD, forecast, compare)
+- **Unified chart**: candlestick + volume + RSI + MACD on shared x-axis with range selector (3M/6M/1Y/2Y/3Y/Max)
+- Remaining: Insights migration (8 SP), Admin migration (5 SP), Dash retirement (2 SP)
+
+### Files: ~60 new/modified across frontend + backend
+### Tickets: ASETPLTFRM-82 to 114 (25 Done, 5 In Progress/To Do)
+### PRs: Pending (branch: feature/sprint2-planning)
+
+---
+
 # Session: Mar 15, 2026 — WSL2 compat, LLM cascade, report template, auto-docs
 
 ## Summary

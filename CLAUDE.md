@@ -8,12 +8,14 @@
 ## Project Overview
 
 Fullstack agentic chat app with stock analysis and Prophet forecasting.
+Native portfolio dashboard + react-plotly.js charts; Dash-to-Next.js
+migration in progress (4 of 8 pages migrated).
 
 | Service | Port | Entry point | Stack |
 |---------|------|-------------|-------|
 | Backend | 8181 | `backend/main.py` | Python 3.12, FastAPI, LangChain 1.x |
-| Frontend | 3000 | `frontend/app/page.tsx` | Next.js 16, React 19, TypeScript |
-| Dashboard | 8050 | `dashboard/app.py` | Plotly Dash (FLATLY theme) |
+| Frontend | 3000 | `frontend/app/page.tsx` | Next.js 16, React 19, react-plotly.js |
+| Dashboard | 8050 | `dashboard/app.py` | Plotly Dash (legacy — Insights + Admin only) |
 | Docs | 8000 | `mkdocs serve` | MkDocs Material |
 
 ```bash
