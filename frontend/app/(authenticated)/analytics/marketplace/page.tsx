@@ -160,11 +160,8 @@ export default function MarketplacePage() {
 
   return (
     <div className="space-y-4">
-      {/* Header */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
-          Link Ticker
-        </h1>
+      {/* Stats bar */}
+      <div className="flex items-center justify-end">
         <p className="text-sm text-gray-500 dark:text-gray-400">
           {filtered.length} ticker{filtered.length !== 1 ? "s" : ""}
           {" \u00B7 "}

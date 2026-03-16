@@ -58,16 +58,33 @@ export function AppHeader({
       document.removeEventListener("mousedown", handleClick);
   }, [dropdownOpen]);
 
-  // Derive page title from pathname
+  // Derive breadcrumb title from pathname
   const pageTitle = useMemo(() => {
-    const segment = pathname.split("/").filter(Boolean)[0];
-    const titles: Record<string, string> = {
+    const segments = pathname.split("/").filter(Boolean);
+    const root = segments[0] ?? "";
+    const sub = segments[1] ?? "";
+
+    const rootTitles: Record<string, string> = {
       dashboard: "Portfolio",
       analytics: "Dashboard",
       docs: "Docs",
       admin: "Admin",
     };
-    return titles[segment ?? ""] ?? "Home";
+
+    const subTitles: Record<string, string> = {
+      analysis: "Analysis",
+      insights: "Insights",
+      marketplace: "Link Ticker",
+    };
+
+    const rootTitle = rootTitles[root] ?? "Home";
+    if (sub && subTitles[sub]) {
+      return `${rootTitle} → ${subTitles[sub]}`;
+    }
+    if (root === "analytics" && !sub) {
+      return "Dashboard → Home";
+    }
+    return rootTitle;
   }, [pathname]);
 
   const handleSignOut = async () => {

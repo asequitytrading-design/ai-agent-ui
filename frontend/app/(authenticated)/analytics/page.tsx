@@ -341,11 +341,6 @@ export default function AnalyticsPage() {
   // ----------------------------------------------------------
   return (
     <div className="space-y-5">
-      {/* Page title */}
-      <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
-        Dashboard
-      </h1>
-
       {/* Search + Analyse bar */}
       <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
