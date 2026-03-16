@@ -9,6 +9,7 @@ import {
 } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { CompareContent } from "../compare/page";
 import { apiFetch } from "@/lib/apiFetch";
 import { API_URL } from "@/lib/config";
 import {
@@ -785,48 +786,7 @@ function ForecastTab({ ticker }: { ticker: string }) {
 // ---------------------------------------------------------------
 
 function CompareTab() {
-  return (
-    <div
-      className="
-        rounded-xl border border-gray-200
-        dark:border-gray-700 bg-white
-        dark:bg-gray-900 shadow-sm
-        px-8 py-16 text-center
-      "
-    >
-      <h3
-        className="
-          text-lg font-semibold text-gray-900
-          dark:text-gray-100 mb-2
-        "
-      >
-        Compare Tickers
-      </h3>
-      <p
-        className="
-          text-sm text-gray-500 dark:text-gray-400
-          mb-6 max-w-md mx-auto
-        "
-      >
-        Compare normalised price performance, correlation
-        matrices, and key metrics across multiple tickers.
-      </p>
-      <Link
-        href="/analytics/compare"
-        className="
-          inline-flex items-center gap-2
-          px-5 py-2.5 rounded-lg text-sm
-          font-medium text-white
-          bg-indigo-600 hover:bg-indigo-700
-          dark:bg-indigo-500 dark:hover:bg-indigo-600
-          transition-colors
-        "
-      >
-        Open Compare Tool
-        <span aria-hidden="true">&rarr;</span>
-      </Link>
-    </div>
-  );
+  return <CompareContent />;
 }
 
 // ---------------------------------------------------------------

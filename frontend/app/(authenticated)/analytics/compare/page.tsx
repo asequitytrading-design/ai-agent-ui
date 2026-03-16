@@ -44,7 +44,9 @@ function Skeleton() {
 // Main page
 // ---------------------------------------------------------------
 
-export default function ComparePage() {
+/** Reusable compare component — used both as a
+ *  standalone page and embedded in the Analysis tab. */
+export function CompareContent() {
   // User tickers from watchlist
   const [allTickers, setAllTickers] = useState<string[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -351,4 +353,8 @@ export default function ComparePage() {
       )}
     </div>
   );
+}
+
+export default function ComparePage() {
+  return <CompareContent />;
 }
