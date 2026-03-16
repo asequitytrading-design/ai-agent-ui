@@ -1,4 +1,4 @@
-# System Overview
+# System Architecture Overview
 
 ## Services
 
@@ -6,88 +6,71 @@
 |---------|------|-------------|-------|
 | Backend | 8181 | `backend/main.py` | Python 3.12, FastAPI, LangChain 1.x |
 | Frontend | 3000 | `frontend/app/page.tsx` | Next.js 16, React 19, TypeScript |
-| Dashboard | 8050 | `dashboard/app.py` | Plotly Dash (FLATLY theme) |
+| Dashboard | 8050 | `dashboard/app.py` | Plotly Dash (FLATLY theme) — being migrated to Next.js |
 | Docs | 8000 | `mkdocs serve` | MkDocs Material |
 
-## Core Patterns
+## Frontend Architecture (Post-Overhaul)
 
-- **`ChatServer`** (`backend/main.py`) — owns `ToolRegistry`,
-  `AgentRegistry`, FastAPI app, bounded `ThreadPoolExecutor(10)`.
-  All state in this class, no module-level mutable globals.
-- **API versioning**: All API routes under `/v1/` prefix only
-  (root routes removed Mar 13, 2026 — ASETPLTFRM-20).
-  WebSocket stays at `/ws/chat`; static files at `/avatars/`.
-  Frontend uses `API_URL` (`BACKEND_URL/v1`) for all API calls;
-  `BACKEND_URL` only for static assets and WS derivation.
-- **Token store**: `auth/token_store.py` — `TokenStore` protocol
-  with `InMemoryTokenStore` / `RedisTokenStore`. Factory:
-  `create_token_store(redis_url)`. Used for JWT deny-list + OAuth state.
-- **`BaseAgent`** (`backend/agents/base.py`) — ABC with agentic loop
-  (`MAX_ITERATIONS=15`) + streaming. Subclasses only override
-  `_build_llm()`.
-- **LLM**: Split cascade profiles via `FallbackLLM` in
-  `backend/llm_fallback.py`:
-  - **Tool cascade**: llama-3.3-70b → kimi-k2 → scout (for tool-calling
-    iterations). Skips gpt-oss-120b to preserve synthesis budget.
-  - **Synthesis cascade**: gpt-oss-120b → kimi-k2 → Anthropic (for
-    final response when no more tool calls).
-  - **Test cascade** (`AI_AGENT_UI_ENV=test`): free tiers only, no
-    Anthropic. RuntimeError if all exhausted.
-  Config: `GROQ_MODEL_TIERS`, `SYNTHESIS_MODEL_TIERS`,
-  `TEST_MODEL_TIERS` CSV env vars. `BaseAgent` has `llm_with_tools`
-  + `llm_synthesis` attributes.
-- **Report builder**: `backend/agents/report_builder.py` — parses
-  tool text output, renders 5 deterministic markdown sections
-  (header, technicals, forecast, calendar, charts). LLM produces
-  verdict only (~150-250 tokens vs ~800-1200). `StockAgent.
-  format_response()` prepends template to LLM response.
-- **Observability**: `backend/observability.py` — `ObservabilityCollector`
-  tracks per-tier health (healthy/degraded/down/disabled), latency
-  (avg + p95), cascade counts. Admin endpoints:
-  `GET /v1/admin/tier-health`, `POST /v1/admin/tier-health/{model}/toggle`.
-  Dashboard shows health cards with color-coded status.
-- **Budget tracking**: `backend/token_budget.py` — sliding-window
-  TPM/RPM per Groq model. `backend/message_compressor.py` — 3-stage
-  compression (system prompt, history, tool results).
-- **Streaming**: `POST /v1/chat/stream` returns NDJSON events:
-  `thinking`, `tool_start`, `tool_done`, `warning`, `final`, `error`.
-- **WebSocket**: `backend/ws.py` — `/ws/chat` endpoint with
-  auth-first protocol. Frontend `useWebSocket` hook manages
-  DISCONNECTED→CONNECTING→AUTHENTICATING→READY state machine.
-  `useSendMessage` prefers WS, falls back to HTTP NDJSON.
-- **Same-day cache**:
-  `~/.ai-agent-ui/data/cache/{TICKER}_{key}_{YYYY-MM-DD}.txt`.
-- **Centralised paths**: `backend/paths.py` — single source of truth
-  for all filesystem locations. Override root with `AI_AGENT_UI_HOME`.
-- **Tool registration order**: `search_market_news` registered after
-  GeneralAgent, before StockAgent.
-- **Ticker auto-linking**: `tools/_ticker_linker.py` uses
-  `threading.local()` to pass `user_id` from HTTP handler into
-  `@tool` functions. Frontend sends `user_id` via `getUserIdFromToken()`.
-- **Freshness gates**: Analysis skips if done today (Iceberg check);
-  forecast skips if run within 7 days. Both non-blocking.
-
-## Filesystem Layout
-
-All runtime data under `~/.ai-agent-ui/` (override: `AI_AGENT_UI_HOME`).
-Paths centralised in `backend/paths.py`.
-
+### Route Structure
 ```
-~/.ai-agent-ui/
-├── data/iceberg/{catalog.db,warehouse/}   # Iceberg tables
-├── data/{cache,raw,forecasts,avatars}/     # runtime data
-├── charts/{analysis,forecasts}/            # HTML charts
-├── logs/                                   # rotating agent.log
-├── backend.env                             # secrets (symlinked)
-└── frontend.env.local                      # service URLs (symlinked)
+frontend/app/
+├── layout.tsx                         (root — fonts, dark mode script)
+├── (authenticated)/                   (route group — shared layout)
+│   ├── layout.tsx                     (AppLayout: sidebar + header + chat + FAB)
+│   ├── dashboard/page.tsx             (Portfolio — native widgets)
+│   ├── analytics/page.tsx             (Dashboard Home — stock cards)
+│   ├── analytics/analysis/page.tsx    (Tabbed: Analysis+Forecast+Compare)
+│   ├── analytics/compare/page.tsx     (Compare — also embedded in Analysis tab)
+│   ├── analytics/insights/page.tsx    (Insights — Dash iframe, pending migration)
+│   ├── analytics/marketplace/page.tsx (Link Ticker — native)
+│   ├── docs/page.tsx                  (MkDocs iframe)
+│   └── admin/page.tsx                 (Admin — Dash iframe, pending migration)
+├── login/page.tsx
+└── auth/oauth/callback/page.tsx
 ```
 
-## Key Directories
+### State Management
+- ChatProvider: messages, panel open/close, agentId, sessionId, WebSocket
+- LayoutProvider: sidebar collapsed, mobile menu
+- No Redux/Zustand — contexts + prop-drilling
 
-- `backend/` — agents, tools, config, llm_fallback, token_budget,
-  observability, routes, ws
-- `auth/` — JWT + RBAC + OAuth PKCE + user-ticker linking
-- `stocks/` — Iceberg persistence (9 tables, single source of truth)
-- `frontend/` — SPA (Next.js)
-- `dashboard/` — Dash + services, incl. Marketplace page
-- `hooks/` — pre-commit, pre-push
+### Sidebar Navigation
+```
+Portfolio           → /dashboard (native)
+Dashboard ▾         → collapsible group
+  ├─ Home           → /analytics (native)
+  ├─ Analysis       → /analytics/analysis (native, tabbed)
+  ├─ Insights       → /analytics/insights (Dash iframe → pending migration)
+  └─ Link Ticker    → /analytics/marketplace (native)
+Docs                → /docs (MkDocs iframe)
+Admin               → /admin (Dash iframe → pending migration)
+```
+
+### Charts
+- react-plotly.js with dynamic import (ssr: false)
+- PlotlyChart wrapper with auto dark/light theming
+- Unified subplot chart for Analysis (Price+Volume+RSI+MACD shared x-axis)
+- Chart builders in `frontend/components/charts/chartBuilders.ts`
+
+## Backend API Endpoints
+
+### Dashboard Endpoints (new)
+- GET /v1/dashboard/watchlist — user's linked tickers with prices
+- GET /v1/dashboard/forecasts/summary — latest forecast targets
+- GET /v1/dashboard/analysis/latest — analysis signals
+- GET /v1/dashboard/llm-usage — LLM cost/latency/model breakdown
+- GET /v1/dashboard/registry — all registered tickers
+- GET /v1/dashboard/compare?tickers=X,Y,Z — normalized comparison
+- GET /v1/dashboard/chart/ohlcv?ticker=X — OHLCV time series
+- GET /v1/dashboard/chart/indicators?ticker=X — technical indicators
+- GET /v1/dashboard/chart/forecast-series?ticker=X&horizon=9
+
+### Audit Endpoints (new)
+- POST /v1/audit/chat-sessions — save chat transcript on logout
+- GET /v1/audit/chat-sessions — list past sessions (filtered by user)
+
+## Iceberg Tables (12)
+stocks.registry, stocks.company_info, stocks.ohlcv, stocks.dividends,
+stocks.technical_indicators, stocks.analysis_summary, stocks.forecast_runs,
+stocks.forecasts, stocks.quarterly_results, stocks.llm_pricing,
+stocks.llm_usage, stocks.chat_audit_log (new)
