@@ -58,41 +58,23 @@ function SignalRow({ signal }: { signal: SignalInfo }) {
     <div
       className="
         flex items-center justify-between gap-3
-        py-2.5 border-b border-gray-100
+        py-3 border-b border-gray-100
         dark:border-gray-700/50 last:border-b-0
       "
     >
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <span
-            className="
-              text-sm font-medium text-gray-900
-              dark:text-gray-100
-            "
-          >
-            {signal.name}
-          </span>
-          <span
-            className="
-              font-mono text-sm text-gray-600
-              dark:text-gray-400
-            "
-          >
-            {signal.value}
-          </span>
-        </div>
-        {signal.description && (
-          <p
-            className="
-              text-xs text-gray-500 dark:text-gray-500
-              mt-0.5 truncate
-            "
-          >
-            {signal.description}
-          </p>
-        )}
+        <p className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+          {signal.name}
+        </p>
+        <p
+          className="font-mono text-sm text-gray-500 dark:text-gray-400 mt-0.5"
+        >
+          {signal.value}
+        </p>
       </div>
-      <div className="shrink-0">{signalBadge(signal.signal)}</div>
+      <div className="shrink-0">
+        {signalBadge(signal.description || signal.signal)}
+      </div>
     </div>
   );
 }
