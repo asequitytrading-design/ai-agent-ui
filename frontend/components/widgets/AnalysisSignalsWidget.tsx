@@ -2,6 +2,7 @@
 
 import type { DashboardData } from "@/hooks/useDashboardData";
 import type { AnalysisResponse, SignalInfo } from "@/lib/types";
+import { KpiTooltip } from "@/components/KpiTooltip";
 import { WidgetSkeleton } from "./WidgetSkeleton";
 import { WidgetError } from "./WidgetError";
 
@@ -63,8 +64,8 @@ function SignalRow({ signal }: { signal: SignalInfo }) {
       "
     >
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-semibold text-gray-900 dark:text-gray-100">
-          {signal.name}
+        <p className="relative text-sm font-semibold text-gray-900 dark:text-gray-100">
+          <KpiTooltip label={signal.name} />
         </p>
         <p
           className="font-mono text-sm text-gray-500 dark:text-gray-400 mt-0.5"
@@ -185,14 +186,14 @@ export function AnalysisSignalsWidget({
                     bg-gray-50 dark:bg-gray-800/50
                   "
                 >
-                  <div>
+                  <div className="relative">
                     <p
                       className="
                         text-xs text-gray-500
                         dark:text-gray-400
                       "
                     >
-                      Sharpe Ratio
+                      <KpiTooltip label="Sharpe Ratio" />
                     </p>
                     <p
                       className="
@@ -203,14 +204,14 @@ export function AnalysisSignalsWidget({
                       {formatDecimal(a.sharpe_ratio)}
                     </p>
                   </div>
-                  <div>
+                  <div className="relative">
                     <p
                       className="
                         text-xs text-gray-500
                         dark:text-gray-400
                       "
                     >
-                      Ann. Return
+                      <KpiTooltip label="Ann. Return" />
                     </p>
                     <p
                       className="
@@ -223,14 +224,14 @@ export function AnalysisSignalsWidget({
                       )}
                     </p>
                   </div>
-                  <div>
+                  <div className="relative">
                     <p
                       className="
                         text-xs text-gray-500
                         dark:text-gray-400
                       "
                     >
-                      Volatility
+                      <KpiTooltip label="Volatility" />
                     </p>
                     <p
                       className="
@@ -243,14 +244,14 @@ export function AnalysisSignalsWidget({
                       )}
                     </p>
                   </div>
-                  <div>
+                  <div className="relative">
                     <p
                       className="
                         text-xs text-gray-500
                         dark:text-gray-400
                       "
                     >
-                      Max Drawdown
+                      <KpiTooltip label="Max Drawdown" />
                     </p>
                     <p
                       className="

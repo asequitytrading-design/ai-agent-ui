@@ -1,14 +1,20 @@
 "use client";
 
+import { useState, useMemo, useCallback } from "react";
+import { apiFetch } from "@/lib/apiFetch";
+import { API_URL } from "@/lib/config";
 import type { DashboardData } from "@/hooks/useDashboardData";
 import type { WatchlistResponse } from "@/lib/types";
 import { WidgetSkeleton } from "./WidgetSkeleton";
 import { WidgetError } from "./WidgetError";
 
+const PAGE_SIZE = 18;
+
 interface WatchlistWidgetProps {
   data: DashboardData<WatchlistResponse>;
   selectedTicker?: string | null;
   onSelectTicker?: (ticker: string) => void;
+  onRefresh?: () => void;
 }
 
 /** Map ISO currency code to display symbol. */
@@ -58,11 +64,112 @@ function Sparkline({
   );
 }
 
+type RefreshState = "idle" | "pending" | "success" | "error";
+
 export function WatchlistWidget({
   data,
   selectedTicker,
   onSelectTicker,
+  onRefresh,
 }: WatchlistWidgetProps) {
+  const [page, setPage] = useState(1);
+
+  // Per-ticker refresh state
+  const [refreshing, setRefreshing] = useState<
+    Record<string, RefreshState>
+  >({});
+
+  const startRefresh = useCallback(
+    async (ticker: string, e: React.MouseEvent) => {
+      e.stopPropagation();
+      setRefreshing((prev) => ({
+        ...prev,
+        [ticker]: "pending",
+      }));
+      try {
+        const r = await apiFetch(
+          `${API_URL}/dashboard/refresh/${encodeURIComponent(ticker)}`,
+          { method: "POST" },
+        );
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+
+        // Poll for completion
+        const poll = async () => {
+          for (let i = 0; i < 90; i++) {
+            await new Promise((ok) =>
+              setTimeout(ok, 2000),
+            );
+            const sr = await apiFetch(
+              `${API_URL}/dashboard/refresh/${encodeURIComponent(ticker)}/status`,
+            );
+            if (!sr.ok) break;
+            const s = await sr.json();
+            if (s.status === "success") {
+              setRefreshing((prev) => ({
+                ...prev,
+                [ticker]: "success",
+              }));
+              onRefresh?.();
+              setTimeout(
+                () =>
+                  setRefreshing((prev) => ({
+                    ...prev,
+                    [ticker]: "idle",
+                  })),
+                3000,
+              );
+              return;
+            }
+            if (s.status === "error") {
+              setRefreshing((prev) => ({
+                ...prev,
+                [ticker]: "error",
+              }));
+              setTimeout(
+                () =>
+                  setRefreshing((prev) => ({
+                    ...prev,
+                    [ticker]: "idle",
+                  })),
+                5000,
+              );
+              return;
+            }
+          }
+        };
+        poll();
+      } catch {
+        setRefreshing((prev) => ({
+          ...prev,
+          [ticker]: "error",
+        }));
+        setTimeout(
+          () =>
+            setRefreshing((prev) => ({
+              ...prev,
+              [ticker]: "idle",
+            })),
+          5000,
+        );
+      }
+    },
+    [onRefresh],
+  );
+
+  const tickers = data.value?.tickers ?? [];
+  const maxPages = Math.max(
+    1,
+    Math.ceil(tickers.length / PAGE_SIZE),
+  );
+  const paginated = useMemo(
+    () =>
+      tickers.slice(
+        (page - 1) * PAGE_SIZE,
+        page * PAGE_SIZE,
+      ),
+    [tickers, page],
+  );
+
   if (data.loading) {
     return <WidgetSkeleton className="h-72" />;
   }
@@ -70,8 +177,6 @@ export function WatchlistWidget({
   if (data.error) {
     return <WidgetError message={data.error} />;
   }
-
-  const tickers = data.value?.tickers ?? [];
 
   return (
     <div
@@ -85,7 +190,7 @@ export function WatchlistWidget({
       {/* Header */}
       <div
         className="
-          px-5 py-4
+          px-5 py-4 flex items-center justify-between
           border-b border-gray-100 dark:border-gray-800
         "
       >
@@ -100,6 +205,9 @@ export function WatchlistWidget({
         >
           Watchlist
         </h2>
+        <span className="text-xs text-gray-400 dark:text-gray-500">
+          {tickers.length} ticker{tickers.length !== 1 ? "s" : ""}
+        </span>
       </div>
 
       {/* Content */}
@@ -111,8 +219,9 @@ export function WatchlistWidget({
           </p>
         </div>
       ) : (
+        <>
         <div className="divide-y divide-gray-100 dark:divide-gray-800">
-          {tickers.map((t, idx) => {
+          {paginated.map((t, idx) => {
             const positive = t.change >= 0;
             const sym = currencySymbol(t.currency);
             return (
@@ -203,10 +312,127 @@ export function WatchlistWidget({
                   data={t.sparkline}
                   positive={positive}
                 />
+
+                {/* Per-ticker refresh */}
+                <button
+                  onClick={(e) =>
+                    startRefresh(t.ticker, e)
+                  }
+                  disabled={
+                    refreshing[t.ticker] === "pending"
+                  }
+                  title={
+                    refreshing[t.ticker] === "pending"
+                      ? "Refreshing..."
+                      : refreshing[t.ticker] === "success"
+                        ? "Updated!"
+                        : refreshing[t.ticker] === "error"
+                          ? "Refresh failed"
+                          : "Refresh ticker data"
+                  }
+                  className="
+                    p-1 rounded-md shrink-0
+                    text-gray-400 dark:text-gray-500
+                    hover:text-gray-600
+                    dark:hover:text-gray-300
+                    hover:bg-gray-100
+                    dark:hover:bg-gray-800
+                    transition-colors
+                    disabled:opacity-50
+                  "
+                >
+                  {refreshing[t.ticker] ===
+                  "pending" ? (
+                    <svg
+                      className="w-3.5 h-3.5 animate-spin"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                    >
+                      <circle
+                        cx="12" cy="12" r="10"
+                        stroke="currentColor"
+                        strokeWidth="3"
+                        strokeDasharray="50 20"
+                      />
+                    </svg>
+                  ) : refreshing[t.ticker] ===
+                    "success" ? (
+                    <svg
+                      className="w-3.5 h-3.5 text-emerald-500"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.5"
+                    >
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  ) : refreshing[t.ticker] ===
+                    "error" ? (
+                    <svg
+                      className="w-3.5 h-3.5 text-red-500"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.5"
+                    >
+                      <line x1="18" y1="6" x2="6" y2="18" />
+                      <line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
+                  ) : (
+                    <svg
+                      className="w-3.5 h-3.5"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+                      <path d="M21 3v5h-5" />
+                    </svg>
+                  )}
+                </button>
               </div>
             );
           })}
         </div>
+
+        {/* Pagination */}
+        {maxPages > 1 && (
+          <div className="flex items-center justify-between px-5 py-2.5 border-t border-gray-100 dark:border-gray-800 text-xs text-gray-500 dark:text-gray-400">
+            <span>
+              {tickers.length} ticker
+              {tickers.length !== 1 ? "s" : ""}
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() =>
+                  setPage((p) => Math.max(1, p - 1))
+                }
+                disabled={page <= 1}
+                className="rounded px-2 py-1 hover:bg-gray-200 dark:hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              >
+                Prev
+              </button>
+              <span>
+                {page} / {maxPages}
+              </span>
+              <button
+                onClick={() =>
+                  setPage((p) =>
+                    Math.min(maxPages, p + 1),
+                  )
+                }
+                disabled={page >= maxPages}
+                className="rounded px-2 py-1 hover:bg-gray-200 dark:hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
+        </>
       )}
     </div>
   );

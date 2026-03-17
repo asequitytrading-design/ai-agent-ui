@@ -163,6 +163,9 @@ class CompareMetric(BaseModel):
     max_drawdown_pct: float | None = None
     current_price: float | None = None
     currency: str = "USD"
+    rsi_14: float | None = None
+    macd_signal: str | None = None
+    sentiment: str | None = None
 
 
 class CompareResponse(BaseModel):
@@ -230,4 +233,26 @@ class ForecastSeriesResponse(BaseModel):
     horizon_months: int
     data: list[ForecastPoint] = Field(
         default_factory=list,
+    )
+
+
+class DashboardHomeResponse(BaseModel):
+    """Aggregate response for ``/dashboard/home``.
+
+    Returns all widget data in a single request so
+    the frontend can render the dashboard with one
+    network round-trip instead of 4.
+    """
+
+    watchlist: WatchlistResponse = Field(
+        default_factory=WatchlistResponse,
+    )
+    forecasts: ForecastsResponse = Field(
+        default_factory=ForecastsResponse,
+    )
+    analysis: AnalysisResponse = Field(
+        default_factory=AnalysisResponse,
+    )
+    llm_usage: LLMUsageResponse = Field(
+        default_factory=LLMUsageResponse,
     )

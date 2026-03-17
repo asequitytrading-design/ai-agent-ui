@@ -125,6 +125,17 @@ export interface RegistryResponse {
 }
 
 // ---------------------------------------------------------------
+// Dashboard Aggregate
+// ---------------------------------------------------------------
+
+export interface DashboardHomeResponse {
+  watchlist: WatchlistResponse;
+  forecasts: ForecastsResponse;
+  analysis: AnalysisResponse;
+  llm_usage: LLMUsageResponse;
+}
+
+// ---------------------------------------------------------------
 // Chat Audit
 // ---------------------------------------------------------------
 
@@ -166,6 +177,9 @@ export interface CompareMetric {
   max_drawdown_pct: number | null;
   current_price: number | null;
   currency: string;
+  rsi_14: number | null;
+  macd_signal: string | null;
+  sentiment: string | null;
 }
 
 export interface CompareResponse {
@@ -222,4 +236,208 @@ export interface ForecastSeriesResponse {
   ticker: string;
   horizon_months: number;
   data: ForecastPoint[];
+}
+
+// ---------------------------------------------------------------
+// Insights
+// ---------------------------------------------------------------
+
+export interface ScreenerRow {
+  ticker: string;
+  price: number | null;
+  rsi_14: number | null;
+  rsi_signal: string | null;
+  macd_signal: string | null;
+  sma_200_signal: string | null;
+  annualized_return_pct: number | null;
+  annualized_volatility_pct: number | null;
+  sharpe_ratio: number | null;
+  sector: string | null;
+  market: string;
+}
+
+export interface ScreenerResponse {
+  rows: ScreenerRow[];
+  sectors: string[];
+}
+
+export interface TargetRow {
+  ticker: string;
+  horizon_months: number | null;
+  run_date: string | null;
+  current_price: number | null;
+  target_3m_price: number | null;
+  target_3m_pct: number | null;
+  target_6m_price: number | null;
+  target_6m_pct: number | null;
+  target_9m_price: number | null;
+  target_9m_pct: number | null;
+  sentiment: string | null;
+  market: string;
+  sector: string | null;
+}
+
+export interface TargetsResponse {
+  rows: TargetRow[];
+  tickers: string[];
+  sectors: string[];
+}
+
+export interface DividendRow {
+  ticker: string;
+  ex_date: string | null;
+  amount: number | null;
+  currency: string;
+  market: string;
+  sector: string | null;
+}
+
+export interface DividendsResponse {
+  rows: DividendRow[];
+  tickers: string[];
+  sectors: string[];
+}
+
+export interface RiskRow {
+  ticker: string;
+  annualized_return_pct: number | null;
+  annualized_volatility_pct: number | null;
+  sharpe_ratio: number | null;
+  max_drawdown_pct: number | null;
+  max_drawdown_days: number | null;
+  bull_phase_pct: number | null;
+  bear_phase_pct: number | null;
+  market: string;
+  sector: string | null;
+}
+
+export interface RiskResponse {
+  rows: RiskRow[];
+  sectors: string[];
+}
+
+export interface SectorRow {
+  sector: string;
+  stock_count: number;
+  avg_return_pct: number | null;
+  avg_sharpe: number | null;
+  avg_volatility_pct: number | null;
+}
+
+export interface SectorsResponse {
+  rows: SectorRow[];
+}
+
+export interface CorrelationResponse {
+  tickers: string[];
+  matrix: number[][];
+  period: string;
+}
+
+export interface QuarterlyRow {
+  ticker: string;
+  quarter_label: string | null;
+  quarter_end: string | null;
+  statement_type: string | null;
+  revenue: number | null;
+  net_income: number | null;
+  eps: number | null;
+  total_assets: number | null;
+  total_equity: number | null;
+  operating_cashflow: number | null;
+  free_cashflow: number | null;
+  market: string;
+  sector: string | null;
+}
+
+export interface QuarterlyResponse {
+  rows: QuarterlyRow[];
+  tickers: string[];
+  sectors: string[];
+}
+
+// ---------------------------------------------------------------
+// Admin — Users & Audit
+// ---------------------------------------------------------------
+
+export interface UserResponse {
+  user_id: string;
+  email: string;
+  full_name: string;
+  role: "superuser" | "general";
+  is_active: boolean;
+  created_at: string | null;
+  updated_at: string | null;
+  last_login_at: string | null;
+  avatar_url: string | null;
+  page_permissions: Record<string, boolean> | null;
+}
+
+export interface AuditEvent {
+  event_timestamp: string;
+  event_type: string;
+  actor_user_id: string;
+  target_user_id: string | null;
+  metadata: string | Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------
+// Admin — LLM Observability
+// ---------------------------------------------------------------
+
+export interface ModelBudget {
+  tpm: string;
+  rpm: string;
+  tpd: string;
+  rpd: string;
+}
+
+export interface CascadeEvent {
+  timestamp: number;
+  from_model: string;
+  to_model: string;
+  reason: string;
+}
+
+export interface CascadeStats {
+  requests_total: number;
+  requests_by_model: Record<string, number>;
+  cascade_count: number;
+  compression_count: number;
+  cascade_log: CascadeEvent[];
+  rpm_by_model: Record<string, number>;
+}
+
+export interface MetricsResponse {
+  timestamp: number;
+  models: Record<string, ModelBudget>;
+  cascade_stats: CascadeStats;
+}
+
+export interface TierHealth {
+  model: string;
+  status: "healthy" | "degraded" | "down" | "disabled";
+  failures_5m: number;
+  successes_5m: number;
+  cascade_count: number;
+  latency: {
+    avg_ms: number;
+    p95_ms: number;
+  };
+}
+
+export interface HealthSummary {
+  total: number;
+  healthy: number;
+  degraded: number;
+  down: number;
+  disabled: number;
+}
+
+export interface TierHealthResponse {
+  timestamp: number;
+  health: {
+    tiers: TierHealth[];
+    summary: HealthSummary;
+  };
 }

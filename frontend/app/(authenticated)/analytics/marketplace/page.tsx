@@ -3,54 +3,33 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { apiFetch } from "@/lib/apiFetch";
 import { API_URL } from "@/lib/config";
-import type { RegistryTicker } from "@/lib/types";
+import {
+  useRegistry,
+  useUserTickers,
+} from "@/hooks/useDashboardData";
 
 const PAGE_SIZE = 12;
 
 type MarketFilter = "all" | "india" | "us";
 
 export default function MarketplacePage() {
-  const [registry, setRegistry] = useState<RegistryTicker[]>([]);
-  const [linkedSet, setLinkedSet] = useState<Set<string>>(new Set());
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const registryData = useRegistry();
+  const userTickers = useUserTickers();
+  const registry = useMemo(
+    () => registryData.value?.tickers ?? [],
+    [registryData.value],
+  );
+  const linkedSet = useMemo(
+    () => new Set(userTickers.value?.tickers ?? []),
+    [userTickers.value],
+  );
+  const loading = registryData.loading || userTickers.loading;
+  const error = registryData.error || userTickers.error;
+
   const [search, setSearch] = useState("");
   const [market, setMarket] = useState<MarketFilter>("all");
   const [page, setPage] = useState(1);
   const [busyTickers, setBusyTickers] = useState<Set<string>>(new Set());
-
-  // Fetch registry + user tickers in parallel
-  useEffect(() => {
-    const controller = new AbortController();
-    setLoading(true);
-    setError(null);
-
-    Promise.all([
-      apiFetch(`${API_URL}/dashboard/registry`, {
-        signal: controller.signal,
-      }).then((r) => {
-        if (!r.ok) throw new Error(`Registry: HTTP ${r.status}`);
-        return r.json();
-      }),
-      apiFetch(`${API_URL}/users/me/tickers`, {
-        signal: controller.signal,
-      }).then((r) => {
-        if (!r.ok) throw new Error(`Tickers: HTTP ${r.status}`);
-        return r.json();
-      }),
-    ])
-      .then(([regData, tickerData]) => {
-        setRegistry(regData.tickers ?? []);
-        setLinkedSet(new Set(tickerData.tickers ?? []));
-      })
-      .catch((err: unknown) => {
-        if (err instanceof Error && err.name === "AbortError") return;
-        setError(err instanceof Error ? err.message : "Failed to load");
-      })
-      .finally(() => setLoading(false));
-
-    return () => controller.abort();
-  }, []);
 
   // Filtered + searched list
   const filtered = useMemo(() => {
@@ -93,7 +72,13 @@ export default function MarketplacePage() {
           body: JSON.stringify({ ticker }),
         });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        setLinkedSet((prev) => new Set(prev).add(ticker));
+        // Optimistic update + revalidate SWR cache
+        userTickers.mutate(
+          (prev) => ({
+            tickers: [...(prev?.tickers ?? []), ticker],
+          }),
+          { revalidate: false },
+        );
       } catch {
         /* allow retry */
       } finally {
@@ -104,7 +89,7 @@ export default function MarketplacePage() {
         });
       }
     },
-    [],
+    [userTickers],
   );
 
   const unlinkTicker = useCallback(
@@ -116,11 +101,15 @@ export default function MarketplacePage() {
           { method: "DELETE" },
         );
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        setLinkedSet((prev) => {
-          const next = new Set(prev);
-          next.delete(ticker);
-          return next;
-        });
+        // Optimistic update + revalidate SWR cache
+        userTickers.mutate(
+          (prev) => ({
+            tickers: (prev?.tickers ?? []).filter(
+              (t) => t !== ticker,
+            ),
+          }),
+          { revalidate: false },
+        );
       } catch {
         /* allow retry */
       } finally {
@@ -131,7 +120,7 @@ export default function MarketplacePage() {
         });
       }
     },
-    [],
+    [userTickers],
   );
 
   const currencySymbol = (ccy: string) =>

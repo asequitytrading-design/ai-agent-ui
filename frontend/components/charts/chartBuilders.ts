@@ -137,6 +137,115 @@ export function buildCorrelationHeatmap(
   ];
 }
 
+/** Sentiment emoji based on forecast sentiment text. */
+function sentimentEmoji(
+  sentiment: string | null | undefined,
+): string {
+  if (!sentiment) return "";
+  const s = sentiment.toLowerCase();
+  if (s.includes("bull")) return " \u{1F7E2}";
+  if (s.includes("bear")) return " \u{1F534}";
+  return " \u{1F7E1}";
+}
+
+/** Build forecast chart shapes (today line, price line, targets). */
+export function buildForecastShapes(
+  currentPrice: number | null,
+  targets: {
+    horizon_months: number;
+    target_date: string;
+    target_price: number;
+    pct_change: number;
+  }[],
+): { shapes: Partial<Plotly.Shape>[]; annotations: Partial<Plotly.Annotations>[] } {
+  const today = new Date().toISOString().slice(0, 10);
+  const shapes: Partial<Plotly.Shape>[] = [
+    // "Today" vertical line
+    {
+      type: "line",
+      x0: today,
+      x1: today,
+      y0: 0,
+      y1: 1,
+      yref: "paper",
+      line: {
+        color: "rgba(107,114,128,0.5)",
+        width: 1.5,
+        dash: "dot",
+      },
+    },
+  ];
+  const annotations: Partial<Plotly.Annotations>[] = [
+    // "Today" label
+    {
+      x: today,
+      y: 1.02,
+      yref: "paper",
+      text: "Today",
+      showarrow: false,
+      font: { size: 10, color: "#9ca3af" },
+    },
+  ];
+
+  // Current price horizontal line
+  if (currentPrice != null) {
+    shapes.push({
+      type: "line",
+      x0: 0,
+      x1: 1,
+      xref: "paper",
+      y0: currentPrice,
+      y1: currentPrice,
+      line: {
+        color: "rgba(107,114,128,0.4)",
+        width: 1,
+        dash: "dot",
+      },
+    });
+    annotations.push({
+      x: 1.0,
+      xref: "paper",
+      y: currentPrice,
+      text: `Current: ${currentPrice.toFixed(2)}`,
+      showarrow: false,
+      xanchor: "left",
+      font: { size: 9, color: "#9ca3af" },
+    });
+  }
+
+  // Price target annotations on chart
+  const targetColors = [
+    "rgba(245,158,11,0.85)",
+    "rgba(249,115,22,0.85)",
+    "rgba(239,68,68,0.85)",
+  ];
+  targets.forEach((t, i) => {
+    const sign = t.pct_change >= 0 ? "+" : "";
+    annotations.push({
+      x: t.target_date,
+      y: t.target_price,
+      text:
+        `${t.horizon_months}M: ${t.target_price.toFixed(0)}` +
+        ` (${sign}${t.pct_change.toFixed(1)}%)`,
+      showarrow: true,
+      arrowhead: 2,
+      arrowsize: 0.8,
+      arrowcolor:
+        targetColors[i % targetColors.length],
+      ax: 40 + i * 15,
+      ay: -(30 + i * 15),
+      bordercolor:
+        targetColors[i % targetColors.length],
+      borderwidth: 1,
+      borderpad: 3,
+      bgcolor: "rgba(255,255,255,0.9)",
+      font: { size: 10 },
+    });
+  });
+
+  return { shapes, annotations };
+}
+
 /** Build a forecast chart with confidence band. */
 export function buildForecastChart(
   historicalDates: string[],
@@ -146,7 +255,9 @@ export function buildForecastChart(
   upperBound: number[],
   lowerBound: number[],
   ticker: string,
+  sentiment?: string | null,
 ): Plotly.Data[] {
+  const emoji = sentimentEmoji(sentiment);
   return [
     // Historical line
     {
@@ -173,9 +284,9 @@ export function buildForecastChart(
       y: lowerBound,
       type: "scatter",
       mode: "lines",
-      name: "Confidence",
+      name: "80% Confidence",
       fill: "tonexty",
-      fillcolor: "rgba(99,102,241,0.15)",
+      fillcolor: "rgba(76,175,80,0.15)",
       line: { width: 0 },
     },
     // Forecast line
@@ -183,14 +294,13 @@ export function buildForecastChart(
       x: forecastDates,
       y: forecastPrices,
       type: "scatter",
-      mode: "lines+markers",
-      name: `${ticker} Forecast`,
+      mode: "lines",
+      name: `Forecast${emoji}`,
       line: {
-        color: CHART_COLORS[1],
+        color: "#4caf50",
         width: 2,
         dash: "dash",
       },
-      marker: { size: 6 },
     },
   ];
 }

@@ -1,16 +1,16 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { apiFetch } from "@/lib/apiFetch";
-import { API_URL } from "@/lib/config";
 import type {
-  WatchlistResponse,
-  AnalysisResponse,
-  RegistryTicker,
   TickerPrice,
   TickerAnalysis,
 } from "@/lib/types";
+import {
+  useWatchlist,
+  useAnalysisLatest,
+  useRegistry,
+} from "@/hooks/useDashboardData";
 
 // ---------------------------------------------------------------
 // Types
@@ -185,72 +185,26 @@ function SkeletonCard() {
 export default function AnalyticsPage() {
   const router = useRouter();
 
-  // Data state
-  const [watchlist, setWatchlist] =
-    useState<WatchlistResponse | null>(null);
-  const [analysis, setAnalysis] =
-    useState<AnalysisResponse | null>(null);
-  const [registry, setRegistry] = useState<RegistryTicker[]>([]);
+  // SWR-cached data (shared with dashboard page)
+  const watchlistData = useWatchlist();
+  const analysisData = useAnalysisLatest();
+  const registryData = useRegistry();
 
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const watchlist = watchlistData.value;
+  const analysis = analysisData.value;
+  const registry = useMemo(
+    () => registryData.value?.tickers ?? [],
+    [registryData.value],
+  );
+  // Cards render as soon as watchlist arrives;
+  // analysis + registry load independently.
+  const cardsLoading = watchlistData.loading;
+  const error = watchlistData.error;
 
   // UI state
   const [market, setMarket] = useState<MarketFilter>("india");
   const [searchTicker, setSearchTicker] = useState("");
   const [selectedTicker, setSelectedTicker] = useState("");
-
-  // Fetch all three endpoints in parallel
-  useEffect(() => {
-    const controller = new AbortController();
-    setLoading(true);
-    setError(null);
-
-    const opts = { signal: controller.signal };
-
-    Promise.all([
-      apiFetch(`${API_URL}/dashboard/watchlist`, opts).then(
-        (r) => {
-          if (!r.ok) throw new Error(`Watchlist: HTTP ${r.status}`);
-          return r.json();
-        },
-      ),
-      apiFetch(
-        `${API_URL}/dashboard/analysis/latest`,
-        opts,
-      ).then((r) => {
-        if (!r.ok) throw new Error(`Analysis: HTTP ${r.status}`);
-        return r.json();
-      }),
-      apiFetch(`${API_URL}/dashboard/registry`, opts).then(
-        (r) => {
-          if (!r.ok) throw new Error(`Registry: HTTP ${r.status}`);
-          return r.json();
-        },
-      ),
-    ])
-      .then(([wl, al, rg]) => {
-        setWatchlist(wl as WatchlistResponse);
-        setAnalysis(al as AnalysisResponse);
-        setRegistry((rg as { tickers: RegistryTicker[] }).tickers ?? []);
-      })
-      .catch((err: unknown) => {
-        if (
-          err instanceof Error &&
-          err.name === "AbortError"
-        ) {
-          return;
-        }
-        setError(
-          err instanceof Error
-            ? err.message
-            : "Failed to load dashboard data",
-        );
-      })
-      .finally(() => setLoading(false));
-
-    return () => controller.abort();
-  }, []);
 
   // Build analysis lookup map
   const analysisMap = useMemo(() => {
@@ -325,7 +279,7 @@ export default function AnalyticsPage() {
   // ----------------------------------------------------------
   // Error state
   // ----------------------------------------------------------
-  if (error && !loading) {
+  if (error && !cardsLoading) {
     return (
       <div className="rounded-xl border border-red-300 bg-red-50 p-6 text-center text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
         <p className="font-semibold">
@@ -381,7 +335,11 @@ export default function AnalyticsPage() {
                 onChange={(e) => setSelectedTicker(e.target.value)}
                 className="rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
               >
-                <option value="">Choose ticker...</option>
+                <option value="">
+                  {registryData.loading
+                    ? "Loading tickers..."
+                    : "Choose ticker..."}
+                </option>
                 {registryFiltered.map((t) => (
                   <option key={t.ticker} value={t.ticker}>
                     {t.ticker}
@@ -430,7 +388,7 @@ export default function AnalyticsPage() {
       </div>
 
       {/* Card grid */}
-      {loading ? (
+      {cardsLoading ? (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {Array.from({ length: 8 }).map((_, i) => (
             <SkeletonCard key={i} />

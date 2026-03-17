@@ -1,34 +1,12 @@
-"use client";
+import { redirect } from "next/navigation";
 
-import { useState, useMemo } from "react";
-import { IFrameView } from "@/components/IFrameView";
-import { DASHBOARD_URL } from "@/lib/config";
-import { getAccessToken } from "@/lib/auth";
-import { useTheme } from "@/hooks/useTheme";
-
+/**
+ * Legacy insights route — redirects to the native
+ * Next.js insights page at /analytics/insights.
+ *
+ * The old page embedded Dash via iframe; the native
+ * replacement is feature-complete with all 7 tabs.
+ */
 export default function InsightsPage() {
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
-  const theme = useTheme();
-
-  const src = useMemo(() => {
-    const base = `${DASHBOARD_URL}/insights`;
-    const token = getAccessToken();
-    const sep = base.includes("?") ? "&" : "?";
-    const params = token
-      ? `token=${encodeURIComponent(token)}&theme=${theme.resolvedTheme}`
-      : `theme=${theme.resolvedTheme}`;
-    return `${base}${sep}${params}`;
-  }, [theme.resolvedTheme]);
-
-  return (
-    <IFrameView
-      src={src}
-      title="Insights"
-      loading={loading}
-      error={error}
-      onLoad={() => setLoading(false)}
-      onError={() => { setLoading(false); setError(true); }}
-    />
-  );
+  redirect("/analytics/insights");
 }

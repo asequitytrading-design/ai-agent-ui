@@ -4,20 +4,27 @@ Provides aggregated data for the native Next.js dashboard
 widgets: watchlist, forecasts, analysis signals, and LLM
 usage summary.  Queries the Iceberg data layer via
 :class:`~stocks.repository.StockRepository`.
+
+Responses are cached in Redis (write-through) with per-key
+TTL.  Cache keys use the ``cache:dash:`` prefix and are
+invalidated by :mod:`stocks.repository` on Iceberg writes.
 """
 
 import logging
+import os
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 
 import auth.endpoints.helpers as _helpers
 from auth.dependencies import get_current_user
 from auth.models import UserContext
+from cache import get_cache, TTL_VOLATILE, TTL_STABLE
 from dashboard_models import (
     AnalysisResponse,
     CompareMetric,
     CompareResponse,
     CompareSeriesItem,
+    DashboardHomeResponse,
     ForecastPoint,
     ForecastSeriesResponse,
     ForecastsResponse,
@@ -41,10 +48,18 @@ _logger = logging.getLogger(__name__)
 
 
 def _get_stock_repo():
-    """Lazy import to avoid circular imports."""
-    from stocks.repository import StockRepository
+    """Return the process-wide StockRepository."""
+    from tools._stock_shared import _require_repo
 
-    return StockRepository()
+    return _require_repo()
+
+
+def _set_cache_header(response: Response):
+    """Router dependency: set Cache-Control on all."""
+    yield
+    response.headers["Cache-Control"] = (
+        "private, max-age=60"
+    )
 
 
 def create_dashboard_router() -> APIRouter:
@@ -52,6 +67,7 @@ def create_dashboard_router() -> APIRouter:
     router = APIRouter(
         prefix="/dashboard",
         tags=["dashboard"],
+        dependencies=[Depends(_set_cache_header)],
     )
 
     @router.get(
@@ -62,6 +78,17 @@ def create_dashboard_router() -> APIRouter:
         user: UserContext = Depends(get_current_user),
     ):
         """User's linked tickers + latest prices."""
+        cache = get_cache()
+        cache_key = (
+            f"cache:dash:watchlist:{user.user_id}"
+        )
+        hit = cache.get(cache_key)
+        if hit is not None:
+            return Response(
+                content=hit,
+                media_type="application/json",
+            )
+
         repo = _helpers._get_repo()
         stock_repo = _get_stock_repo()
         tickers = repo.get_user_tickers(user.user_id)
@@ -69,37 +96,57 @@ def create_dashboard_router() -> APIRouter:
         if not tickers:
             return WatchlistResponse()
 
+        # Batch fetch: 2 queries instead of 2N
+        ohlcv_df = stock_repo.get_ohlcv_batch(tickers)
+        info_df = stock_repo.get_company_info_batch(
+            tickers,
+        )
+
+        # Index company info by ticker for O(1) lookup
+        info_map: dict = {}
+        if not info_df.empty:
+            for _, row in info_df.iterrows():
+                info_map[row["ticker"]] = (
+                    row.to_dict()
+                )
+
         items: list[TickerPrice] = []
         total_value = 0.0
         total_prev = 0.0
 
         for t in tickers:
-            ohlcv = stock_repo.get_dashboard_ohlcv(t, 30)
-            info = stock_repo.get_dashboard_company_info(t)
+            t_ohlcv = ohlcv_df[
+                ohlcv_df["ticker"] == t
+            ] if not ohlcv_df.empty else ohlcv_df
 
-            if ohlcv.empty:
+            if t_ohlcv.empty:
                 continue
 
-            latest = ohlcv.iloc[-1]
+            # Keep last 30 rows for sparkline
+            t_ohlcv = t_ohlcv.tail(30)
+            latest = t_ohlcv.iloc[-1]
             cur = float(latest.get("close", 0))
             prev = float(
-                ohlcv.iloc[-2]["close"]
-                if len(ohlcv) > 1
+                t_ohlcv.iloc[-2]["close"]
+                if len(t_ohlcv) > 1
                 else cur
             )
             chg = cur - prev
             pct = (chg / prev * 100) if prev else 0.0
 
-            sparkline = ohlcv["close"].tolist()[-30:]
+            sparkline = t_ohlcv[
+                "close"
+            ].tolist()[-30:]
 
-            # Currency + market from company_info
+            info = info_map.get(t)
             ccy = (
                 info.get("currency", "USD")
                 if info
                 else "USD"
             )
             mkt = "india" if (
-                t.endswith(".NS") or t.endswith(".BO")
+                t.endswith(".NS")
+                or t.endswith(".BO")
             ) else "us"
 
             items.append(
@@ -132,12 +179,18 @@ def create_dashboard_router() -> APIRouter:
             else 0.0
         )
 
-        return WatchlistResponse(
+        result = WatchlistResponse(
             tickers=items,
             portfolio_value=round(total_value, 2),
             daily_change=round(daily_chg, 2),
             daily_change_pct=round(daily_pct, 2),
         )
+        cache.set(
+            cache_key,
+            result.model_dump_json(),
+            TTL_VOLATILE,
+        )
+        return result
 
     @router.get(
         "/forecasts/summary",
@@ -147,6 +200,17 @@ def create_dashboard_router() -> APIRouter:
         user: UserContext = Depends(get_current_user),
     ):
         """Latest forecast runs per linked ticker."""
+        cache = get_cache()
+        cache_key = (
+            f"cache:dash:forecasts:{user.user_id}"
+        )
+        hit = cache.get(cache_key)
+        if hit is not None:
+            return Response(
+                content=hit,
+                media_type="application/json",
+            )
+
         repo = _helpers._get_repo()
         stock_repo = _get_stock_repo()
         tickers = repo.get_user_tickers(user.user_id)
@@ -214,7 +278,13 @@ def create_dashboard_router() -> APIRouter:
                 )
             )
 
-        return ForecastsResponse(forecasts=forecasts)
+        result = ForecastsResponse(forecasts=forecasts)
+        cache.set(
+            cache_key,
+            result.model_dump_json(),
+            TTL_STABLE,
+        )
+        return result
 
     @router.get(
         "/analysis/latest",
@@ -224,6 +294,17 @@ def create_dashboard_router() -> APIRouter:
         user: UserContext = Depends(get_current_user),
     ):
         """Latest analysis summaries + signals."""
+        cache = get_cache()
+        cache_key = (
+            f"cache:dash:analysis:{user.user_id}"
+        )
+        hit = cache.get(cache_key)
+        if hit is not None:
+            return Response(
+                content=hit,
+                media_type="application/json",
+            )
+
         repo = _helpers._get_repo()
         stock_repo = _get_stock_repo()
         tickers = repo.get_user_tickers(user.user_id)
@@ -235,24 +316,29 @@ def create_dashboard_router() -> APIRouter:
         if df.empty:
             return AnalysisResponse()
 
-        analyses: list[TickerAnalysis] = []
-        for _, row in df.iterrows():
-            # Fetch numeric indicator values from
-            # technical_indicators (analysis_summary
-            # only stores signal text, not numbers).
-            ticker = str(row["ticker"])
-            ti = stock_repo.get_technical_indicators(
-                ticker,
-            )
-            ti_vals: dict = {}
-            if not ti.empty:
-                latest = ti.iloc[-1]
-                ti_vals = {
+        # Batch fetch indicators: 1 query instead of N
+        ti_df = (
+            stock_repo
+            .get_technical_indicators_batch(tickers)
+        )
+        # Build map: ticker -> latest indicator vals
+        ti_map: dict = {}
+        if not ti_df.empty:
+            for ticker_val, grp in ti_df.groupby(
+                "ticker"
+            ):
+                latest = grp.iloc[-1]
+                ti_map[ticker_val] = {
                     "rsi_14": latest.get("rsi_14"),
                     "macd": latest.get("macd"),
                     "sma_50": latest.get("sma_50"),
                     "sma_200": latest.get("sma_200"),
                 }
+
+        analyses: list[TickerAnalysis] = []
+        for _, row in df.iterrows():
+            ticker = str(row["ticker"])
+            ti_vals = ti_map.get(ticker, {})
 
             signals: list[SignalInfo] = []
             _add_signal(
@@ -300,7 +386,13 @@ def create_dashboard_router() -> APIRouter:
                 )
             )
 
-        return AnalysisResponse(analyses=analyses)
+        result = AnalysisResponse(analyses=analyses)
+        cache.set(
+            cache_key,
+            result.model_dump_json(),
+            TTL_STABLE,
+        )
+        return result
 
     @router.get(
         "/llm-usage",
@@ -310,6 +402,22 @@ def create_dashboard_router() -> APIRouter:
         user: UserContext = Depends(get_current_user),
     ):
         """LLM usage stats — own usage or all (superuser)."""
+        cache = get_cache()
+        cache_uid = (
+            "all"
+            if user.role == "superuser"
+            else user.user_id
+        )
+        cache_key = (
+            f"cache:dash:llm-usage:{cache_uid}"
+        )
+        hit = cache.get(cache_key)
+        if hit is not None:
+            return Response(
+                content=hit,
+                media_type="application/json",
+            )
+
         stock_repo = _get_stock_repo()
         uid = (
             None
@@ -340,7 +448,7 @@ def create_dashboard_router() -> APIRouter:
             for name, info in per_model.items()
         ]
 
-        return LLMUsageResponse(
+        result = LLMUsageResponse(
             total_requests=total_req,
             total_cost_usd=float(
                 data.get("total_cost", 0) or 0
@@ -351,6 +459,12 @@ def create_dashboard_router() -> APIRouter:
             models=models,
             daily_trend=data.get("daily_trend", []),
         )
+        cache.set(
+            cache_key,
+            result.model_dump_json(),
+            TTL_VOLATILE,
+        )
+        return result
 
     @router.get(
         "/registry",
@@ -360,16 +474,34 @@ def create_dashboard_router() -> APIRouter:
         user: UserContext = Depends(get_current_user),
     ):
         """All registered tickers with company info."""
+        cache = get_cache()
+        cache_key = "cache:dash:registry"
+        hit = cache.get(cache_key)
+        if hit is not None:
+            return Response(
+                content=hit,
+                media_type="application/json",
+            )
+
         stock_repo = _get_stock_repo()
         registry = stock_repo.get_all_registry()
 
+        # Batch fetch company info: 1 query instead
+        # of M (one per registered ticker)
+        reg_tickers = list(registry.keys())
+        info_df = stock_repo.get_company_info_batch(
+            reg_tickers,
+        ) if reg_tickers else None
+        info_map: dict = {}
+        if info_df is not None and not info_df.empty:
+            for _, row in info_df.iterrows():
+                info_map[row["ticker"]] = (
+                    row.to_dict()
+                )
+
         items: list[RegistryTicker] = []
         for ticker, meta in registry.items():
-            info = (
-                stock_repo.get_dashboard_company_info(
-                    ticker,
-                )
-            )
+            info = info_map.get(ticker)
             mkt = "india" if (
                 ticker.endswith(".NS")
                 or ticker.endswith(".BO")
@@ -404,7 +536,13 @@ def create_dashboard_router() -> APIRouter:
             )
 
         items.sort(key=lambda t: t.ticker)
-        return RegistryResponse(tickers=items)
+        result = RegistryResponse(tickers=items)
+        cache.set(
+            cache_key,
+            result.model_dump_json(),
+            TTL_STABLE,
+        )
+        return result
 
     @router.get(
         "/compare",
@@ -418,6 +556,7 @@ def create_dashboard_router() -> APIRouter:
         _user: UserContext = Depends(get_current_user),
     ):
         """Normalized price comparison + correlation."""
+        import hashlib
         import numpy as np
         import pandas as pd
 
@@ -430,12 +569,63 @@ def create_dashboard_router() -> APIRouter:
         if len(symbols) < 2:
             return CompareResponse(tickers=symbols)
 
+        cache = get_cache()
+        tickers_hash = hashlib.md5(
+            ",".join(sorted(symbols)).encode(),
+        ).hexdigest()[:12]
+        cache_key = (
+            f"cache:dash:compare:{tickers_hash}"
+        )
+        hit = cache.get(cache_key)
+        if hit is not None:
+            return Response(
+                content=hit,
+                media_type="application/json",
+            )
+
+        # Batch fetch: 4 queries instead of 4N
+        ohlcv_df = stock_repo.get_ohlcv_batch(symbols)
+        summary_df = (
+            stock_repo
+            .get_analysis_summary_batch(symbols)
+        )
+        info_df = stock_repo.get_company_info_batch(
+            symbols,
+        )
+        ti_df = (
+            stock_repo
+            .get_technical_indicators_batch(symbols)
+        )
+
+        # Index batch results by ticker
+        summary_map: dict = {}
+        if not summary_df.empty:
+            for _, row in summary_df.iterrows():
+                summary_map[row["ticker"]] = (
+                    row.to_dict()
+                )
+        info_map: dict = {}
+        if not info_df.empty:
+            for _, row in info_df.iterrows():
+                info_map[row["ticker"]] = (
+                    row.to_dict()
+                )
+        ti_map: dict = {}
+        if not ti_df.empty:
+            for t_val, grp in ti_df.groupby(
+                "ticker"
+            ):
+                latest = grp.iloc[-1]
+                ti_map[t_val] = latest.to_dict()
+
         series: list[CompareSeriesItem] = []
         metrics: list[CompareMetric] = []
         returns_map: dict[str, pd.Series] = {}
 
         for sym in symbols:
-            ohlcv = stock_repo.get_ohlcv(sym)
+            ohlcv = ohlcv_df[
+                ohlcv_df["ticker"] == sym
+            ] if not ohlcv_df.empty else ohlcv_df
             if ohlcv.empty or len(ohlcv) < 2:
                 continue
 
@@ -462,27 +652,76 @@ def create_dashboard_router() -> APIRouter:
             daily_ret = close.pct_change().dropna()
             returns_map[sym] = daily_ret
 
-            # Metrics from analysis_summary
-            summary = (
-                stock_repo
-                .get_latest_analysis_summary(sym)
+            summary = summary_map.get(sym)
+            cur_price = round(
+                float(close.iloc[-1]), 2,
             )
-            cur_price = round(float(close.iloc[-1]), 2)
             ccy = "USD"
-            info = (
-                stock_repo
-                .get_dashboard_company_info(sym)
-            )
+            info = info_map.get(sym)
             if info:
                 ccy = str(
                     info.get("currency", "USD")
                     or "USD"
                 )
 
+            # RSI + MACD from technical indicators
+            ti = ti_map.get(sym, {})
+            rsi_val = _safe(ti.get("rsi_14"))
+            macd_v = ti.get("macd")
+            sig_v = ti.get("macd_signal")
+            macd_lbl = None
+            if macd_v is not None and (
+                sig_v is not None
+            ):
+                try:
+                    macd_lbl = (
+                        "Bullish"
+                        if float(macd_v)
+                        > float(sig_v)
+                        else "Bearish"
+                    )
+                except (ValueError, TypeError):
+                    pass
+
+            # Sentiment from summary
+            sent = None
+            if summary:
+                rsi_sig = str(
+                    summary.get("rsi_signal", "")
+                ).lower()
+                macd_sig = str(
+                    summary.get(
+                        "macd_signal_text", ""
+                    )
+                ).lower()
+                bull = sum(
+                    1
+                    for s in (rsi_sig, macd_sig)
+                    if "bull" in s or "above" in s
+                )
+                bear = sum(
+                    1
+                    for s in (rsi_sig, macd_sig)
+                    if "bear" in s or "below" in s
+                )
+                if bull > bear:
+                    sent = "Bullish"
+                elif bear > bull:
+                    sent = "Bearish"
+                else:
+                    sent = "Neutral"
+
+            common = dict(
+                ticker=sym,
+                current_price=cur_price,
+                currency=ccy,
+                rsi_14=rsi_val,
+                macd_signal=macd_lbl,
+                sentiment=sent,
+            )
             if summary:
                 metrics.append(
                     CompareMetric(
-                        ticker=sym,
                         annualized_return_pct=_safe(
                             summary.get(
                                 "annualized_return_pct"
@@ -494,24 +733,21 @@ def create_dashboard_router() -> APIRouter:
                             )
                         ),
                         sharpe_ratio=_safe(
-                            summary.get("sharpe_ratio")
+                            summary.get(
+                                "sharpe_ratio"
+                            )
                         ),
                         max_drawdown_pct=_safe(
                             summary.get(
                                 "max_drawdown_pct"
                             )
                         ),
-                        current_price=cur_price,
-                        currency=ccy,
+                        **common,
                     )
                 )
             else:
                 metrics.append(
-                    CompareMetric(
-                        ticker=sym,
-                        current_price=cur_price,
-                        currency=ccy,
-                    )
+                    CompareMetric(**common)
                 )
 
         # Build correlation matrix
@@ -534,12 +770,83 @@ def create_dashboard_router() -> APIRouter:
                 for row in corr
             ]
 
-        return CompareResponse(
+        result = CompareResponse(
             tickers=valid,
             series=series,
             correlation=corr_matrix,
             metrics=metrics,
         )
+        cache.set(
+            cache_key,
+            result.model_dump_json(),
+            TTL_STABLE,
+        )
+        return result
+
+    # -------------------------------------------------------
+    # Aggregate endpoint (single request for all widgets)
+    # -------------------------------------------------------
+
+    @router.get(
+        "/home",
+        response_model=DashboardHomeResponse,
+    )
+    async def get_dashboard_home(
+        user: UserContext = Depends(get_current_user),
+    ):
+        """All dashboard widget data in one response.
+
+        Returns watchlist, forecasts, analysis, and
+        LLM usage so the frontend can render the
+        entire dashboard with a single network call.
+        """
+        cache = get_cache()
+        cache_key = (
+            f"cache:dash:home:{user.user_id}"
+        )
+        hit = cache.get(cache_key)
+        if hit is not None:
+            return Response(
+                content=hit,
+                media_type="application/json",
+            )
+
+        # Reuse existing endpoint functions — they
+        # each check their own cache internally.
+        wl = await get_watchlist(user)
+        fc = await get_forecasts_summary(user)
+        an = await get_analysis_latest(user)
+        lu = await get_llm_usage(user)
+
+        # If the sub-call returned a raw Response
+        # (cache hit), parse it back to the model.
+        def _ensure_model(val, cls):
+            if isinstance(val, Response):
+                return cls.model_validate_json(
+                    val.body,
+                )
+            return val
+
+        result = DashboardHomeResponse(
+            watchlist=_ensure_model(
+                wl, WatchlistResponse,
+            ),
+            forecasts=_ensure_model(
+                fc, ForecastsResponse,
+            ),
+            analysis=_ensure_model(
+                an, AnalysisResponse,
+            ),
+            llm_usage=_ensure_model(
+                lu, LLMUsageResponse,
+            ),
+        )
+        cache.set(
+            cache_key,
+            result.model_dump_json(),
+            TTL_VOLATILE,
+        )
+        return result
 
     # -------------------------------------------------------
     # Chart endpoints (Analysis page)
@@ -560,11 +867,21 @@ def create_dashboard_router() -> APIRouter:
             "chart/ohlcv ticker=%s user=%s",
             ticker, user.user_id,
         )
+        cache = get_cache()
+        t_upper = ticker.upper()
+        cache_key = f"cache:chart:ohlcv:{t_upper}"
+        hit = cache.get(cache_key)
+        if hit is not None:
+            return Response(
+                content=hit,
+                media_type="application/json",
+            )
+
         stock_repo = _get_stock_repo()
-        df = stock_repo.get_ohlcv(ticker.upper())
+        df = stock_repo.get_ohlcv(t_upper)
 
         if df.empty:
-            return OHLCVResponse(ticker=ticker.upper())
+            return OHLCVResponse(ticker=t_upper)
 
         points: list[OHLCVPoint] = []
         for _, row in df.iterrows():
@@ -579,10 +896,15 @@ def create_dashboard_router() -> APIRouter:
                 )
             )
 
-        return OHLCVResponse(
-            ticker=ticker.upper(),
-            data=points,
+        result = OHLCVResponse(
+            ticker=t_upper, data=points,
         )
+        cache.set(
+            cache_key,
+            result.model_dump_json(),
+            TTL_STABLE,
+        )
+        return result
 
     @router.get(
         "/chart/indicators",
@@ -599,14 +921,26 @@ def create_dashboard_router() -> APIRouter:
             "chart/indicators ticker=%s user=%s",
             ticker, user.user_id,
         )
+        cache = get_cache()
+        t_upper = ticker.upper()
+        cache_key = (
+            f"cache:chart:indicators:{t_upper}"
+        )
+        hit = cache.get(cache_key)
+        if hit is not None:
+            return Response(
+                content=hit,
+                media_type="application/json",
+            )
+
         stock_repo = _get_stock_repo()
         df = stock_repo.get_technical_indicators(
-            ticker.upper(),
+            t_upper,
         )
 
         if df.empty:
             return IndicatorsResponse(
-                ticker=ticker.upper(),
+                ticker=t_upper,
             )
 
         points: list[IndicatorPoint] = []
@@ -636,10 +970,15 @@ def create_dashboard_router() -> APIRouter:
                 )
             )
 
-        return IndicatorsResponse(
-            ticker=ticker.upper(),
-            data=points,
+        result = IndicatorsResponse(
+            ticker=t_upper, data=points,
         )
+        cache.set(
+            cache_key,
+            result.model_dump_json(),
+            TTL_STABLE,
+        )
+        return result
 
     @router.get(
         "/chart/forecast-series",
@@ -661,14 +1000,27 @@ def create_dashboard_router() -> APIRouter:
             "horizon=%d user=%s",
             ticker, horizon, user.user_id,
         )
+        cache = get_cache()
+        t_upper = ticker.upper()
+        cache_key = (
+            f"cache:chart:forecast:"
+            f"{t_upper}:{horizon}"
+        )
+        hit = cache.get(cache_key)
+        if hit is not None:
+            return Response(
+                content=hit,
+                media_type="application/json",
+            )
+
         stock_repo = _get_stock_repo()
         df = stock_repo.get_latest_forecast_series(
-            ticker.upper(), horizon,
+            t_upper, horizon,
         )
 
         if df.empty:
             return ForecastSeriesResponse(
-                ticker=ticker.upper(),
+                ticker=t_upper,
                 horizon_months=horizon,
             )
 
@@ -691,11 +1043,135 @@ def create_dashboard_router() -> APIRouter:
                 )
             )
 
-        return ForecastSeriesResponse(
-            ticker=ticker.upper(),
+        result = ForecastSeriesResponse(
+            ticker=t_upper,
             horizon_months=horizon,
             data=points,
         )
+        cache.set(
+            cache_key,
+            result.model_dump_json(),
+            TTL_STABLE,
+        )
+        return result
+
+    # -------------------------------------------------------
+    # Per-ticker refresh (background pipeline)
+    # -------------------------------------------------------
+
+    # Process-wide RefreshManager shared across requests.
+    import sys as _sys
+
+    _project_root = os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__))
+    ) if "__file__" not in dir() else os.path.dirname(
+        os.path.dirname(__file__)
+    )
+    _dash_dir = os.path.join(
+        _project_root, "dashboard",
+    )
+    if _dash_dir not in _sys.path:
+        _sys.path.insert(0, _dash_dir)
+
+    from dashboard.callbacks.refresh_state import (
+        RefreshManager,
+    )
+
+    _refresh_mgr = RefreshManager(max_workers=2)
+
+    @router.post("/refresh/{ticker}")
+    async def start_refresh(
+        ticker: str,
+        user: UserContext = Depends(
+            get_current_user
+        ),
+    ):
+        """Start a background refresh for *ticker*.
+
+        Runs the 6-step pipeline (OHLCV fetch,
+        company info, dividends, technical analysis,
+        quarterly results, Prophet forecast) in a
+        background thread.  Returns immediately with
+        ``{"status": "started"}`` or
+        ``{"status": "already_running"}``.
+        """
+        t = ticker.upper()
+        _logger.info(
+            "refresh requested ticker=%s user=%s",
+            t, user.user_id,
+        )
+        from dashboard.services.stock_refresh import (
+            run_full_refresh,
+        )
+
+        submitted = _refresh_mgr.submit_if_idle(
+            t, run_full_refresh, t, 9,
+        )
+        return {
+            "ticker": t,
+            "status": (
+                "started" if submitted
+                else "already_running"
+            ),
+        }
+
+    @router.get("/refresh/{ticker}/status")
+    async def refresh_status(
+        ticker: str,
+        _user: UserContext = Depends(
+            get_current_user
+        ),
+    ):
+        """Poll refresh status for *ticker*.
+
+        Returns ``pending``, ``success``, ``error``,
+        or ``idle`` (no refresh in progress).
+        """
+        t = ticker.upper()
+        fut = _refresh_mgr.get(t)
+        if fut is None:
+            return {"ticker": t, "status": "idle"}
+        if not fut.done():
+            return {"ticker": t, "status": "pending"}
+
+        # Harvest result
+        _refresh_mgr.pop(t)
+        try:
+            result = fut.result()
+            # Invalidate all caches for this ticker
+            cache = get_cache()
+            for pattern in [
+                "cache:dash:*",
+                f"cache:chart:ohlcv:{t}",
+                f"cache:chart:indicators:{t}",
+                f"cache:chart:forecast:{t}:*",
+                "cache:insights:*",
+            ]:
+                if "*" in pattern:
+                    cache.invalidate(pattern)
+                else:
+                    cache.invalidate_exact(pattern)
+
+            return {
+                "ticker": t,
+                "status": "success",
+                "steps": (
+                    result.steps
+                    if hasattr(result, "steps")
+                    else []
+                ),
+                "accuracy": (
+                    result.accuracy
+                    if hasattr(result, "accuracy")
+                    else None
+                ),
+            }
+        except Exception as exc:
+            return {
+                "ticker": t,
+                "status": "error",
+                "error": str(exc),
+            }
 
     return router
 

@@ -15,6 +15,7 @@ import logging
 import queue
 import threading
 import time
+from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -53,7 +54,32 @@ def create_app(
     Returns:
         A fully configured :class:`~fastapi.FastAPI` instance.
     """
-    app = FastAPI(title="AI Agent API")
+    @asynccontextmanager
+    async def _lifespan(a):
+        """Startup: warm Redis cache."""
+        try:
+            from cache_warmup import (
+                warm_shared,
+                warm_tickers,
+            )
+
+            warm_shared()
+            threading.Thread(
+                target=warm_tickers,
+                daemon=True,
+                name="cache-warmup",
+            ).start()
+        except Exception:
+            _logger.warning(
+                "cache warm-up skipped",
+                exc_info=True,
+            )
+        yield
+
+    app = FastAPI(
+        title="AI Agent API",
+        lifespan=_lifespan,
+    )
 
     # CORS: whitelist known front-end origins.
     _allowed_origins = [
@@ -408,9 +434,10 @@ def create_app(
     )
     app.include_router(admin_router)
 
-    # Dashboard + audit endpoints.
+    # Dashboard + audit + insights endpoints.
     from dashboard_routes import create_dashboard_router
     from audit_routes import create_audit_router
+    from insights_routes import create_insights_router
 
     app.include_router(
         create_dashboard_router(),
@@ -418,6 +445,10 @@ def create_app(
     )
     app.include_router(
         create_audit_router(),
+        prefix="/v1",
+    )
+    app.include_router(
+        create_insights_router(),
         prefix="/v1",
     )
 

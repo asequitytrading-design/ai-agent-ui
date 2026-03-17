@@ -2,12 +2,12 @@
 /**
  * Generic data-fetching hook for dashboard widgets.
  *
- * Wraps ``apiFetch`` with loading/error state management
- * and AbortController cleanup on unmount.  Typed wrappers
- * for each endpoint are exported below.
+ * Uses SWR for automatic caching, deduplication, and
+ * background revalidation.  Navigating away and back
+ * returns cached data instantly.
  */
 
-import { useState, useEffect } from "react";
+import useSWR from "swr";
 import { apiFetch } from "@/lib/apiFetch";
 import { API_URL } from "@/lib/config";
 import type {
@@ -15,6 +15,8 @@ import type {
   ForecastsResponse,
   AnalysisResponse,
   LLMUsageResponse,
+  RegistryResponse,
+  DashboardHomeResponse,
 } from "@/lib/types";
 
 export interface DashboardData<T> {
@@ -23,50 +25,33 @@ export interface DashboardData<T> {
   error: string | null;
 }
 
+async function fetcher<T>(url: string): Promise<T> {
+  const r = await apiFetch(url);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
 function useDashboardData<T>(
   endpoint: string,
 ): DashboardData<T> {
-  const [value, setValue] = useState<T | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { data, error, isLoading } = useSWR<T>(
+    `${API_URL}${endpoint}`,
+    fetcher,
+    {
+      revalidateOnFocus: false,
+      dedupingInterval: 120_000,
+    },
+  );
 
-  useEffect(() => {
-    const controller = new AbortController();
-    setLoading(true);
-    setError(null);
-
-    apiFetch(`${API_URL}${endpoint}`, {
-      signal: controller.signal,
-    })
-      .then((r) => {
-        if (!r.ok) {
-          throw new Error(`HTTP ${r.status}`);
-        }
-        return r.json();
-      })
-      .then((data: T) => {
-        setValue(data);
-        setError(null);
-      })
-      .catch((err: unknown) => {
-        if (
-          err instanceof Error &&
-          err.name === "AbortError"
-        ) {
-          return;
-        }
-        setError(
-          err instanceof Error
-            ? err.message
-            : "Failed to load",
-        );
-      })
-      .finally(() => setLoading(false));
-
-    return () => controller.abort();
-  }, [endpoint]);
-
-  return { value, loading, error };
+  return {
+    value: data ?? null,
+    loading: isLoading,
+    error: error
+      ? error instanceof Error
+        ? error.message
+        : "Failed to load"
+      : null,
+  };
 }
 
 // ---------------------------------------------------------------
@@ -95,4 +80,92 @@ export function useLLMUsage(): DashboardData<LLMUsageResponse> {
   return useDashboardData<LLMUsageResponse>(
     "/dashboard/llm-usage",
   );
+}
+
+/**
+ * Aggregate hook — fetches all dashboard widget data
+ * in a single request via ``/dashboard/home``.
+ * Returns individual ``DashboardData`` wrappers so the
+ * page can pass them to widgets unchanged.
+ */
+export function useDashboardHome() {
+  const { data, error, isLoading, mutate } =
+    useSWR<DashboardHomeResponse>(
+      `${API_URL}/dashboard/home`,
+      fetcher,
+      {
+        revalidateOnFocus: false,
+        dedupingInterval: 120_000,
+      },
+    );
+
+  const errMsg = error
+    ? error instanceof Error
+      ? error.message
+      : "Failed to load"
+    : null;
+
+  return {
+    watchlist: {
+      value: data?.watchlist ?? null,
+      loading: isLoading,
+      error: errMsg,
+    } as DashboardData<WatchlistResponse>,
+    forecasts: {
+      value: data?.forecasts ?? null,
+      loading: isLoading,
+      error: errMsg,
+    } as DashboardData<ForecastsResponse>,
+    analysis: {
+      value: data?.analysis ?? null,
+      loading: isLoading,
+      error: errMsg,
+    } as DashboardData<AnalysisResponse>,
+    llmUsage: {
+      value: data?.llm_usage ?? null,
+      loading: isLoading,
+      error: errMsg,
+    } as DashboardData<LLMUsageResponse>,
+    /** Force re-fetch all dashboard data. */
+    refresh: () => {
+      mutate();
+    },
+  };
+}
+
+export function useRegistry(): DashboardData<RegistryResponse> {
+  return useDashboardData<RegistryResponse>(
+    "/dashboard/registry",
+  );
+}
+
+interface UserTickersResponse {
+  tickers: string[];
+}
+
+export function useUserTickers() {
+  const { data, error, isLoading, mutate } =
+    useSWR<UserTickersResponse>(
+      `${API_URL}/users/me/tickers`,
+      fetcher,
+      {
+        revalidateOnFocus: false,
+        dedupingInterval: 120_000,
+      },
+    );
+
+  return {
+    value: data ?? null,
+    loading: isLoading,
+    error: error
+      ? error instanceof Error
+        ? error.message
+        : "Failed to load"
+      : null,
+    mutate,
+  };
+}
+
+export function useProfile<T = Record<string, unknown>>(): DashboardData<T> {
+  return useDashboardData<T>("/auth/me");
 }

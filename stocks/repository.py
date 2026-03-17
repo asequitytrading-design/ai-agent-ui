@@ -251,6 +251,175 @@ class StockRepository:
                 return filtered[cols]
             return filtered
 
+    def _scan_tickers(
+        self,
+        identifier: str,
+        tickers: list[str],
+        selected_fields: list[str] | None = None,
+    ) -> pd.DataFrame:
+        """Scan a table for multiple tickers in one query.
+
+        Uses ``In("ticker", tickers)`` predicate for
+        Iceberg-level partition pruning.  Falls back to
+        full scan with pandas ``isin()`` on error.
+
+        Args:
+            identifier: Fully-qualified table name.
+            tickers: List of ticker symbols.
+            selected_fields: Optional column projection.
+
+        Returns:
+            DataFrame with rows for all requested
+            tickers, or empty DataFrame.
+        """
+        if not tickers:
+            return pd.DataFrame()
+        try:
+            from pyiceberg.expressions import In
+
+            tbl = self._load_table(identifier)
+            if identifier in self._dirty_tables:
+                tbl.refresh()
+                self._dirty_tables.discard(
+                    identifier
+                )
+            scan_kwargs: dict[str, Any] = {
+                "row_filter": In(
+                    "ticker", tickers,
+                ),
+            }
+            if selected_fields:
+                scan_kwargs["selected_fields"] = (
+                    selected_fields
+                )
+            return tbl.scan(
+                **scan_kwargs
+            ).to_pandas()
+        except Exception as exc:
+            _logger.warning(
+                "Batch scan failed for %s (%s);"
+                " falling back to full scan.",
+                identifier,
+                exc,
+            )
+            df = self._table_to_df(identifier)
+            if df.empty:
+                return df
+            filtered = df[
+                df["ticker"].isin(tickers)
+            ].copy()
+            if selected_fields:
+                cols = [
+                    c
+                    for c in selected_fields
+                    if c in filtered.columns
+                ]
+                return filtered[cols]
+            return filtered
+
+    def get_ohlcv_batch(
+        self,
+        tickers: list[str],
+    ) -> pd.DataFrame:
+        """Return OHLCV data for multiple tickers.
+
+        Single Iceberg scan with ``In`` predicate
+        instead of N individual scans.
+
+        Args:
+            tickers: List of ticker symbols.
+
+        Returns:
+            DataFrame sorted by ticker, date.
+        """
+        df = self._scan_tickers(
+            _OHLCV,
+            [t.upper() for t in tickers],
+        )
+        if df.empty:
+            return df
+        return df.sort_values(
+            ["ticker", "date"]
+        ).reset_index(drop=True)
+
+    def get_technical_indicators_batch(
+        self,
+        tickers: list[str],
+    ) -> pd.DataFrame:
+        """Return technical indicators for tickers.
+
+        Single Iceberg scan with ``In`` predicate.
+
+        Args:
+            tickers: List of ticker symbols.
+
+        Returns:
+            DataFrame sorted by ticker, date.
+        """
+        df = self._scan_tickers(
+            _TECHNICAL_INDICATORS,
+            [t.upper() for t in tickers],
+        )
+        if df.empty:
+            return df
+        return df.sort_values(
+            ["ticker", "date"]
+        ).reset_index(drop=True)
+
+    def get_company_info_batch(
+        self,
+        tickers: list[str],
+    ) -> pd.DataFrame:
+        """Latest company info for multiple tickers.
+
+        Single Iceberg scan, then dedup to latest
+        ``fetched_at`` per ticker.
+
+        Args:
+            tickers: List of ticker symbols.
+
+        Returns:
+            DataFrame with one row per ticker.
+        """
+        df = self._scan_tickers(
+            _COMPANY_INFO,
+            [t.upper() for t in tickers],
+        )
+        if df.empty:
+            return df
+        if "fetched_at" in df.columns:
+            df = df.sort_values("fetched_at")
+        return df.drop_duplicates(
+            subset=["ticker"], keep="last",
+        ).reset_index(drop=True)
+
+    def get_analysis_summary_batch(
+        self,
+        tickers: list[str],
+    ) -> pd.DataFrame:
+        """Latest analysis summary for tickers.
+
+        Single Iceberg scan, then dedup to latest
+        ``analysis_date`` per ticker.
+
+        Args:
+            tickers: List of ticker symbols.
+
+        Returns:
+            DataFrame with one row per ticker.
+        """
+        df = self._scan_tickers(
+            _ANALYSIS_SUMMARY,
+            [t.upper() for t in tickers],
+        )
+        if df.empty:
+            return df
+        if "analysis_date" in df.columns:
+            df = df.sort_values("analysis_date")
+        return df.drop_duplicates(
+            subset=["ticker"], keep="last",
+        ).reset_index(drop=True)
+
     def _scan_two_filters(
         self,
         identifier: str,
@@ -502,6 +671,7 @@ class StockRepository:
             try:
                 getattr(tbl, operation)(*args, **kwargs)
                 self._dirty_tables.add(identifier)
+                self._invalidate_cache(identifier)
                 return
             except CommitFailedException as exc:
                 last_exc = exc
@@ -518,6 +688,92 @@ class StockRepository:
                     )
                     time.sleep(delay)
         raise last_exc  # type: ignore[misc]
+
+    # Table → cache key patterns that must be
+    # invalidated when the table is written to.
+    _CACHE_INVALIDATION_MAP: dict[str, list[str]] = {
+        "stocks.ohlcv": [
+            "cache:chart:ohlcv:*",
+            "cache:dash:watchlist:*",
+            "cache:dash:home:*",
+            "cache:dash:compare:*",
+            "cache:insights:screener:*",
+            "cache:insights:correlation:*",
+        ],
+        "stocks.technical_indicators": [
+            "cache:chart:indicators:*",
+            "cache:dash:analysis:*",
+            "cache:dash:home:*",
+            "cache:insights:screener:*",
+        ],
+        "stocks.analysis_summary": [
+            "cache:dash:analysis:*",
+            "cache:dash:home:*",
+            "cache:insights:screener:*",
+            "cache:insights:risk:*",
+            "cache:insights:sectors:*",
+        ],
+        "stocks.forecast_runs": [
+            "cache:dash:forecasts:*",
+            "cache:dash:home:*",
+            "cache:chart:forecast:*",
+            "cache:insights:targets:*",
+        ],
+        "stocks.forecasts": [
+            "cache:chart:forecast:*",
+        ],
+        "stocks.company_info": [
+            "cache:dash:watchlist:*",
+            "cache:dash:registry",
+            "cache:insights:screener:*",
+            "cache:insights:targets:*",
+            "cache:insights:dividends:*",
+            "cache:insights:risk:*",
+            "cache:insights:sectors:*",
+            "cache:insights:quarterly:*",
+        ],
+        "stocks.dividends": [
+            "cache:insights:dividends:*",
+        ],
+        "stocks.quarterly_results": [
+            "cache:insights:quarterly:*",
+        ],
+        "stocks.llm_usage": [
+            "cache:dash:llm-usage:*",
+            "cache:dash:home:*",
+            "cache:admin:metrics",
+        ],
+        "stocks.registry": [
+            "cache:dash:registry",
+        ],
+    }
+
+    def _invalidate_cache(
+        self, identifier: str,
+    ) -> None:
+        """Invalidate Redis cache keys after write.
+
+        Uses :data:`_CACHE_INVALIDATION_MAP` to find
+        which cache patterns correspond to the given
+        Iceberg table identifier.
+
+        Args:
+            identifier: Fully-qualified table name
+                (e.g. ``"stocks.ohlcv"``).
+        """
+        try:
+            from cache import get_cache
+        except ImportError:
+            return
+        cache = get_cache()
+        patterns = self._CACHE_INVALIDATION_MAP.get(
+            identifier, [],
+        )
+        for pattern in patterns:
+            if "*" in pattern:
+                cache.invalidate(pattern)
+            else:
+                cache.invalidate_exact(pattern)
 
     def _append_rows(self, identifier: str, arrow_table: pa.Table) -> None:
         """Append a PyArrow table to an Iceberg table.
@@ -2534,9 +2790,8 @@ class StockRepository:
     ) -> pd.DataFrame:
         """Get latest forecast_runs per ticker.
 
-        Reads the full forecast_runs table, filters to
-        the requested tickers, and keeps only the row
-        with the maximum ``run_date`` for each ticker.
+        Uses predicate push-down via ``_scan_tickers``
+        instead of loading the full table.
 
         Args:
             tickers: List of ticker symbols to include.
@@ -2546,10 +2801,9 @@ class StockRepository:
             run), or empty DataFrame.
         """
         try:
-            df = self._table_to_df(_FORECAST_RUNS)
-            if df.empty:
-                return df
-            df = df[df["ticker"].isin(tickers)]
+            df = self._scan_tickers(
+                _FORECAST_RUNS, tickers,
+            )
             if df.empty:
                 return df
             idx = df.groupby("ticker")[
@@ -2572,9 +2826,8 @@ class StockRepository:
     ) -> pd.DataFrame:
         """Get latest analysis_summary per ticker.
 
-        Reads the full analysis_summary table, filters
-        to the requested tickers, and keeps the row with
-        the maximum ``analysis_date`` per ticker.
+        Uses predicate push-down via ``_scan_tickers``
+        instead of loading the full table.
 
         Args:
             tickers: List of ticker symbols to include.
@@ -2584,10 +2837,9 @@ class StockRepository:
             analysis), or empty DataFrame.
         """
         try:
-            df = self._table_to_df(_ANALYSIS_SUMMARY)
-            if df.empty:
-                return df
-            df = df[df["ticker"].isin(tickers)]
+            df = self._scan_tickers(
+                _ANALYSIS_SUMMARY, tickers,
+            )
             if df.empty:
                 return df
             idx = df.groupby("ticker")[
@@ -2633,11 +2885,49 @@ class StockRepository:
             "daily_trend": [],
         }
         try:
-            df = self._table_to_df(self._LLM_USAGE)
-            if df.empty:
-                return empty
+            from pyiceberg.expressions import (
+                EqualTo,
+                GreaterThanOrEqual,
+            )
+
+            cutoff_date = (
+                datetime.now(tz=timezone.utc)
+                - timedelta(days=days)
+            ).date()
+            row_filter: Any = GreaterThanOrEqual(
+                "request_date", cutoff_date,
+            )
             if user_id is not None:
-                df = df[df["user_id"] == user_id]
+                from pyiceberg.expressions import And
+
+                row_filter = And(
+                    row_filter,
+                    EqualTo("user_id", user_id),
+                )
+            try:
+                tbl = self._load_table(
+                    self._LLM_USAGE,
+                )
+                if self._LLM_USAGE in (
+                    self._dirty_tables
+                ):
+                    tbl.refresh()
+                    self._dirty_tables.discard(
+                        self._LLM_USAGE
+                    )
+                df = tbl.scan(
+                    row_filter=row_filter,
+                ).to_pandas()
+            except Exception:
+                df = self._table_to_df(
+                    self._LLM_USAGE,
+                )
+                if not df.empty and (
+                    user_id is not None
+                ):
+                    df = df[
+                        df["user_id"] == user_id
+                    ]
             if df.empty:
                 return empty
 

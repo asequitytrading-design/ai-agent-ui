@@ -15,11 +15,12 @@ import { useTheme } from "@/hooks/useTheme";
 import { API_URL } from "@/lib/config";
 import {
   PlotlyChart,
-  CHART_COLORS,
 } from "@/components/charts/PlotlyChart";
 import {
   buildForecastChart,
+  buildForecastShapes,
 } from "@/components/charts/chartBuilders";
+import { StockChart } from "@/components/charts/StockChart";
 import type {
   OHLCVResponse,
   IndicatorsResponse,
@@ -160,197 +161,34 @@ function AnalysisTab({ ticker }: { ticker: string }) {
   const { resolvedTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
 
-  // Shared 6M default range for all charts
-  const defaultRange = useMemo(() => [
-    new Date(Date.now() - 180 * 86400000)
-      .toISOString().slice(0, 10),
-    new Date().toISOString().slice(0, 10),
-  ], []);
+  // Map API data to StockChart format
+  const chartOhlcv = useMemo(
+    () =>
+      ohlcv?.data.map((d) => ({
+        date: d.date,
+        open: d.open,
+        high: d.high,
+        low: d.low,
+        close: d.close,
+        volume: d.volume,
+      })) ?? [],
+    [ohlcv],
+  );
 
-  // --- Price chart traces (candlestick + volume + SMAs + BB) ---
-  const priceTraces = useMemo(() => {
-    if (!ohlcv || !indicators) return [];
-    const dates = ohlcv.data.map((d) => d.date);
-    const closes = ohlcv.data.map((d) => d.close);
-    const colors = ohlcv.data.map((d) =>
-      d.close >= d.open
-        ? "rgba(16,185,129,0.4)"
-        : "rgba(239,68,68,0.4)",
-    );
-    return [
-      // Candlestick
-      {
-        x: dates,
-        open: ohlcv.data.map((d) => d.open),
-        high: ohlcv.data.map((d) => d.high),
-        low: ohlcv.data.map((d) => d.low),
-        close: closes,
-        type: "candlestick",
-        name: "OHLC",
-        yaxis: "y",
-        increasing: {
-          line: { color: "#10b981", width: 1.5 },
-          fillcolor: "#10b981",
-        },
-        decreasing: {
-          line: { color: "#ef4444", width: 1.5 },
-          fillcolor: "#ef4444",
-        },
-        whiskerwidth: 0.8,
-        hoverinfo: "x+text",
-        text: ohlcv.data.map(
-          (d) =>
-            `O: ${sym}${d.open.toFixed(2)}<br>` +
-            `H: ${sym}${d.high.toFixed(2)}<br>` +
-            `L: ${sym}${d.low.toFixed(2)}<br>` +
-            `C: ${sym}${d.close.toFixed(2)}`,
-        ),
-      },
-      // Volume bars (secondary y-axis)
-      {
-        x: dates,
-        y: ohlcv.data.map((d) => d.volume),
-        type: "bar",
-        name: "Volume",
-        yaxis: "y2",
-        marker: { color: colors },
-        hovertemplate:
-          "Vol: %{y:,.0f}<extra></extra>",
-      },
-      // Bollinger upper band
-      {
-        x: dates,
-        y: indicators.data.map((d) => d.bb_upper),
-        type: "scatter",
-        mode: "lines",
-        name: "BB Upper",
-        line: {
-          color: isDark
-            ? "rgba(165,180,252,0.45)"
-            : "rgba(99,102,241,0.25)",
-          width: 1,
-        },
-        showlegend: false,
-      },
-      // Bollinger lower band (with fill to upper)
-      {
-        x: dates,
-        y: indicators.data.map((d) => d.bb_lower),
-        type: "scatter",
-        mode: "lines",
-        name: "Bollinger",
-        fill: "tonexty",
-        fillcolor: isDark
-          ? "rgba(165,180,252,0.12)"
-          : "rgba(99,102,241,0.06)",
-        line: {
-          color: isDark
-            ? "rgba(165,180,252,0.45)"
-            : "rgba(99,102,241,0.25)",
-          width: 1,
-        },
-      },
-      // SMA 50
-      {
-        x: dates,
-        y: indicators.data.map((d) => d.sma_50),
-        type: "scatter",
-        mode: "lines",
-        name: "SMA 50",
-        line: {
-          color: CHART_COLORS[3],
-          width: 1.5,
-          dash: "dot",
-        },
-      },
-      // SMA 200
-      {
-        x: dates,
-        y: indicators.data.map((d) => d.sma_200),
-        type: "scatter",
-        mode: "lines",
-        name: "SMA 200",
-        line: {
-          color: CHART_COLORS[4],
-          width: 1.5,
-          dash: "dash",
-        },
-      },
-    ] as Plotly.Data[];
-  }, [ohlcv, indicators, isDark, sym]);
-
-  // --- RSI traces (assigned to yaxis3) ---
-  const rsiTraces = useMemo(() => {
-    if (!indicators) return [];
-    const dates = indicators.data.map((d) => d.date);
-    return [
-      {
-        x: dates,
-        y: indicators.data.map((d) => d.rsi_14),
-        type: "scatter",
-        mode: "lines",
-        name: "RSI 14",
-        yaxis: "y3",
-        line: { color: CHART_COLORS[1], width: 1.5 },
-        hovertemplate:
-          "RSI: %{y:.1f}<extra></extra>",
-      },
-    ] as Plotly.Data[];
-  }, [indicators]);
-
-  // --- MACD traces (assigned to yaxis4) ---
-  const macdTraces = useMemo(() => {
-    if (!indicators) return [];
-    const dates = indicators.data.map((d) => d.date);
-    const hist = indicators.data.map(
-      (d) => d.macd_hist ?? 0,
-    );
-    return [
-      {
-        x: dates,
-        y: indicators.data.map((d) => d.macd),
-        type: "scatter",
-        mode: "lines",
-        name: "MACD",
-        yaxis: "y4",
-        line: { color: CHART_COLORS[0], width: 1.5 },
-      },
-      {
-        x: dates,
-        y: indicators.data.map((d) => d.macd_signal),
-        type: "scatter",
-        mode: "lines",
-        name: "Signal",
-        yaxis: "y4",
-        line: {
-          color: CHART_COLORS[3],
-          width: 1.5,
-          dash: "dot",
-        },
-      },
-      {
-        x: dates,
-        y: hist,
-        type: "bar",
-        name: "Histogram",
-        yaxis: "y4",
-        marker: {
-          color: hist.map((v) =>
-            v >= 0 ? "#10b981" : "#ef4444",
-          ),
-        },
-      },
-    ] as Plotly.Data[];
-  }, [indicators]);
-
-  // --- Combined traces for unified chart ---
-  const allTraces = useMemo(
-    () => [
-      ...priceTraces,
-      ...rsiTraces,
-      ...macdTraces,
-    ],
-    [priceTraces, rsiTraces, macdTraces],
+  const chartIndicators = useMemo(
+    () =>
+      indicators?.data.map((d) => ({
+        date: d.date,
+        sma_50: d.sma_50,
+        sma_200: d.sma_200,
+        rsi_14: d.rsi_14,
+        macd: d.macd,
+        macd_signal: d.macd_signal,
+        macd_hist: d.macd_hist,
+        bb_upper: d.bb_upper,
+        bb_lower: d.bb_lower,
+      })) ?? [],
+    [indicators],
   );
 
   // --- Stats ---
@@ -476,106 +314,19 @@ function AnalysisTab({ ticker }: { ticker: string }) {
         />
       </div>
 
-      {/* Unified chart: Price + Volume + RSI + MACD (shared x-axis) */}
+      {/* TradingView chart: Candlestick + Volume + RSI + MACD */}
       <div
         className="
           rounded-xl border border-gray-200
           dark:border-gray-700 bg-white
-          dark:bg-gray-900 shadow-sm p-4
+          dark:bg-gray-900 shadow-sm p-2
         "
       >
-        <PlotlyChart
-          data={allTraces}
-          height={900}
-          config={{ scrollZoom: true }}
-          layout={{
-            hovermode: "x unified",
-            margin: { t: 50, r: 60, b: 40, l: 10 },
-            legend: {
-              orientation: "h",
-              x: 0.5,
-              xanchor: "center",
-              y: 1.05,
-              font: { size: 11 },
-            },
-            // Price (top 55%)
-            yaxis: {
-              side: "right",
-              domain: [0.45, 1],
-              tickformat: ",.0f",
-              nticks: 10,
-            },
-            // Volume (10%)
-            yaxis2: {
-              side: "right",
-              domain: [0.36, 0.44],
-              showgrid: false,
-              showticklabels: false,
-            },
-            // RSI (15%)
-            yaxis3: {
-              side: "right",
-              domain: [0.18, 0.34],
-              range: [0, 100],
-              nticks: 5,
-              tickformat: ".0f",
-            },
-            // MACD (18%)
-            yaxis4: {
-              side: "right",
-              domain: [0, 0.16],
-              nticks: 5,
-            },
-            // Shared x-axis
-            xaxis: {
-              rangeslider: { visible: false },
-              autorange: false,
-              range: defaultRange,
-              rangeselector: {
-                activecolor: "#6366f1",
-                bgcolor: "#f3f4f6",
-                bordercolor: "#d1d5db",
-                borderwidth: 1,
-                buttons: [
-                  { count: 3, label: "3M", step: "month", stepmode: "backward" },
-                  { count: 6, label: "6M", step: "month", stepmode: "backward" },
-                  { count: 1, label: "1Y", step: "year", stepmode: "backward" },
-                  { count: 2, label: "2Y", step: "year", stepmode: "backward" },
-                  { count: 3, label: "3Y", step: "year", stepmode: "backward" },
-                  { step: "all", label: "Max" },
-                ],
-                font: { size: 11 },
-                x: 0,
-                y: 1.05,
-              },
-            },
-            // RSI reference lines
-            shapes: [
-              {
-                type: "line",
-                x0: 0, x1: 1,
-                xref: "paper",
-                y0: 70, y1: 70,
-                yref: "y3",
-                line: { color: "rgba(251,191,36,0.6)", width: 1, dash: "dash" },
-              },
-              {
-                type: "line",
-                x0: 0, x1: 1,
-                xref: "paper",
-                y0: 30, y1: 30,
-                yref: "y3",
-                line: { color: "rgba(251,191,36,0.6)", width: 1, dash: "dash" },
-              },
-            ],
-            // Annotations for subplot labels
-            annotations: [
-              { text: "Price", x: 0.01, y: 0.98, xref: "paper", yref: "paper", showarrow: false, font: { size: 11, color: "#9ca3af" } },
-              { text: "Volume", x: 0.01, y: 0.43, xref: "paper", yref: "paper", showarrow: false, font: { size: 10, color: "#9ca3af" } },
-              { text: "RSI (14)", x: 0.01, y: 0.33, xref: "paper", yref: "paper", showarrow: false, font: { size: 10, color: "#9ca3af" } },
-              { text: "MACD", x: 0.01, y: 0.15, xref: "paper", yref: "paper", showarrow: false, font: { size: 10, color: "#9ca3af" } },
-            ],
-          }}
+        <StockChart
+          ohlcv={chartOhlcv}
+          indicators={chartIndicators}
+          isDark={isDark}
+          height={700}
         />
       </div>
     </div>
@@ -586,6 +337,8 @@ function AnalysisTab({ ticker }: { ticker: string }) {
 // Tab: Forecast
 // ---------------------------------------------------------------
 
+type HorizonId = 3 | 6 | 9;
+
 function ForecastTab({ ticker }: { ticker: string }) {
   const [ohlcv, setOhlcv] =
     useState<OHLCVResponse | null>(null);
@@ -595,6 +348,8 @@ function ForecastTab({ ticker }: { ticker: string }) {
     useState<TickerForecast | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [horizon, setHorizon] =
+    useState<HorizonId>(9);
 
   useEffect(() => {
     let cancelled = false;
@@ -649,19 +404,51 @@ function ForecastTab({ ticker }: { ticker: string }) {
     };
   }, [ticker]);
 
+  // Truncate forecast series to selected horizon
+  const truncatedSeries = useMemo(() => {
+    if (!series || !series.data.length) return series;
+    // 9M data ≈ ~270 points; scale by horizon ratio
+    const maxPoints = Math.ceil(
+      (series.data.length * horizon) / 9,
+    );
+    return {
+      ...series,
+      data: series.data.slice(0, maxPoints),
+    };
+  }, [series, horizon]);
+
   // --- Forecast chart traces ---
   const forecastTraces = useMemo(() => {
-    if (!ohlcv || !series) return [];
+    if (!ohlcv || !truncatedSeries) return [];
     return buildForecastChart(
       ohlcv.data.map((d) => d.date),
       ohlcv.data.map((d) => d.close),
-      series.data.map((d) => d.date),
-      series.data.map((d) => d.predicted),
-      series.data.map((d) => d.upper),
-      series.data.map((d) => d.lower),
+      truncatedSeries.data.map((d) => d.date),
+      truncatedSeries.data.map((d) => d.predicted),
+      truncatedSeries.data.map((d) => d.upper),
+      truncatedSeries.data.map((d) => d.lower),
       ticker,
+      summary?.sentiment,
     );
-  }, [ohlcv, series, ticker]);
+  }, [ohlcv, truncatedSeries, ticker, summary?.sentiment]);
+
+  // --- Shapes + annotations (today line, price, targets) ---
+  const { shapes, annotations } = useMemo(() => {
+    const currentPrice =
+      ohlcv && ohlcv.data.length > 0
+        ? ohlcv.data[ohlcv.data.length - 1].close
+        : null;
+    // Only show targets up to selected horizon
+    const targets = (summary?.targets ?? [])
+      .filter((t) => t.horizon_months <= horizon)
+      .map((t) => ({
+        horizon_months: t.horizon_months,
+        target_date: t.target_date,
+        target_price: t.target_price,
+        pct_change: t.pct_change,
+      }));
+    return buildForecastShapes(currentPrice, targets);
+  }, [ohlcv, summary, horizon]);
 
   if (loading) {
     return (
@@ -692,7 +479,9 @@ function ForecastTab({ ticker }: { ticker: string }) {
     );
   }
 
-  const targets = summary?.targets ?? [];
+  const targets = (summary?.targets ?? []).filter(
+    (t) => t.horizon_months <= horizon,
+  );
   const sym = tickerCurrency(ticker);
 
   return (
@@ -705,29 +494,94 @@ function ForecastTab({ ticker }: { ticker: string }) {
           dark:bg-gray-900 shadow-sm p-4
         "
       >
-        <div className="flex items-baseline gap-2 mb-2">
-          <h3
-            className="
-              text-sm font-semibold text-gray-900
-              dark:text-gray-100
-            "
-          >
-            Prophet Forecast
-          </h3>
-          {summary && (
-            <span
+        <div
+          className="
+            flex flex-col sm:flex-row
+            sm:items-center sm:justify-between
+            gap-2 mb-3
+          "
+        >
+          <div className="flex items-baseline gap-2">
+            <h3
               className="
-                text-xs text-gray-400
-                dark:text-gray-500
+                text-sm font-semibold text-gray-900
+                dark:text-gray-100
               "
             >
-              as of {summary.run_date}
-            </span>
-          )}
+              Prophet Forecast
+              {summary?.sentiment && (
+                <span className="ml-1">
+                  {summary.sentiment.toLowerCase().includes("bull")
+                    ? "\u{1F7E2}"
+                    : summary.sentiment.toLowerCase().includes("bear")
+                      ? "\u{1F534}"
+                      : "\u{1F7E1}"}
+                  {" "}
+                  {summary.sentiment}
+                </span>
+              )}
+            </h3>
+            {summary && (
+              <span
+                className="
+                  text-xs text-gray-400
+                  dark:text-gray-500
+                "
+              >
+                as of {summary.run_date}
+              </span>
+            )}
+          </div>
+          {/* Horizon picker */}
+          <div
+            className="
+              inline-flex rounded-lg
+              bg-gray-100 dark:bg-gray-800 p-1
+            "
+          >
+            {([3, 6, 9] as HorizonId[]).map((h) => (
+              <button
+                key={h}
+                onClick={() => setHorizon(h)}
+                className={`
+                  px-3 py-1 text-xs font-medium
+                  rounded-md transition-colors
+                  ${
+                    horizon === h
+                      ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm"
+                      : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                  }
+                `}
+              >
+                {h}M
+              </button>
+            ))}
+          </div>
         </div>
         <PlotlyChart
           data={forecastTraces}
-          height={360}
+          height={550}
+          config={{ scrollZoom: true }}
+          layout={{
+            hovermode: "x unified",
+            margin: { t: 30, r: 80, b: 40, l: 60 },
+            shapes,
+            annotations,
+            xaxis: {
+              rangeslider: { visible: false },
+            },
+            yaxis: {
+              side: "right",
+              tickformat: ",.0f",
+            },
+            legend: {
+              orientation: "h",
+              x: 0.5,
+              xanchor: "center",
+              y: 1.08,
+              font: { size: 11 },
+            },
+          }}
         />
       </div>
 

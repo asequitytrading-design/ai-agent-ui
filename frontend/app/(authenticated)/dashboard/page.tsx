@@ -7,8 +7,6 @@
  */
 
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { apiFetch } from "@/lib/apiFetch";
-import { API_URL } from "@/lib/config";
 import type { UserProfile } from "@/hooks/useEditProfile";
 import type {
   WatchlistResponse,
@@ -17,10 +15,8 @@ import type {
 } from "@/lib/types";
 import { useChatContext } from "@/providers/ChatProvider";
 import {
-  useWatchlist,
-  useForecastSummary,
-  useAnalysisLatest,
-  useLLMUsage,
+  useDashboardHome,
+  useProfile,
   type DashboardData,
 } from "@/hooks/useDashboardData";
 import { HeroSection } from "@/components/widgets/HeroSection";
@@ -32,38 +28,22 @@ import { ForecastChartWidget } from "@/components/widgets/ForecastChartWidget";
 export type MarketFilter = "india" | "us";
 
 export default function DashboardPage() {
-  const [profile, setProfile] =
-    useState<UserProfile | null>(null);
   const [marketFilter, setMarketFilter] =
     useState<MarketFilter>("india");
   const [selectedTicker, setSelectedTicker] =
     useState<string | null>(null);
   const { openPanel } = useChatContext();
 
-  const watchlist = useWatchlist();
-  const forecasts = useForecastSummary();
-  const analysis = useAnalysisLatest();
-  const llmUsage = useLLMUsage();
-
-  // Fetch profile for hero greeting
-  useEffect(() => {
-    const controller = new AbortController();
-    apiFetch(`${API_URL}/auth/me`, {
-      signal: controller.signal,
-    })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data: UserProfile | null) => {
-        if (data) setProfile(data);
-      })
-      .catch((err: unknown) => {
-        if (
-          err instanceof Error &&
-          err.name === "AbortError"
-        )
-          return;
-      });
-    return () => controller.abort();
-  }, []);
+  // Single request for all widget data
+  const {
+    watchlist,
+    forecasts,
+    analysis,
+    llmUsage,
+    refresh,
+  } = useDashboardHome();
+  const profileData = useProfile<UserProfile>();
+  const profile = profileData.value;
 
   // -------------------------------------------------------
   // Filter all data by selected market
@@ -212,6 +192,7 @@ export default function DashboardPage() {
           data={filteredWatchlist}
           selectedTicker={selectedTicker}
           onSelectTicker={setSelectedTicker}
+          onRefresh={refresh}
         />
 
         <div className="space-y-4 md:space-y-6">

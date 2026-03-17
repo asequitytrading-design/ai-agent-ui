@@ -19,7 +19,13 @@ import { useTheme } from "@/hooks/useTheme";
 // Dynamic import with SSR disabled — plotly.js
 // requires window/document which don't exist on server.
 const Plot = dynamic(
-  () => import("react-plotly.js"),
+  () =>
+    Promise.all([
+      import("plotly.js-basic-dist"),
+      import("react-plotly.js/factory"),
+    ]).then(([Plotly, factory]) =>
+      factory.default(Plotly.default ?? Plotly),
+    ),
   {
     ssr: false,
     loading: () => (

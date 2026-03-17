@@ -279,60 +279,110 @@ export function CompareContent() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-gray-200 dark:border-gray-700">
-                      <th className="py-2 pr-4 text-left font-medium text-gray-500 dark:text-gray-400">
+                      <th className="py-2 pr-3 text-left font-medium text-gray-500 dark:text-gray-400">
                         Ticker
                       </th>
-                      <th className="py-2 pr-4 text-right font-medium text-gray-500 dark:text-gray-400">
+                      <th className="py-2 pr-3 text-right font-medium text-gray-500 dark:text-gray-400">
                         Price
                       </th>
-                      <th className="py-2 pr-4 text-right font-medium text-gray-500 dark:text-gray-400">
+                      <th className="py-2 pr-3 text-right font-medium text-gray-500 dark:text-gray-400">
                         Ann. Return
                       </th>
-                      <th className="py-2 pr-4 text-right font-medium text-gray-500 dark:text-gray-400">
+                      <th className="py-2 pr-3 text-right font-medium text-gray-500 dark:text-gray-400">
                         Volatility
                       </th>
-                      <th className="py-2 pr-4 text-right font-medium text-gray-500 dark:text-gray-400">
+                      <th className="py-2 pr-3 text-right font-medium text-gray-500 dark:text-gray-400">
                         Sharpe
                       </th>
-                      <th className="py-2 text-right font-medium text-gray-500 dark:text-gray-400">
+                      <th className="py-2 pr-3 text-right font-medium text-gray-500 dark:text-gray-400">
                         Max DD
+                      </th>
+                      <th className="py-2 pr-3 text-right font-medium text-gray-500 dark:text-gray-400" title="Relative Strength Index (14-day)">
+                        RSI
+                      </th>
+                      <th className="py-2 pr-3 text-center font-medium text-gray-500 dark:text-gray-400" title="MACD crossover signal">
+                        MACD
+                      </th>
+                      <th className="py-2 text-center font-medium text-gray-500 dark:text-gray-400">
+                        Sentiment
                       </th>
                     </tr>
                   </thead>
                   <tbody>
-                    {data.metrics.map((m: CompareMetric) => (
+                    {data.metrics.map((m: CompareMetric) => {
+                      const bestReturn = Math.max(
+                        ...data.metrics
+                          .map((x: CompareMetric) => x.annualized_return_pct ?? -Infinity),
+                      );
+                      const isBest =
+                        m.annualized_return_pct != null &&
+                        m.annualized_return_pct === bestReturn;
+                      return (
                       <tr
                         key={m.ticker}
                         className="border-b border-gray-100 dark:border-gray-800"
                       >
-                        <td className="py-2 pr-4 font-mono font-bold text-gray-900 dark:text-gray-100">
+                        <td className="py-2 pr-3 font-mono font-bold text-gray-900 dark:text-gray-100">
+                          {isBest && <span title="Best performer">{"\u{1F3C6}"} </span>}
                           {m.ticker}
                         </td>
-                        <td className="py-2 pr-4 text-right font-mono text-gray-700 dark:text-gray-300">
+                        <td className="py-2 pr-3 text-right font-mono text-gray-700 dark:text-gray-300">
                           {m.current_price != null
                             ? `${m.currency === "INR" ? "\u20B9" : "$"}${m.current_price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
                             : "\u2014"}
                         </td>
                         <td
-                          className={`py-2 pr-4 text-right font-mono ${metricBadge(m.annualized_return_pct)}`}
+                          className={`py-2 pr-3 text-right font-mono ${metricBadge(m.annualized_return_pct)}`}
                         >
                           {fmt(m.annualized_return_pct, 1)}%
                         </td>
-                        <td className="py-2 pr-4 text-right font-mono text-gray-700 dark:text-gray-300">
+                        <td className="py-2 pr-3 text-right font-mono text-gray-700 dark:text-gray-300">
                           {fmt(m.annualized_volatility_pct, 1)}%
                         </td>
                         <td
-                          className={`py-2 pr-4 text-right font-mono ${metricBadge(m.sharpe_ratio)}`}
+                          className={`py-2 pr-3 text-right font-mono ${metricBadge(m.sharpe_ratio)}`}
                         >
                           {fmt(m.sharpe_ratio)}
                         </td>
-                        <td className="py-2 text-right font-mono text-red-600 dark:text-red-400">
+                        <td className="py-2 pr-3 text-right font-mono text-red-600 dark:text-red-400">
                           {m.max_drawdown_pct != null
                             ? `${m.max_drawdown_pct.toFixed(1)}%`
                             : "\u2014"}
                         </td>
+                        <td className="py-2 pr-3 text-right font-mono text-gray-700 dark:text-gray-300">
+                          {m.rsi_14 != null ? m.rsi_14.toFixed(1) : "\u2014"}
+                        </td>
+                        <td className="py-2 pr-3 text-center">
+                          {m.macd_signal ? (
+                            <span
+                              className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${
+                                m.macd_signal === "Bullish"
+                                  ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
+                                  : "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
+                              }`}
+                            >
+                              {m.macd_signal}
+                            </span>
+                          ) : "\u2014"}
+                        </td>
+                        <td className="py-2 text-center">
+                          {m.sentiment ? (
+                            <span
+                              className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${
+                                m.sentiment === "Bullish"
+                                  ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
+                                  : m.sentiment === "Bearish"
+                                    ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
+                                    : "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+                              }`}
+                            >
+                              {m.sentiment}
+                            </span>
+                          ) : "\u2014"}
+                        </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
