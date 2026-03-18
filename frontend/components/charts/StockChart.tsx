@@ -92,10 +92,19 @@ export function StockChart({
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
 
-  // Stable theme colors
-  const bg = isDark ? "#111827" : "#ffffff";
-  const text = isDark ? "#9ca3af" : "#6b7280";
-  const grid = isDark
+  // Resolve theme from DOM — catches cases where
+  // the isDark prop is stale on first render
+  // (before useTheme hydrates from localStorage).
+  const actualDark =
+    typeof document !== "undefined"
+      ? document.documentElement.classList.contains(
+          "dark",
+        )
+      : isDark;
+
+  const bg = actualDark ? "#111827" : "#ffffff";
+  const text = actualDark ? "#9ca3af" : "#6b7280";
+  const grid = actualDark
     ? "rgba(55,65,81,0.3)"
     : "rgba(229,231,235,0.6)";
 
@@ -210,7 +219,7 @@ export function StockChart({
 
     // Bollinger upper
     const bbUpper = chart.addSeries(LineSeries, {
-      color: isDark
+      color: actualDark
         ? "rgba(165,180,252,0.4)"
         : "rgba(99,102,241,0.3)",
       lineWidth: 1,
@@ -229,7 +238,7 @@ export function StockChart({
 
     // Bollinger lower
     const bbLower = chart.addSeries(LineSeries, {
-      color: isDark
+      color: actualDark
         ? "rgba(165,180,252,0.4)"
         : "rgba(99,102,241,0.3)",
       lineWidth: 1,
@@ -383,12 +392,33 @@ export function StockChart({
       from: sixMonthsAgo as Time,
       to: ohlcv[ohlcv.length - 1].date as Time,
     });
-  }, [ohlcv, indicators, isDark, height, bg, text, grid]);
+  }, [ohlcv, indicators, actualDark, height, bg, text, grid]);
 
   // Build chart on mount / data change
   useEffect(() => {
     buildChart();
   }, [buildChart]);
+
+  // Theme sync — apply colors without rebuilding
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    chart.applyOptions({
+      layout: {
+        background: {
+          type: ColorType.Solid,
+          color: bg,
+        },
+        textColor: text,
+      },
+      grid: {
+        vertLines: { color: grid },
+        horzLines: { color: grid },
+      },
+      rightPriceScale: { borderColor: grid },
+      timeScale: { borderColor: grid },
+    });
+  }, [actualDark, bg, text, grid]);
 
   // Resize handler
   useEffect(() => {
