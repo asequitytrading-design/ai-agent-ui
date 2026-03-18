@@ -20,6 +20,7 @@ import {
 } from "react";
 import {
   createChart,
+  AreaSeries,
   CandlestickSeries,
   LineSeries,
   HistogramSeries,
@@ -422,12 +423,20 @@ export function StockChart({
     }
 
     if (vis.bollinger) {
-      const bbColor = liveDark
-        ? "rgba(165,180,252,0.55)"
-        : "rgba(99,102,241,0.45)";
-      const bbUpper = chart.addSeries(LineSeries, {
-        color: bbColor,
+      // Orange border + peach fill (like TradingView)
+      const bbBorder = liveDark
+        ? "#fb923c"
+        : "#ea580c";
+      const bbFill = liveDark
+        ? "rgba(251,146,60,0.12)"
+        : "rgba(234,88,12,0.10)";
+
+      // Upper: fills down with peach color
+      const bbUpper = chart.addSeries(AreaSeries, {
+        lineColor: bbBorder,
         lineWidth: 1,
+        topColor: bbFill,
+        bottomColor: bbFill,
         priceLineVisible: false,
         lastValueVisible: false,
         title: "",
@@ -440,9 +449,14 @@ export function StockChart({
           })),
         ),
       );
-      const bbLower = chart.addSeries(LineSeries, {
-        color: bbColor,
+
+      // Lower: fills down with OPAQUE background
+      // to mask the upper fill below the lower line
+      const bbLower = chart.addSeries(AreaSeries, {
+        lineColor: bbBorder,
         lineWidth: 1,
+        topColor: bgLive,
+        bottomColor: bgLive,
         priceLineVisible: false,
         lastValueVisible: false,
         title: "",
@@ -455,24 +469,31 @@ export function StockChart({
           })),
         ),
       );
+
       overlaySeries.push(
         {
           name: "BB Upper",
-          color: bbColor,
+          color: bbBorder,
           series: bbUpper,
         },
         {
           name: "BB Lower",
-          color: bbColor,
+          color: bbBorder,
           series: bbLower,
         },
       );
     }
 
+    // Track sub-panes for stretch factor sizing
+    const subPanes: ReturnType<
+      typeof chart.addPane
+    >[] = [];
+
     // ── Pane 2: Volume ──────────────────────────
 
     if (vis.volume) {
       const volumePane = chart.addPane();
+      subPanes.push(volumePane);
       const volumeSeries = volumePane.addSeries(
         HistogramSeries,
         {
@@ -498,6 +519,7 @@ export function StockChart({
 
     if (vis.rsi) {
       const rsiPane = chart.addPane();
+      subPanes.push(rsiPane);
       const rsiSeries = rsiPane.addSeries(
         LineSeries,
         {
@@ -505,7 +527,7 @@ export function StockChart({
           lineWidth: 2,
           priceLineVisible: false,
           lastValueVisible: true,
-          title: "RSI 14",
+          title: "",
         },
       );
       rsiSeries.setData(
@@ -522,7 +544,7 @@ export function StockChart({
         lineWidth: 1,
         lineStyle: 2,
         axisLabelVisible: true,
-        title: "Overbought",
+        title: "",
       });
       rsiSeries.createPriceLine({
         price: 30,
@@ -530,7 +552,7 @@ export function StockChart({
         lineWidth: 1,
         lineStyle: 2,
         axisLabelVisible: true,
-        title: "Oversold",
+        title: "",
       });
     }
 
@@ -538,6 +560,7 @@ export function StockChart({
 
     if (vis.macd) {
       const macdPane = chart.addPane();
+      subPanes.push(macdPane);
 
       const macdLine = macdPane.addSeries(
         LineSeries,
@@ -546,7 +569,7 @@ export function StockChart({
           lineWidth: 2,
           priceLineVisible: false,
           lastValueVisible: false,
-          title: "MACD",
+          title: "",
         },
       );
       macdLine.setData(
@@ -566,7 +589,7 @@ export function StockChart({
           lineStyle: 2,
           priceLineVisible: false,
           lastValueVisible: false,
-        title: "Signal",
+        title: "",
       },
       );
       signalLine.setData(
@@ -583,7 +606,7 @@ export function StockChart({
         {
           priceLineVisible: false,
           lastValueVisible: false,
-          title: "Histogram",
+          title: "",
         },
       );
       macdHist.setData(
@@ -600,6 +623,24 @@ export function StockChart({
               : "rgba(239,68,68,0.6)",
         })),
       );
+    }
+
+    // ── Pane sizing: price gets most space ───────
+
+    // Price pane is pane index 0 (the default pane).
+    // Give sub-panes a small fraction so price
+    // always dominates, regardless of how many
+    // indicators are visible.
+    if (subPanes.length > 0) {
+      const mainPane = chart.panes()[0];
+      // Each sub-pane gets 0.15; price gets the rest
+      const subFactor = 0.15;
+      const mainFactor =
+        1 - subPanes.length * subFactor;
+      mainPane.setStretchFactor(mainFactor);
+      for (const sp of subPanes) {
+        sp.setStretchFactor(subFactor);
+      }
     }
 
     // ── Crosshair → OHLC + overlay legend ───────

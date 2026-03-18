@@ -245,6 +245,13 @@ function AnalysisTab({ ticker }: { ticker: string }) {
     );
   }
 
+  // Chart height: fill viewport minus header/tabs/controls
+  // AppHeader=56 + tabs=48 + chartHeader=40 + padding=24
+  const chartHeight =
+    typeof window !== "undefined"
+      ? Math.max(400, window.innerHeight - 180)
+      : 500;
+
   return (
     <div
       className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-sm overflow-hidden"
@@ -373,7 +380,7 @@ function AnalysisTab({ ticker }: { ticker: string }) {
         ohlcv={chartOhlcv}
         indicators={chartIndicators}
         isDark={isDark}
-        height={650}
+        height={chartHeight}
         interval={chartInterval}
         visibleIndicators={visibleIndicators}
         onCrosshairMove={setCrosshairData}
