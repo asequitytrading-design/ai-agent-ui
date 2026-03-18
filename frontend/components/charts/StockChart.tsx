@@ -55,11 +55,39 @@ export interface IndicatorRow {
   bb_lower: number | null;
 }
 
+export interface IndicatorVisibility {
+  sma50: boolean;
+  sma200: boolean;
+  bollinger: boolean;
+  volume: boolean;
+  rsi: boolean;
+  macd: boolean;
+}
+
+export const DEFAULT_INDICATORS: IndicatorVisibility = {
+  sma50: true,
+  sma200: true,
+  bollinger: true,
+  volume: true,
+  rsi: true,
+  macd: true,
+};
+
 interface StockChartProps {
   ohlcv: OHLCVRow[];
   indicators: IndicatorRow[];
   isDark: boolean;
   height?: number;
+  visibleIndicators?: IndicatorVisibility;
+  /** Called with OHLC data when crosshair moves. */
+  onCrosshairMove?: (data: {
+    date: string;
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+    volume: number;
+  } | null) => void;
 }
 
 // ---------------------------------------------------------------
@@ -89,7 +117,10 @@ export function StockChart({
   indicators,
   isDark,
   height = 700,
+  visibleIndicators = DEFAULT_INDICATORS,
+  onCrosshairMove,
 }: StockChartProps) {
+  const vis = visibleIndicators;
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
 
@@ -175,6 +206,14 @@ export function StockChart({
 
     // ── Pane 1: Candlestick + overlays ──────────
 
+    const candleData = ohlcv.map((d) => ({
+      time: toTime(d.date),
+      open: d.open,
+      high: d.high,
+      low: d.low,
+      close: d.close,
+    }));
+
     const candleSeries = chart.addSeries(
       CandlestickSeries,
       {
@@ -186,215 +225,246 @@ export function StockChart({
         wickDownColor: "#ef4444",
       },
     );
+    candleSeries.setData(candleData);
 
-    candleSeries.setData(
-      ohlcv.map((d) => ({
-        time: toTime(d.date),
-        open: d.open,
-        high: d.high,
-        low: d.low,
-        close: d.close,
-      })),
-    );
+    // Crosshair → OHLC legend callback
+    if (onCrosshairMove) {
+      chart.subscribeCrosshairMove((param) => {
+        if (!param.time) {
+          onCrosshairMove(null);
+          return;
+        }
+        const d = param.seriesData.get(
+          candleSeries,
+        ) as {
+          open: number;
+          high: number;
+          low: number;
+          close: number;
+        } | undefined;
+        if (d) {
+          const ts = String(param.time);
+          const match = ohlcv.find(
+            (r) => r.date === ts,
+          );
+          onCrosshairMove({
+            date: ts,
+            open: d.open,
+            high: d.high,
+            low: d.low,
+            close: d.close,
+            volume: match?.volume ?? 0,
+          });
+        }
+      });
+    }
 
-    // SMA 50
-    const sma50 = chart.addSeries(LineSeries, {
-      color: "#f59e0b",
-      lineWidth: 1,
-      lineStyle: 2, // dashed
-      priceLineVisible: false,
-      lastValueVisible: false,
-      title: "SMA 50",
-    });
-    sma50.setData(
-      filterNull(
-        indicators.map((d) => ({
-          time: toTime(d.date),
-          value: d.sma_50,
-        })),
-      ),
-    );
-
-    // SMA 200
-    const sma200 = chart.addSeries(LineSeries, {
-      color: "#ef4444",
-      lineWidth: 1,
-      lineStyle: 3, // dotted
-      priceLineVisible: false,
-      lastValueVisible: false,
-      title: "SMA 200",
-    });
-    sma200.setData(
-      filterNull(
-        indicators.map((d) => ({
-          time: toTime(d.date),
-          value: d.sma_200,
-        })),
-      ),
-    );
-
-    // Bollinger upper
-    const bbUpper = chart.addSeries(LineSeries, {
-      color: actualDark
-        ? "rgba(165,180,252,0.4)"
-        : "rgba(99,102,241,0.3)",
-      lineWidth: 1,
-      priceLineVisible: false,
-      lastValueVisible: false,
-      title: "BB Upper",
-    });
-    bbUpper.setData(
-      filterNull(
-        indicators.map((d) => ({
-          time: toTime(d.date),
-          value: d.bb_upper,
-        })),
-      ),
-    );
-
-    // Bollinger lower
-    const bbLower = chart.addSeries(LineSeries, {
-      color: actualDark
-        ? "rgba(165,180,252,0.4)"
-        : "rgba(99,102,241,0.3)",
-      lineWidth: 1,
-      priceLineVisible: false,
-      lastValueVisible: false,
-      title: "BB Lower",
-    });
-    bbLower.setData(
-      filterNull(
-        indicators.map((d) => ({
-          time: toTime(d.date),
-          value: d.bb_lower,
-        })),
-      ),
-    );
-
-    // ── Pane 2: Volume ──────────────────────────
-
-    const volumePane = chart.addPane();
-    const volumeSeries = volumePane.addSeries(
-      HistogramSeries,
-      {
-        priceLineVisible: false,
-        lastValueVisible: false,
-        title: "Volume",
-        priceFormat: {
-          type: "volume",
-        },
-      },
-    );
-    volumeSeries.setData(
-      ohlcv.map((d) => ({
-        time: toTime(d.date),
-        value: d.volume,
-        color:
-          d.close >= d.open
-            ? "rgba(16,185,129,0.4)"
-            : "rgba(239,68,68,0.4)",
-      })),
-    );
-
-    // ── Pane 3: RSI ─────────────────────────────
-
-    const rsiPane = chart.addPane();
-    const rsiSeries = rsiPane.addSeries(LineSeries, {
-      color: "#8b5cf6",
-      lineWidth: 2,
-      priceLineVisible: false,
-      lastValueVisible: true,
-      title: "RSI 14",
-    });
-    rsiSeries.setData(
-      filterNull(
-        indicators.map((d) => ({
-          time: toTime(d.date),
-          value: d.rsi_14,
-        })),
-      ),
-    );
-
-    // RSI reference lines (70 overbought, 30 oversold)
-    rsiSeries.createPriceLine({
-      price: 70,
-      color: "rgba(251,191,36,0.5)",
-      lineWidth: 1,
-      lineStyle: 2,
-      axisLabelVisible: true,
-      title: "Overbought",
-    });
-    rsiSeries.createPriceLine({
-      price: 30,
-      color: "rgba(251,191,36,0.5)",
-      lineWidth: 1,
-      lineStyle: 2,
-      axisLabelVisible: true,
-      title: "Oversold",
-    });
-
-    // ── Pane 4: MACD ────────────────────────────
-
-    const macdPane = chart.addPane();
-
-    const macdLine = macdPane.addSeries(LineSeries, {
-      color: "#3b82f6",
-      lineWidth: 2,
-      priceLineVisible: false,
-      lastValueVisible: false,
-      title: "MACD",
-    });
-    macdLine.setData(
-      filterNull(
-        indicators.map((d) => ({
-          time: toTime(d.date),
-          value: d.macd,
-        })),
-      ),
-    );
-
-    const signalLine = macdPane.addSeries(
-      LineSeries,
-      {
+    if (vis.sma50) {
+      const sma50 = chart.addSeries(LineSeries, {
         color: "#f59e0b",
-        lineWidth: 2,
+        lineWidth: 1,
         lineStyle: 2,
         priceLineVisible: false,
         lastValueVisible: false,
-        title: "Signal",
-      },
-    );
-    signalLine.setData(
-      filterNull(
-        indicators.map((d) => ({
-          time: toTime(d.date),
-          value: d.macd_signal,
-        })),
-      ),
-    );
+        title: "SMA 50",
+      });
+      sma50.setData(
+        filterNull(
+          indicators.map((d) => ({
+            time: toTime(d.date),
+            value: d.sma_50,
+          })),
+        ),
+      );
+    }
 
-    const macdHist = macdPane.addSeries(
-      HistogramSeries,
-      {
+    if (vis.sma200) {
+      const sma200 = chart.addSeries(LineSeries, {
+        color: "#ef4444",
+        lineWidth: 1,
+        lineStyle: 3,
         priceLineVisible: false,
         lastValueVisible: false,
-        title: "Histogram",
-      },
-    );
-    macdHist.setData(
-      filterNull(
-        indicators.map((d) => ({
+        title: "SMA 200",
+      });
+      sma200.setData(
+        filterNull(
+          indicators.map((d) => ({
+            time: toTime(d.date),
+            value: d.sma_200,
+          })),
+        ),
+      );
+    }
+
+    if (vis.bollinger) {
+      const bbColor = actualDark
+        ? "rgba(165,180,252,0.55)"
+        : "rgba(99,102,241,0.45)";
+      const bbUpper = chart.addSeries(LineSeries, {
+        color: bbColor,
+        lineWidth: 1,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        title: "BB Upper",
+      });
+      bbUpper.setData(
+        filterNull(
+          indicators.map((d) => ({
+            time: toTime(d.date),
+            value: d.bb_upper,
+          })),
+        ),
+      );
+      const bbLower = chart.addSeries(LineSeries, {
+        color: bbColor,
+        lineWidth: 1,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        title: "BB Lower",
+      });
+      bbLower.setData(
+        filterNull(
+          indicators.map((d) => ({
+            time: toTime(d.date),
+            value: d.bb_lower,
+          })),
+        ),
+      );
+    }
+
+    // ── Pane 2: Volume ──────────────────────────
+
+    if (vis.volume) {
+      const volumePane = chart.addPane();
+      const volumeSeries = volumePane.addSeries(
+        HistogramSeries,
+        {
+          priceLineVisible: false,
+          lastValueVisible: false,
+          title: "Volume",
+          priceFormat: { type: "volume" },
+        },
+      );
+      volumeSeries.setData(
+        ohlcv.map((d) => ({
           time: toTime(d.date),
-          value: d.macd_hist,
+          value: d.volume,
+          color:
+            d.close >= d.open
+              ? "rgba(16,185,129,0.4)"
+              : "rgba(239,68,68,0.4)",
         })),
-      ).map((p) => ({
-        ...p,
-        color:
-          p.value >= 0
-            ? "rgba(16,185,129,0.6)"
-            : "rgba(239,68,68,0.6)",
-      })),
-    );
+      );
+    }
+
+    // ── Pane 3: RSI ─────────────────────────────
+
+    if (vis.rsi) {
+      const rsiPane = chart.addPane();
+      const rsiSeries = rsiPane.addSeries(
+        LineSeries,
+        {
+          color: "#8b5cf6",
+          lineWidth: 2,
+          priceLineVisible: false,
+          lastValueVisible: true,
+          title: "RSI 14",
+        },
+      );
+      rsiSeries.setData(
+        filterNull(
+          indicators.map((d) => ({
+            time: toTime(d.date),
+            value: d.rsi_14,
+          })),
+        ),
+      );
+      rsiSeries.createPriceLine({
+        price: 70,
+        color: "rgba(251,191,36,0.5)",
+        lineWidth: 1,
+        lineStyle: 2,
+        axisLabelVisible: true,
+        title: "Overbought",
+      });
+      rsiSeries.createPriceLine({
+        price: 30,
+        color: "rgba(251,191,36,0.5)",
+        lineWidth: 1,
+        lineStyle: 2,
+        axisLabelVisible: true,
+        title: "Oversold",
+      });
+    }
+
+    // ── Pane 4: MACD ────────────────────────────
+
+    if (vis.macd) {
+      const macdPane = chart.addPane();
+
+      const macdLine = macdPane.addSeries(
+        LineSeries,
+        {
+          color: "#3b82f6",
+          lineWidth: 2,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          title: "MACD",
+        },
+      );
+      macdLine.setData(
+        filterNull(
+          indicators.map((d) => ({
+            time: toTime(d.date),
+            value: d.macd,
+          })),
+        ),
+      );
+
+      const signalLine = macdPane.addSeries(
+        LineSeries,
+        {
+          color: "#f59e0b",
+          lineWidth: 2,
+          lineStyle: 2,
+          priceLineVisible: false,
+          lastValueVisible: false,
+        title: "Signal",
+      },
+      );
+      signalLine.setData(
+        filterNull(
+          indicators.map((d) => ({
+            time: toTime(d.date),
+            value: d.macd_signal,
+          })),
+        ),
+      );
+
+      const macdHist = macdPane.addSeries(
+        HistogramSeries,
+        {
+          priceLineVisible: false,
+          lastValueVisible: false,
+          title: "Histogram",
+        },
+      );
+      macdHist.setData(
+        filterNull(
+          indicators.map((d) => ({
+            time: toTime(d.date),
+            value: d.macd_hist,
+          })),
+        ).map((p) => ({
+          ...p,
+          color:
+            p.value >= 0
+              ? "rgba(16,185,129,0.6)"
+              : "rgba(239,68,68,0.6)",
+        })),
+      );
+    }
 
     // ── Fit & default range ─────────────────────
 
@@ -408,7 +478,7 @@ export function StockChart({
       from: sixMonthsAgo as Time,
       to: ohlcv[ohlcv.length - 1].date as Time,
     });
-  }, [ohlcv, indicators, actualDark, height, bg, text, grid]);
+  }, [ohlcv, indicators, actualDark, height, bg, text, grid, vis, onCrosshairMove]);
 
   // Build chart on mount / data change
   useEffect(() => {

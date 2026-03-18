@@ -46,50 +46,6 @@ function tickerCurrency(ticker: string): string {
   return "$";
 }
 
-function StatCard({
-  label,
-  value,
-  sub,
-  color,
-}: {
-  label: string;
-  value: string;
-  sub?: string;
-  color?: string;
-}) {
-  return (
-    <div
-      className="
-        rounded-lg p-4
-        bg-gray-50 dark:bg-gray-800/50
-        border border-gray-100 dark:border-gray-700/50
-      "
-    >
-      <p
-        className="
-          text-xs font-medium uppercase tracking-wider
-          text-gray-400 dark:text-gray-500 mb-1
-        "
-      >
-        {label}
-      </p>
-      <p
-        className={`
-          font-mono text-xl font-semibold
-          ${color ?? "text-gray-900 dark:text-gray-100"}
-        `}
-      >
-        {value}
-      </p>
-      {sub && (
-        <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
-          {sub}
-        </p>
-      )}
-    </div>
-  );
-}
-
 function ChartSkeleton({ h = "h-64" }: { h?: string }) {
   return (
     <div
@@ -107,8 +63,35 @@ function ChartSkeleton({ h = "h-64" }: { h?: string }) {
 }
 
 // ---------------------------------------------------------------
-// Tab: Analysis
+// Tab: Analysis (full-page chart with controls)
 // ---------------------------------------------------------------
+
+import {
+  type IndicatorVisibility,
+  DEFAULT_INDICATORS,
+} from "@/components/charts/StockChart";
+
+const INDICATOR_OPTIONS: {
+  key: keyof IndicatorVisibility;
+  label: string;
+}[] = [
+  { key: "sma50", label: "SMA 50" },
+  { key: "sma200", label: "SMA 200" },
+  { key: "bollinger", label: "Bollinger Bands" },
+  { key: "volume", label: "Volume" },
+  { key: "rsi", label: "RSI (14)" },
+  { key: "macd", label: "MACD" },
+];
+
+const RANGE_OPTIONS = [
+  { label: "1M", days: 30 },
+  { label: "3M", days: 90 },
+  { label: "6M", days: 180 },
+  { label: "1Y", days: 365 },
+  { label: "2Y", days: 730 },
+  { label: "3Y", days: 1095 },
+  { label: "Max", days: 0 },
+];
 
 function AnalysisTab({ ticker }: { ticker: string }) {
   const [ohlcv, setOhlcv] =
@@ -117,6 +100,19 @@ function AnalysisTab({ ticker }: { ticker: string }) {
     useState<IndicatorsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [visibleIndicators, setVisibleIndicators] =
+    useState<IndicatorVisibility>(DEFAULT_INDICATORS);
+  const [showIndicatorMenu, setShowIndicatorMenu] =
+    useState(false);
+  const [activeRange, setActiveRange] = useState("6M");
+  const [crosshairData, setCrosshairData] = useState<{
+    date: string;
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+    volume: number;
+  } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -161,9 +157,10 @@ function AnalysisTab({ ticker }: { ticker: string }) {
   const { resolvedTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
 
-  // Map API data to StockChart format
-  const chartOhlcv = useMemo(
-    () =>
+  // Filter OHLCV by selected range.
+  // Compute cutoff from the data's last date (pure).
+  const chartOhlcv = useMemo(() => {
+    const all =
       ohlcv?.data.map((d) => ({
         date: d.date,
         open: d.open,
@@ -171,9 +168,23 @@ function AnalysisTab({ ticker }: { ticker: string }) {
         low: d.low,
         close: d.close,
         volume: d.volume,
-      })) ?? [],
-    [ohlcv],
-  );
+      })) ?? [];
+    if (all.length === 0) return all;
+    const opt = RANGE_OPTIONS.find(
+      (r) => r.label === activeRange,
+    );
+    if (!opt || opt.days === 0) return all;
+    // Use the last data point as "today" (pure)
+    const lastDate = new Date(
+      all[all.length - 1].date,
+    );
+    const cutoff = new Date(
+      lastDate.getTime() - opt.days * 86400000,
+    )
+      .toISOString()
+      .slice(0, 10);
+    return all.filter((d) => d.date >= cutoff);
+  }, [ohlcv, activeRange]);
 
   const chartIndicators = useMemo(
     () =>
@@ -191,144 +202,140 @@ function AnalysisTab({ ticker }: { ticker: string }) {
     [indicators],
   );
 
-  // --- Stats ---
-  const stats = useMemo(() => {
-    if (!ohlcv || !indicators) return null;
-    const last = ohlcv.data[ohlcv.data.length - 1];
-    const prev =
-      ohlcv.data.length > 1
-        ? ohlcv.data[ohlcv.data.length - 2]
-        : last;
-    const change = last.close - prev.close;
-    const changePct =
-      prev.close !== 0
-        ? (change / prev.close) * 100
-        : 0;
-    const lastInd =
-      indicators.data[indicators.data.length - 1];
-    return { last, change, changePct, lastInd };
-  }, [ohlcv, indicators]);
+  const toggleIndicator = useCallback(
+    (key: keyof IndicatorVisibility) => {
+      setVisibleIndicators((prev) => ({
+        ...prev,
+        [key]: !prev[key],
+      }));
+    },
+    [],
+  );
+
+  // Latest values for OHLC legend (fallback)
+  const latest = ohlcv?.data?.[ohlcv.data.length - 1];
+  const displayData = crosshairData ?? (
+    latest
+      ? {
+          date: latest.date,
+          open: latest.open,
+          high: latest.high,
+          low: latest.low,
+          close: latest.close,
+          volume: latest.volume,
+        }
+      : null
+  );
 
   if (loading) {
     return (
-      <div className="space-y-6">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          {[1, 2, 3, 4].map((i) => (
-            <ChartSkeleton key={i} h="h-20" />
-          ))}
-        </div>
-        <ChartSkeleton />
-        <ChartSkeleton />
-        <ChartSkeleton />
-      </div>
+      <div className="animate-pulse rounded-xl bg-gray-200 dark:bg-gray-800 h-[700px]" />
     );
   }
 
   if (error) {
     return (
-      <div
-        className="
-          rounded-lg border border-red-200
-          dark:border-red-800 bg-red-50
-          dark:bg-red-900/20 px-5 py-10
-          text-center text-sm text-red-600
-          dark:text-red-400
-        "
-      >
+      <div className="rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 px-5 py-10 text-center text-sm text-red-600 dark:text-red-400">
         {error}
       </div>
     );
   }
 
-  if (!stats) return null;
-
-  const changeColor =
-    stats.change >= 0
-      ? "text-emerald-600 dark:text-emerald-400"
-      : "text-red-600 dark:text-red-400";
-
-  const rsiVal = stats.lastInd?.rsi_14;
-  let rsiColor = "text-gray-900 dark:text-gray-100";
-  if (rsiVal != null) {
-    if (rsiVal >= 70) {
-      rsiColor = "text-red-600 dark:text-red-400";
-    } else if (rsiVal <= 30) {
-      rsiColor = "text-emerald-600 dark:text-emerald-400";
-    }
-  }
-
-  const macdVal = stats.lastInd?.macd;
-  const sigVal = stats.lastInd?.macd_signal;
-  let macdSignalLabel = "--";
-  let macdColor = "text-gray-900 dark:text-gray-100";
-  if (macdVal != null && sigVal != null) {
-    if (macdVal > sigVal) {
-      macdSignalLabel = "Bullish";
-      macdColor =
-        "text-emerald-600 dark:text-emerald-400";
-    } else {
-      macdSignalLabel = "Bearish";
-      macdColor = "text-red-600 dark:text-red-400";
-    }
-  }
-
   return (
-    <div className="space-y-6">
-      {/* Stats cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard
-          label="Current Price"
-          value={`${sym}${stats.last.close.toFixed(2)}`}
-        />
-        <StatCard
-          label="Day Change"
-          value={`${stats.change >= 0 ? "+" : ""}${sym}${Math.abs(stats.change).toFixed(2)}`}
-          sub={`${stats.changePct >= 0 ? "+" : ""}${stats.changePct.toFixed(2)}%`}
-          color={changeColor}
-        />
-        <StatCard
-          label="RSI (14)"
-          value={
-            rsiVal != null ? rsiVal.toFixed(1) : "--"
-          }
-          sub={
-            rsiVal != null
-              ? rsiVal >= 70
-                ? "Overbought"
-                : rsiVal <= 30
-                  ? "Oversold"
-                  : "Neutral"
-              : undefined
-          }
-          color={rsiColor}
-        />
-        <StatCard
-          label="MACD Signal"
-          value={macdSignalLabel}
-          sub={
-            macdVal != null
-              ? `MACD: ${macdVal.toFixed(3)}`
-              : undefined
-          }
-          color={macdColor}
-        />
+    <div
+      className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-sm overflow-hidden"
+    >
+      {/* Chart header: OHLC legend + controls */}
+      <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 border-b border-gray-100 dark:border-gray-800">
+        {/* OHLC legend (top-left) */}
+        <div className="flex items-center gap-3 text-xs font-mono">
+          <span className="font-semibold text-gray-900 dark:text-gray-100">
+            {ticker}
+          </span>
+          {displayData && (
+            <>
+              <span className="text-gray-500 dark:text-gray-400">
+                {displayData.date}
+              </span>
+              <span className="text-gray-600 dark:text-gray-300">
+                O <span className="text-gray-900 dark:text-white">{sym}{displayData.open.toFixed(2)}</span>
+              </span>
+              <span className="text-gray-600 dark:text-gray-300">
+                H <span className="text-emerald-600 dark:text-emerald-400">{sym}{displayData.high.toFixed(2)}</span>
+              </span>
+              <span className="text-gray-600 dark:text-gray-300">
+                L <span className="text-red-600 dark:text-red-400">{sym}{displayData.low.toFixed(2)}</span>
+              </span>
+              <span className="text-gray-600 dark:text-gray-300">
+                C <span className="text-gray-900 dark:text-white">{sym}{displayData.close.toFixed(2)}</span>
+              </span>
+              <span className="text-gray-500 dark:text-gray-400">
+                Vol {(displayData.volume / 1e6).toFixed(1)}M
+              </span>
+            </>
+          )}
+        </div>
+
+        {/* Controls (right) */}
+        <div className="flex items-center gap-2">
+          {/* Date range pills */}
+          <div className="inline-flex rounded-md bg-gray-100 dark:bg-gray-800 p-0.5">
+            {RANGE_OPTIONS.map((r) => (
+              <button
+                key={r.label}
+                onClick={() => setActiveRange(r.label)}
+                className={`px-2 py-0.5 text-[10px] font-medium rounded transition-colors ${
+                  activeRange === r.label
+                    ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm"
+                    : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                }`}
+              >
+                {r.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Indicators dropdown */}
+          <div className="relative">
+            <button
+              onClick={() => setShowIndicatorMenu((v) => !v)}
+              className="flex items-center gap-1 px-2 py-1 text-[10px] font-medium rounded-md bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 transition-colors"
+            >
+              <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 20V10M18 20V4M6 20v-4" /></svg>
+              Indicators
+              <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m6 9 6 6 6-6" /></svg>
+            </button>
+            {showIndicatorMenu && (
+              <div className="absolute right-0 top-full mt-1 z-50 w-44 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-lg py-1">
+                {INDICATOR_OPTIONS.map((opt) => (
+                  <label
+                    key={opt.key}
+                    className="flex items-center gap-2 px-3 py-1.5 text-xs text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={visibleIndicators[opt.key]}
+                      onChange={() => toggleIndicator(opt.key)}
+                      className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                    />
+                    {opt.label}
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
-      {/* TradingView chart: Candlestick + Volume + RSI + MACD */}
-      <div
-        className="
-          rounded-xl border border-gray-200
-          dark:border-gray-700 bg-white
-          dark:bg-gray-900 shadow-sm p-2
-        "
-      >
-        <StockChart
-          ohlcv={chartOhlcv}
-          indicators={chartIndicators}
-          isDark={isDark}
-          height={700}
-        />
-      </div>
+      {/* Chart (full width, no padding) */}
+      <StockChart
+        ohlcv={chartOhlcv}
+        indicators={chartIndicators}
+        isDark={isDark}
+        height={650}
+        visibleIndicators={visibleIndicators}
+        onCrosshairMove={setCrosshairData}
+      />
     </div>
   );
 }
@@ -818,37 +825,41 @@ function AnalysisPageInner() {
     };
   }, [tickerParam]);
 
-  const handleTickerChange = useCallback(
-    (e: React.ChangeEvent<HTMLSelectElement>) => {
-      setSelectedTicker(e.target.value);
+  // Searchable ticker dropdown state
+  const [tickerSearch, setTickerSearch] = useState("");
+  const [showTickerDropdown, setShowTickerDropdown] =
+    useState(false);
+
+  const filteredTickers = useMemo(() => {
+    if (!tickerSearch.trim()) return tickers;
+    const q = tickerSearch.trim().toUpperCase();
+    return tickers.filter((t) => t.includes(q));
+  }, [tickers, tickerSearch]);
+
+  const selectTicker = useCallback(
+    (t: string) => {
+      setSelectedTicker(t);
+      setTickerSearch("");
+      setShowTickerDropdown(false);
     },
     [],
   );
 
   if (tickersLoading) {
     return (
-      <div className="space-y-6 p-6">
-        <ChartSkeleton h="h-12" />
-        <ChartSkeleton />
-      </div>
+      <div className="animate-pulse rounded-xl bg-gray-200 dark:bg-gray-800 h-[700px]" />
     );
   }
 
   if (tickers.length === 0 || !selectedTicker) {
     return (
-      <div
-        className="
-          p-6 text-center text-sm text-gray-500
-          dark:text-gray-400
-        "
-      >
-        No tickers linked to your account. Add tickers
-        from the{" "}
+      <div className="p-6 text-center text-sm text-gray-500 dark:text-gray-400">
+        No tickers linked.{" "}
         <Link
           href="/analytics/marketplace"
           className="text-indigo-600 dark:text-indigo-400 underline"
         >
-          Marketplace
+          Link tickers
         </Link>{" "}
         to get started.
       </div>
@@ -856,76 +867,103 @@ function AnalysisPageInner() {
   }
 
   return (
-    <div className="space-y-6">
-      {/* Ticker selector + Tabs */}
-      <div
-        className="
-          flex flex-col sm:flex-row
-          sm:items-center sm:justify-between gap-4
-        "
-      >
-        {/* Ticker dropdown (hidden on Compare tab) */}
-        <div className={`flex items-center gap-2 ${activeTab === "compare" ? "invisible" : ""}`}>
-          <label
-            htmlFor="ticker-select"
-            className="
-              text-sm font-medium text-gray-700
-              dark:text-gray-300
-            "
-          >
-            Ticker:
-          </label>
-          <select
-            id="ticker-select"
-            value={selectedTicker}
-            onChange={handleTickerChange}
-            className="
-              text-sm rounded-md px-3 py-1.5
-              border border-gray-200
-              dark:border-gray-700
-              bg-white dark:bg-gray-800
-              text-gray-900 dark:text-gray-100
-              focus:outline-none focus:ring-2
-              focus:ring-indigo-500/40
-              min-w-[120px]
-            "
-          >
-            {tickers.map((t) => (
-              <option key={t} value={t}>
-                {t}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {/* Tab pills */}
-        <div
-          className="
-            inline-flex rounded-lg
-            bg-gray-100 dark:bg-gray-800 p-1
-          "
-        >
+    <div className="space-y-3">
+      {/* Header: Tabs (left) + Ticker search (right) */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        {/* Tab pills — LEFT */}
+        <div className="inline-flex rounded-lg bg-gray-100 dark:bg-gray-800 p-1">
           {TABS.map((tab) => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`
-                px-4 py-1.5 text-sm font-medium
-                rounded-md transition-colors
-                ${
-                  activeTab === tab.id
-                    ? "bg-indigo-600 text-white shadow-sm"
-                    : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200"
-                }
-              `}
+              className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                activeTab === tab.id
+                  ? "bg-indigo-600 text-white shadow-sm"
+                  : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200"
+              }`}
             >
               {tab.label}
             </button>
           ))}
         </div>
+
+        {/* Searchable ticker — RIGHT */}
+        <div
+          className={`relative ${activeTab === "compare" ? "invisible" : ""}`}
+        >
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs font-medium text-gray-500 dark:text-gray-400">
+              Ticker
+            </span>
+            <div className="relative">
+              <input
+                type="text"
+                value={
+                  showTickerDropdown
+                    ? tickerSearch
+                    : selectedTicker
+                }
+                onChange={(e) => {
+                  setTickerSearch(
+                    e.target.value.toUpperCase(),
+                  );
+                  setShowTickerDropdown(true);
+                }}
+                onFocus={() =>
+                  setShowTickerDropdown(true)
+                }
+                onBlur={() =>
+                  setTimeout(
+                    () =>
+                      setShowTickerDropdown(false),
+                    200,
+                  )
+                }
+                placeholder="Search..."
+                className="w-36 text-sm font-mono font-semibold rounded-md px-2.5 py-1 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+              />
+              <svg
+                className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-400 pointer-events-none"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <circle cx="11" cy="11" r="8" />
+                <path d="m21 21-4.3-4.3" />
+              </svg>
+            </div>
+          </div>
+          {showTickerDropdown && (
+            <div className="absolute right-0 top-full mt-1 z-50 w-48 max-h-64 overflow-y-auto rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-lg py-1">
+              {filteredTickers.length === 0 ? (
+                <div className="px-3 py-2 text-xs text-gray-400">
+                  No match
+                </div>
+              ) : (
+                filteredTickers.map((t) => (
+                  <button
+                    key={t}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      selectTicker(t);
+                    }}
+                    className={`w-full text-left px-3 py-1.5 text-sm font-mono hover:bg-gray-50 dark:hover:bg-gray-800 ${
+                      t === selectedTicker
+                        ? "text-indigo-600 dark:text-indigo-400 font-semibold"
+                        : "text-gray-700 dark:text-gray-300"
+                    }`}
+                  >
+                    {t}
+                  </button>
+                ))
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* Tab content */}
+      {/* Tab content — full width */}
       {activeTab === "analysis" && (
         <AnalysisTab ticker={selectedTicker} />
       )}
