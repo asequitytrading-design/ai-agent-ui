@@ -14,6 +14,7 @@ import {
   useRef,
   useEffect,
   useCallback,
+  useMemo,
   useState,
   type CSSProperties,
 } from "react";
@@ -55,6 +56,112 @@ export interface IndicatorRow {
   bb_lower: number | null;
 }
 
+export type ChartInterval = "D" | "W" | "M";
+
+/**
+ * Aggregate daily OHLCV rows into weekly or monthly
+ * candles.  Daily rows are returned unchanged.
+ */
+export function aggregateOHLCV(
+  rows: OHLCVRow[],
+  interval: ChartInterval,
+): OHLCVRow[] {
+  if (interval === "D" || rows.length === 0)
+    return rows;
+
+  const bucketKey = (d: string): string => {
+    const dt = new Date(d);
+    if (interval === "M") {
+      // Year-month bucket
+      return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}`;
+    }
+    // Weekly: ISO week — use Monday as bucket start
+    const day = dt.getDay();
+    const monday = new Date(dt);
+    monday.setDate(
+      dt.getDate() - ((day + 6) % 7),
+    );
+    return monday.toISOString().slice(0, 10);
+  };
+
+  const buckets = new Map<string, OHLCVRow[]>();
+  for (const row of rows) {
+    const key = bucketKey(row.date);
+    let arr = buckets.get(key);
+    if (!arr) {
+      arr = [];
+      buckets.set(key, arr);
+    }
+    arr.push(row);
+  }
+
+  const result: OHLCVRow[] = [];
+  for (const [, bucket] of buckets) {
+    result.push({
+      date: bucket[0].date, // first date in bucket
+      open: bucket[0].open,
+      high: Math.max(...bucket.map((r) => r.high)),
+      low: Math.min(...bucket.map((r) => r.low)),
+      close: bucket[bucket.length - 1].close,
+      volume: bucket.reduce(
+        (sum, r) => sum + r.volume,
+        0,
+      ),
+    });
+  }
+  return result;
+}
+
+/**
+ * Aggregate daily indicator rows into weekly or monthly.
+ * Uses the LAST value in each bucket (point-in-time snapshot).
+ */
+export function aggregateIndicators(
+  rows: IndicatorRow[],
+  interval: ChartInterval,
+): IndicatorRow[] {
+  if (interval === "D" || rows.length === 0)
+    return rows;
+
+  const bucketKey = (d: string): string => {
+    const dt = new Date(d);
+    if (interval === "M") {
+      return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}`;
+    }
+    const day = dt.getDay();
+    const monday = new Date(dt);
+    monday.setDate(
+      dt.getDate() - ((day + 6) % 7),
+    );
+    return monday.toISOString().slice(0, 10);
+  };
+
+  const buckets = new Map<
+    string,
+    IndicatorRow[]
+  >();
+  for (const row of rows) {
+    const key = bucketKey(row.date);
+    let arr = buckets.get(key);
+    if (!arr) {
+      arr = [];
+      buckets.set(key, arr);
+    }
+    arr.push(row);
+  }
+
+  const result: IndicatorRow[] = [];
+  for (const [, bucket] of buckets) {
+    // Use last row in bucket (latest snapshot)
+    const last = bucket[bucket.length - 1];
+    result.push({
+      ...last,
+      date: bucket[0].date, // align with OHLCV
+    });
+  }
+  return result;
+}
+
 export interface IndicatorVisibility {
   sma50: boolean;
   sma200: boolean;
@@ -78,6 +185,7 @@ interface StockChartProps {
   indicators: IndicatorRow[];
   isDark: boolean;
   height?: number;
+  interval?: ChartInterval;
   visibleIndicators?: IndicatorVisibility;
   /** Called with OHLC + indicator data on crosshair. */
   onCrosshairMove?: (data: {
@@ -119,10 +227,21 @@ export function StockChart({
   indicators,
   isDark,
   height = 700,
+  interval = "D",
   visibleIndicators = DEFAULT_INDICATORS,
   onCrosshairMove,
 }: StockChartProps) {
   const vis = visibleIndicators;
+
+  // Aggregate both OHLCV and indicators by interval
+  const aggOhlcv = useMemo(
+    () => aggregateOHLCV(ohlcv, interval),
+    [ohlcv, interval],
+  );
+  const aggIndicators = useMemo(
+    () => aggregateIndicators(indicators, interval),
+    [indicators, interval],
+  );
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
 
@@ -159,7 +278,7 @@ export function StockChart({
 
   const buildChart = useCallback(() => {
     const el = containerRef.current;
-    if (!el || ohlcv.length === 0) return;
+    if (!el || aggOhlcv.length === 0) return;
 
     // Cleanup previous chart
     if (chartRef.current) {
@@ -216,6 +335,7 @@ export function StockChart({
           timeVisible: true,
           rightOffset: 5,
           barSpacing: 6,
+          uniformDistribution: true,
         },
       };
 
@@ -224,7 +344,7 @@ export function StockChart({
 
     // ── Pane 1: Candlestick + overlays ──────────
 
-    const candleData = ohlcv.map((d) => ({
+    const candleData = aggOhlcv.map((d) => ({
       time: toTime(d.date),
       open: d.open,
       high: d.high,
@@ -264,7 +384,7 @@ export function StockChart({
       });
       sma50.setData(
         filterNull(
-          indicators.map((d) => ({
+          aggIndicators.map((d) => ({
             time: toTime(d.date),
             value: d.sma_50,
           })),
@@ -288,7 +408,7 @@ export function StockChart({
       });
       sma200.setData(
         filterNull(
-          indicators.map((d) => ({
+          aggIndicators.map((d) => ({
             time: toTime(d.date),
             value: d.sma_200,
           })),
@@ -314,7 +434,7 @@ export function StockChart({
       });
       bbUpper.setData(
         filterNull(
-          indicators.map((d) => ({
+          aggIndicators.map((d) => ({
             time: toTime(d.date),
             value: d.bb_upper,
           })),
@@ -329,7 +449,7 @@ export function StockChart({
       });
       bbLower.setData(
         filterNull(
-          indicators.map((d) => ({
+          aggIndicators.map((d) => ({
             time: toTime(d.date),
             value: d.bb_lower,
           })),
@@ -363,7 +483,7 @@ export function StockChart({
         },
       );
       volumeSeries.setData(
-        ohlcv.map((d) => ({
+        aggOhlcv.map((d) => ({
           time: toTime(d.date),
           value: d.volume,
           color:
@@ -390,7 +510,7 @@ export function StockChart({
       );
       rsiSeries.setData(
         filterNull(
-          indicators.map((d) => ({
+          aggIndicators.map((d) => ({
             time: toTime(d.date),
             value: d.rsi_14,
           })),
@@ -431,7 +551,7 @@ export function StockChart({
       );
       macdLine.setData(
         filterNull(
-          indicators.map((d) => ({
+          aggIndicators.map((d) => ({
             time: toTime(d.date),
             value: d.macd,
           })),
@@ -451,7 +571,7 @@ export function StockChart({
       );
       signalLine.setData(
         filterNull(
-          indicators.map((d) => ({
+          aggIndicators.map((d) => ({
             time: toTime(d.date),
             value: d.macd_signal,
           })),
@@ -468,7 +588,7 @@ export function StockChart({
       );
       macdHist.setData(
         filterNull(
-          indicators.map((d) => ({
+          aggIndicators.map((d) => ({
             time: toTime(d.date),
             value: d.macd_hist,
           })),
@@ -501,7 +621,7 @@ export function StockChart({
         if (!cd) return;
 
         const ts = String(param.time);
-        const match = ohlcv.find(
+        const match = aggOhlcv.find(
           (r) => r.date === ts,
         );
 
@@ -538,17 +658,34 @@ export function StockChart({
 
     // ── Fit & default range ─────────────────────
 
-    // Show last 6 months by default
-    const sixMonthsAgo = new Date(
-      Date.now() - 180 * 86400000,
-    )
-      .toISOString()
-      .slice(0, 10);
-    chart.timeScale().setVisibleRange({
-      from: sixMonthsAgo as Time,
-      to: ohlcv[ohlcv.length - 1].date as Time,
-    });
-  }, [ohlcv, indicators, actualDark, height, bg, text, grid, vis, onCrosshairMove]);
+    // Default visible range per interval:
+    // D = 6 months, W = 1 year, M = all data
+    const lastDate = new Date(
+      aggOhlcv[aggOhlcv.length - 1].date,
+    );
+    const rangeDays =
+      interval === "W"
+        ? 730
+        : interval === "D"
+          ? 180
+          : 0;
+
+    if (rangeDays > 0) {
+      const from = new Date(
+        lastDate.getTime() - rangeDays * 86400000,
+      )
+        .toISOString()
+        .slice(0, 10);
+      chart.timeScale().setVisibleRange({
+        from: from as Time,
+        to: aggOhlcv[
+          aggOhlcv.length - 1
+        ].date as Time,
+      });
+    } else {
+      chart.timeScale().fitContent();
+    }
+  }, [aggOhlcv, aggIndicators, actualDark, height, interval, bg, text, grid, vis, onCrosshairMove]);
 
   // Build chart on mount / data change
   useEffect(() => {

@@ -68,6 +68,7 @@ function ChartSkeleton({ h = "h-64" }: { h?: string }) {
 
 import {
   type IndicatorVisibility,
+  type ChartInterval,
   DEFAULT_INDICATORS,
 } from "@/components/charts/StockChart";
 
@@ -105,6 +106,8 @@ function AnalysisTab({ ticker }: { ticker: string }) {
   const [showIndicatorMenu, setShowIndicatorMenu] =
     useState(false);
   const [activeRange, setActiveRange] = useState("6M");
+  const [chartInterval, setChartInterval] =
+    useState<ChartInterval>("D");
   const [crosshairData, setCrosshairData] = useState<{
     date: string;
     open: number;
@@ -310,6 +313,29 @@ function AnalysisTab({ ticker }: { ticker: string }) {
             ))}
           </div>
 
+          {/* Interval selector (D/W/M) */}
+          <div className="inline-flex rounded-md bg-gray-100 dark:bg-gray-800 p-0.5">
+            {(
+              [
+                { key: "D", label: "Daily" },
+                { key: "W", label: "Weekly" },
+                { key: "M", label: "Monthly" },
+              ] as { key: ChartInterval; label: string }[]
+            ).map((iv) => (
+              <button
+                key={iv.key}
+                onClick={() => setChartInterval(iv.key)}
+                className={`px-2 py-0.5 text-[10px] font-medium rounded transition-colors ${
+                  chartInterval === iv.key
+                    ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm"
+                    : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                }`}
+              >
+                {iv.key}
+              </button>
+            ))}
+          </div>
+
           {/* Indicators dropdown */}
           <div className="relative">
             <button
@@ -348,6 +374,7 @@ function AnalysisTab({ ticker }: { ticker: string }) {
         indicators={chartIndicators}
         isDark={isDark}
         height={650}
+        interval={chartInterval}
         visibleIndicators={visibleIndicators}
         onCrosshairMove={setCrosshairData}
       />
