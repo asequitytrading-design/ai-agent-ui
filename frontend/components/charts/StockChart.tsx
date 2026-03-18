@@ -92,15 +92,9 @@ export function StockChart({
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
 
-  // Resolve theme from DOM — catches cases where
-  // the isDark prop is stale on first render
-  // (before useTheme hydrates from localStorage).
-  const actualDark =
-    typeof document !== "undefined"
-      ? document.documentElement.classList.contains(
-          "dark",
-        )
-      : isDark;
+  // Use the prop as the primary source — it re-renders
+  // when the user toggles the theme via useTheme().
+  const actualDark = isDark;
 
   const bg = actualDark ? "#111827" : "#ffffff";
   const text = actualDark ? "#9ca3af" : "#6b7280";
