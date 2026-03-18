@@ -21,7 +21,6 @@ import { useSessionManagement } from "@/hooks/useSessionManagement";
 import { Sidebar } from "@/components/Sidebar";
 import { AppHeader } from "@/components/AppHeader";
 import { ChatPanel } from "@/components/ChatPanel";
-import { ChatFAB } from "@/components/ChatFAB";
 import { EditProfileModal } from "@/components/EditProfileModal";
 import { ChangePasswordModal } from "@/components/ChangePasswordModal";
 import { SessionManagementModal } from "@/components/SessionManagementModal";
@@ -120,7 +119,6 @@ function AuthenticatedShell({
       </div>
 
       <ChatPanel />
-      <ChatFAB />
 
       <EditProfileModal
         isOpen={editProfile.isOpen}

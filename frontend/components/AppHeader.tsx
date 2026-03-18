@@ -170,12 +170,12 @@ export function AppHeader({
         </h1>
       </div>
 
-      {/* -- Right: chat toggle (mobile) + profile chip -- */}
+      {/* -- Right: chat toggle + profile chip -- */}
       <div className="flex items-center gap-2">
-        {/* Chat panel toggle — mobile only */}
+        {/* Chat panel toggle — all screen sizes */}
         <button
           onClick={() => chatContext.togglePanel()}
-          className="w-10 h-10 flex items-center justify-center text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-lg md:hidden"
+          className="w-10 h-10 flex items-center justify-center text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-lg transition-colors"
           aria-label="Toggle chat panel"
           data-testid="chat-toggle"
         >
