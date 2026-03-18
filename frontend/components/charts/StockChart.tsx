@@ -67,8 +67,8 @@ export interface IndicatorVisibility {
 export const DEFAULT_INDICATORS: IndicatorVisibility = {
   sma50: true,
   sma200: true,
-  bollinger: true,
-  volume: true,
+  bollinger: false,
+  volume: false,
   rsi: true,
   macd: true,
 };
@@ -79,7 +79,7 @@ interface StockChartProps {
   isDark: boolean;
   height?: number;
   visibleIndicators?: IndicatorVisibility;
-  /** Called with OHLC data when crosshair moves. */
+  /** Called with OHLC + indicator data on crosshair. */
   onCrosshairMove?: (data: {
     date: string;
     open: number;
@@ -87,6 +87,8 @@ interface StockChartProps {
     low: number;
     close: number;
     volume: number;
+    /** Overlay indicator values at crosshair. */
+    overlays?: { name: string; value: number; color: string }[];
   } | null) => void;
 }
 
@@ -200,7 +202,7 @@ export function StockChart({
           horzLines: { color: gridLive },
         },
         crosshair: {
-          mode: CrosshairMode.Normal,
+          mode: CrosshairMode.Magnet,
         },
         rightPriceScale: {
           borderColor: gridLive,
@@ -211,7 +213,7 @@ export function StockChart({
         },
         timeScale: {
           borderColor: gridLive,
-          timeVisible: false,
+          timeVisible: true,
           rightOffset: 5,
           barSpacing: 6,
         },
@@ -243,37 +245,13 @@ export function StockChart({
     );
     candleSeries.setData(candleData);
 
-    // Crosshair → OHLC legend callback
-    if (onCrosshairMove) {
-      chart.subscribeCrosshairMove((param) => {
-        if (!param.time) {
-          onCrosshairMove(null);
-          return;
-        }
-        const d = param.seriesData.get(
-          candleSeries,
-        ) as {
-          open: number;
-          high: number;
-          low: number;
-          close: number;
-        } | undefined;
-        if (d) {
-          const ts = String(param.time);
-          const match = ohlcv.find(
-            (r) => r.date === ts,
-          );
-          onCrosshairMove({
-            date: ts,
-            open: d.open,
-            high: d.high,
-            low: d.low,
-            close: d.close,
-            volume: match?.volume ?? 0,
-          });
-        }
-      });
-    }
+    // Track overlay series for crosshair tooltips
+    type OverlaySeries = {
+      name: string;
+      color: string;
+      series: ReturnType<typeof chart.addSeries>;
+    };
+    const overlaySeries: OverlaySeries[] = [];
 
     if (vis.sma50) {
       const sma50 = chart.addSeries(LineSeries, {
@@ -282,7 +260,7 @@ export function StockChart({
         lineStyle: 2,
         priceLineVisible: false,
         lastValueVisible: false,
-        title: "SMA 50",
+        title: "",
       });
       sma50.setData(
         filterNull(
@@ -292,6 +270,11 @@ export function StockChart({
           })),
         ),
       );
+      overlaySeries.push({
+        name: "SMA 50",
+        color: "#f59e0b",
+        series: sma50,
+      });
     }
 
     if (vis.sma200) {
@@ -301,7 +284,7 @@ export function StockChart({
         lineStyle: 3,
         priceLineVisible: false,
         lastValueVisible: false,
-        title: "SMA 200",
+        title: "",
       });
       sma200.setData(
         filterNull(
@@ -311,6 +294,11 @@ export function StockChart({
           })),
         ),
       );
+      overlaySeries.push({
+        name: "SMA 200",
+        color: "#ef4444",
+        series: sma200,
+      });
     }
 
     if (vis.bollinger) {
@@ -322,7 +310,7 @@ export function StockChart({
         lineWidth: 1,
         priceLineVisible: false,
         lastValueVisible: false,
-        title: "BB Upper",
+        title: "",
       });
       bbUpper.setData(
         filterNull(
@@ -337,7 +325,7 @@ export function StockChart({
         lineWidth: 1,
         priceLineVisible: false,
         lastValueVisible: false,
-        title: "BB Lower",
+        title: "",
       });
       bbLower.setData(
         filterNull(
@@ -346,6 +334,18 @@ export function StockChart({
             value: d.bb_lower,
           })),
         ),
+      );
+      overlaySeries.push(
+        {
+          name: "BB Upper",
+          color: bbColor,
+          series: bbUpper,
+        },
+        {
+          name: "BB Lower",
+          color: bbColor,
+          series: bbLower,
+        },
       );
     }
 
@@ -358,7 +358,7 @@ export function StockChart({
         {
           priceLineVisible: false,
           lastValueVisible: false,
-          title: "Volume",
+          title: "",
           priceFormat: { type: "volume" },
         },
       );
@@ -480,6 +480,60 @@ export function StockChart({
               : "rgba(239,68,68,0.6)",
         })),
       );
+    }
+
+    // ── Crosshair → OHLC + overlay legend ───────
+
+    if (onCrosshairMove) {
+      chart.subscribeCrosshairMove((param) => {
+        if (!param.time) {
+          onCrosshairMove(null);
+          return;
+        }
+        const cd = param.seriesData.get(
+          candleSeries,
+        ) as {
+          open: number;
+          high: number;
+          low: number;
+          close: number;
+        } | undefined;
+        if (!cd) return;
+
+        const ts = String(param.time);
+        const match = ohlcv.find(
+          (r) => r.date === ts,
+        );
+
+        // Collect overlay values at this time
+        const overlays: {
+          name: string;
+          value: number;
+          color: string;
+        }[] = [];
+        for (const ov of overlaySeries) {
+          const val = param.seriesData.get(
+            ov.series,
+          ) as { value: number } | undefined;
+          if (val?.value != null) {
+            overlays.push({
+              name: ov.name,
+              value: val.value,
+              color: ov.color,
+            });
+          }
+        }
+
+        onCrosshairMove({
+          date: ts,
+          open: cd.open,
+          high: cd.high,
+          low: cd.low,
+          close: cd.close,
+          volume: match?.volume ?? 0,
+          overlays,
+        });
+      });
     }
 
     // ── Fit & default range ─────────────────────

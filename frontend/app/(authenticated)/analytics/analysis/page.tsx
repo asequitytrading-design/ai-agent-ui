@@ -112,6 +112,7 @@ function AnalysisTab({ ticker }: { ticker: string }) {
     low: number;
     close: number;
     volume: number;
+    overlays?: { name: string; value: number; color: string }[];
   } | null>(null);
 
   useEffect(() => {
@@ -272,6 +273,20 @@ function AnalysisTab({ ticker }: { ticker: string }) {
               <span className="text-gray-500 dark:text-gray-400">
                 Vol {(displayData.volume / 1e6).toFixed(1)}M
               </span>
+              {displayData.overlays?.map((ov) => (
+                <span key={ov.name} className="ml-1">
+                  <span
+                    className="inline-block w-2 h-2 rounded-full mr-0.5"
+                    style={{ backgroundColor: ov.color }}
+                  />
+                  <span className="text-gray-500 dark:text-gray-400">
+                    {ov.name}
+                  </span>{" "}
+                  <span className="text-gray-900 dark:text-white">
+                    {ov.value.toFixed(2)}
+                  </span>
+                </span>
+              ))}
             </>
           )}
         </div>
