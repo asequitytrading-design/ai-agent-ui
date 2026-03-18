@@ -165,6 +165,22 @@ export function StockChart({
       chartRef.current = null;
     }
 
+    // Re-check DOM at build time to catch any
+    // stale closure values for actualDark.
+    const liveDark =
+      document.documentElement.classList.contains(
+        "dark",
+      );
+    const bgLive = liveDark
+      ? "#111827"
+      : "#ffffff";
+    const textLive = liveDark
+      ? "#9ca3af"
+      : "#6b7280";
+    const gridLive = liveDark
+      ? "rgba(55,65,81,0.3)"
+      : "rgba(229,231,235,0.6)";
+
     const chartOptions: DeepPartial<TimeChartOptions> =
       {
         width: el.clientWidth,
@@ -172,29 +188,29 @@ export function StockChart({
         layout: {
           background: {
             type: ColorType.Solid,
-            color: bg,
+            color: bgLive,
           },
-          textColor: text,
+          textColor: textLive,
           fontFamily:
             "'IBM Plex Mono', 'DM Sans', system-ui",
           fontSize: 11,
         },
         grid: {
-          vertLines: { color: grid },
-          horzLines: { color: grid },
+          vertLines: { color: gridLive },
+          horzLines: { color: gridLive },
         },
         crosshair: {
           mode: CrosshairMode.Normal,
         },
         rightPriceScale: {
-          borderColor: grid,
+          borderColor: gridLive,
           scaleMargins: {
             top: 0.05,
             bottom: 0.05,
           },
         },
         timeScale: {
-          borderColor: grid,
+          borderColor: gridLive,
           timeVisible: false,
           rightOffset: 5,
           barSpacing: 6,
@@ -298,7 +314,7 @@ export function StockChart({
     }
 
     if (vis.bollinger) {
-      const bbColor = actualDark
+      const bbColor = liveDark
         ? "rgba(165,180,252,0.55)"
         : "rgba(99,102,241,0.45)";
       const bbUpper = chart.addSeries(LineSeries, {
@@ -484,27 +500,6 @@ export function StockChart({
   useEffect(() => {
     buildChart();
   }, [buildChart]);
-
-  // Theme sync — apply colors without rebuilding
-  useEffect(() => {
-    const chart = chartRef.current;
-    if (!chart) return;
-    chart.applyOptions({
-      layout: {
-        background: {
-          type: ColorType.Solid,
-          color: bg,
-        },
-        textColor: text,
-      },
-      grid: {
-        vertLines: { color: grid },
-        horzLines: { color: grid },
-      },
-      rightPriceScale: { borderColor: grid },
-      timeScale: { borderColor: grid },
-    });
-  }, [actualDark, bg, text, grid]);
 
   // Resize handler
   useEffect(() => {
