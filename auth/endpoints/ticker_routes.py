@@ -182,3 +182,100 @@ def unlink_ticker(
         normalised,
     )
     return {"detail": "unlinked"}
+
+
+# ---------------------------------------------------------------
+# User Preferences (localStorage + Redis sync)
+# ---------------------------------------------------------------
+
+_PREFS_TTL = 7 * 86400  # 7 days sliding TTL
+
+
+@router.get("/preferences")
+def get_preferences(
+    user: UserContext = Depends(get_current_user),
+) -> Dict:
+    """Return stored preferences for the current user.
+
+    Reads from Redis with key ``prefs:{user_id}``.
+    Returns empty dict if no preferences are stored.
+    Extends the sliding TTL on every read.
+    """
+    import json
+
+    try:
+        from cache import get_cache
+    except ImportError:
+        return {}
+
+    cache = get_cache()
+    key = f"prefs:{user.user_id}"
+    raw = cache.get(key)
+    if raw is None:
+        return {}
+    try:
+        prefs = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    # Extend sliding TTL on read
+    cache.set(key, raw, _PREFS_TTL)
+    return prefs
+
+
+class PreferencesBody(BaseModel):
+    """Full preferences payload from the frontend."""
+
+    chart: Dict | None = None
+    dashboard: Dict | None = None
+    insights: Dict | None = None
+    admin: Dict | None = None
+    navigation: Dict | None = None
+    last_login: str | None = None
+
+
+@router.put("/preferences")
+def put_preferences(
+    body: PreferencesBody,
+    user: UserContext = Depends(get_current_user),
+) -> Dict[str, str]:
+    """Upsert preferences for the current user.
+
+    Merges with existing preferences so partial
+    updates are supported.  Sets a sliding 7-day TTL.
+    """
+    import json
+
+    try:
+        from cache import get_cache
+    except ImportError:
+        return {"detail": "cache unavailable"}
+
+    cache = get_cache()
+    key = f"prefs:{user.user_id}"
+
+    # Merge with existing
+    existing: dict = {}
+    raw = cache.get(key)
+    if raw:
+        try:
+            existing = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    incoming = body.model_dump(exclude_none=True)
+    for section, values in incoming.items():
+        if isinstance(values, dict) and isinstance(
+            existing.get(section), dict
+        ):
+            existing[section].update(values)
+        else:
+            existing[section] = values
+
+    cache.set(
+        key, json.dumps(existing), _PREFS_TTL,
+    )
+    _logger.info(
+        "Preferences saved for user %s",
+        user.user_id,
+    )
+    return {"detail": "saved"}

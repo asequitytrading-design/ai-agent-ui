@@ -7,6 +7,7 @@
  */
 
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { usePreferences } from "@/hooks/usePreferences";
 import type { UserProfile } from "@/hooks/useEditProfile";
 import type {
   WatchlistResponse,
@@ -28,8 +29,14 @@ import { ForecastChartWidget } from "@/components/widgets/ForecastChartWidget";
 export type MarketFilter = "india" | "us";
 
 export default function DashboardPage() {
+  const [userPrefs, updatePrefs] = usePreferences();
   const [marketFilter, setMarketFilter] =
-    useState<MarketFilter>("india");
+    useState<MarketFilter>(
+      () =>
+        (userPrefs.dashboard?.marketFilter as
+          | MarketFilter
+          | undefined) ?? "india",
+    );
   const [selectedTicker, setSelectedTicker] =
     useState<string | null>(null);
   const { openPanel } = useChatContext();
@@ -182,7 +189,12 @@ export default function DashboardPage() {
         watchlist={filteredWatchlist}
         profile={profile}
         marketFilter={marketFilter}
-        onMarketFilterChange={setMarketFilter}
+        onMarketFilterChange={(f) => {
+          setMarketFilter(f);
+          updatePrefs("dashboard", {
+            marketFilter: f,
+          });
+        }}
         onQuickAction={handleQuickAction}
       />
 

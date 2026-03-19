@@ -22,6 +22,7 @@ import {
   buildForecastShapes,
 } from "@/components/charts/chartBuilders";
 import { StockChart } from "@/components/charts/StockChart";
+import { usePreferences } from "@/hooks/usePreferences";
 import type {
   OHLCVResponse,
   IndicatorsResponse,
@@ -95,7 +96,15 @@ const RANGE_OPTIONS = [
   { label: "Max", days: 0 },
 ];
 
-function AnalysisTab({ ticker }: { ticker: string }) {
+function AnalysisTab({
+  ticker,
+  prefs,
+  onPrefsChange,
+}: {
+  ticker: string;
+  prefs: Record<string, unknown>;
+  onPrefsChange: (v: Record<string, unknown>) => void;
+}) {
   const [ohlcv, setOhlcv] =
     useState<OHLCVResponse | null>(null);
   const [indicators, setIndicators] =
@@ -103,12 +112,19 @@ function AnalysisTab({ ticker }: { ticker: string }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [visibleIndicators, setVisibleIndicators] =
-    useState<IndicatorVisibility>(DEFAULT_INDICATORS);
+    useState<IndicatorVisibility>(() => ({
+      ...DEFAULT_INDICATORS,
+      ...((prefs.indicators as Record<string, boolean>) ?? {}),
+    }));
   const [showIndicatorMenu, setShowIndicatorMenu] =
     useState(false);
-  const [activeRange, setActiveRange] = useState("6M");
+  const [activeRange, setActiveRange] = useState(
+    () => (prefs.range as string) ?? "6M",
+  );
   const [chartInterval, setChartInterval] =
-    useState<ChartInterval>("D");
+    useState<ChartInterval>(
+      () => (prefs.interval as ChartInterval) ?? "D",
+    );
   // Chart height: computed once on mount, stable across
   // re-renders to avoid triggering chart rebuilds.
   const [chartHeight] = useState(() =>
@@ -248,12 +264,29 @@ function AnalysisTab({ ticker }: { ticker: string }) {
 
   const toggleIndicator = useCallback(
     (key: keyof IndicatorVisibility) => {
-      setVisibleIndicators((prev) => ({
-        ...prev,
-        [key]: !prev[key],
-      }));
+      setVisibleIndicators((prev) => {
+        const next = { ...prev, [key]: !prev[key] };
+        onPrefsChange({ indicators: next });
+        return next;
+      });
     },
-    [],
+    [onPrefsChange],
+  );
+
+  // Persist range and interval changes
+  const handleRange = useCallback(
+    (r: string) => {
+      setActiveRange(r);
+      onPrefsChange({ range: r });
+    },
+    [onPrefsChange],
+  );
+  const handleInterval = useCallback(
+    (iv: ChartInterval) => {
+      setChartInterval(iv);
+      onPrefsChange({ interval: iv });
+    },
+    [onPrefsChange],
   );
 
   // Set initial OHLC legend from latest data point
@@ -309,7 +342,7 @@ function AnalysisTab({ ticker }: { ticker: string }) {
             {RANGE_OPTIONS.map((r) => (
               <button
                 key={r.label}
-                onClick={() => setActiveRange(r.label)}
+                onClick={() => handleRange(r.label)}
                 className={`px-2 py-0.5 text-[10px] font-medium rounded transition-colors ${
                   activeRange === r.label
                     ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm"
@@ -332,7 +365,7 @@ function AnalysisTab({ ticker }: { ticker: string }) {
             ).map((iv) => (
               <button
                 key={iv.key}
-                onClick={() => setChartInterval(iv.key)}
+                onClick={() => handleInterval(iv.key)}
                 className={`px-2 py-0.5 text-[10px] font-medium rounded transition-colors ${
                   chartInterval === iv.key
                     ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm"
@@ -827,12 +860,20 @@ const TABS: { id: TabId; label: string }[] = [
 function AnalysisPageInner() {
   const searchParams = useSearchParams();
   const tickerParam = searchParams.get("ticker");
+  const [userPrefs, updatePrefs] = usePreferences();
+  const chartPrefs = (userPrefs.chart ?? {}) as Record<
+    string,
+    unknown
+  >;
 
   const [tickers, setTickers] = useState<string[]>([]);
   const [selectedTicker, setSelectedTicker] =
     useState<string>("");
   const [activeTab, setActiveTab] =
-    useState<TabId>("analysis");
+    useState<TabId>(
+      () =>
+        (chartPrefs.tab as TabId) ?? "analysis",
+    );
   const [tickersLoading, setTickersLoading] =
     useState(true);
 
@@ -851,14 +892,27 @@ function AnalysisPageInner() {
         if (cancelled) return;
         const list = data.tickers ?? [];
         setTickers(list);
-        // Use URL param if valid, otherwise first ticker
+        // Priority: URL param > saved pref > first ticker
+        const upper = list.map(
+          (t: string) => t.toUpperCase(),
+        );
+        const savedTicker = chartPrefs.ticker as
+          | string
+          | undefined;
         if (
           tickerParam &&
-          list
-            .map((t: string) => t.toUpperCase())
-            .includes(tickerParam.toUpperCase())
+          upper.includes(tickerParam.toUpperCase())
         ) {
-          setSelectedTicker(tickerParam.toUpperCase());
+          setSelectedTicker(
+            tickerParam.toUpperCase(),
+          );
+        } else if (
+          savedTicker &&
+          upper.includes(savedTicker.toUpperCase())
+        ) {
+          setSelectedTicker(
+            savedTicker.toUpperCase(),
+          );
         } else if (list.length > 0) {
           setSelectedTicker(list[0]);
         }
@@ -891,8 +945,9 @@ function AnalysisPageInner() {
       setSelectedTicker(t);
       setTickerSearch("");
       setShowTickerDropdown(false);
+      updatePrefs("chart", { ticker: t });
     },
-    [],
+    [updatePrefs],
   );
 
   if (tickersLoading) {
@@ -925,7 +980,10 @@ function AnalysisPageInner() {
           {TABS.map((tab) => (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => {
+                setActiveTab(tab.id);
+                updatePrefs("chart", { tab: tab.id });
+              }}
               className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${
                 activeTab === tab.id
                   ? "bg-indigo-600 text-white shadow-sm"
@@ -1015,7 +1073,13 @@ function AnalysisPageInner() {
 
       {/* Tab content — full width */}
       {activeTab === "analysis" && (
-        <AnalysisTab ticker={selectedTicker} />
+        <AnalysisTab
+          ticker={selectedTicker}
+          prefs={chartPrefs}
+          onPrefsChange={(v) =>
+            updatePrefs("chart", v)
+          }
+        />
       )}
       {activeTab === "forecast" && (
         <ForecastTab ticker={selectedTicker} />
