@@ -321,6 +321,20 @@ def get_portfolio(
         user.user_id,
     )
 
+    # Get raw transactions for transaction_id lookup
+    txn_df = stock_repo.get_portfolio_transactions(
+        user.user_id,
+    )
+    # Map ticker → latest transaction_id
+    txn_id_map: Dict[str, str] = {}
+    if not txn_df.empty and (
+        "transaction_id" in txn_df.columns
+    ):
+        for _, t in txn_df.iterrows():
+            txn_id_map[str(t["ticker"])] = str(
+                t["transaction_id"]
+            )
+
     # Enrich with current prices from OHLCV
     holdings = []
     for _, row in holdings_df.iterrows():
@@ -358,6 +372,9 @@ def get_portfolio(
 
         holdings.append({
             "ticker": ticker,
+            "transaction_id": txn_id_map.get(
+                ticker, ""
+            ),
             "quantity": qty,
             "avg_price": round(avg, 2),
             "current_price": current_price,

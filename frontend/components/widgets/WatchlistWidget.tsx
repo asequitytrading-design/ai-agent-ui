@@ -20,6 +20,8 @@ interface WatchlistWidgetProps {
   portfolio?: PortfolioHolding[];
   portfolioLoading?: boolean;
   onAddStock?: () => void;
+  onEditStock?: (ticker: string) => void;
+  onDeleteStock?: (ticker: string) => void;
 }
 
 /** Map ISO currency code to display symbol. */
@@ -81,6 +83,8 @@ export function WatchlistWidget({
   portfolio = [],
   portfolioLoading = false,
   onAddStock,
+  onEditStock,
+  onDeleteStock,
 }: WatchlistWidgetProps) {
   const [activeTab, setActiveTab] =
     useState<WidgetTab>("portfolio");
@@ -324,6 +328,37 @@ export function WatchlistWidget({
                   <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums ${positive ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400" : "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"}`}>
                     {positive ? "+" : ""}{gain.toFixed(2)}%
                   </span>
+                  {/* Edit / Delete actions */}
+                  <div className="flex items-center gap-0.5 shrink-0">
+                    {onEditStock && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onEditStock(h.ticker);
+                        }}
+                        title="Edit holding"
+                        className="p-1 rounded text-gray-400 hover:text-indigo-600 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+                      >
+                        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                        </svg>
+                      </button>
+                    )}
+                    {onDeleteStock && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDeleteStock(h.ticker);
+                        }}
+                        title="Remove from portfolio"
+                        className="p-1 rounded text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                      >
+                        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+                        </svg>
+                      </button>
+                    )}
+                  </div>
                 </div>
               );
             })}

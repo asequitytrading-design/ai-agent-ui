@@ -7,6 +7,7 @@ import { API_URL } from "@/lib/config";
 
 export interface PortfolioHolding {
   ticker: string;
+  transaction_id: string;
   quantity: number;
   avg_price: number;
   current_price: number | null;

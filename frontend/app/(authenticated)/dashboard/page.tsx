@@ -16,6 +16,7 @@ import type {
 } from "@/lib/types";
 import { usePortfolio } from "@/hooks/usePortfolio";
 import { AddStockModal } from "@/components/widgets/AddStockModal";
+import { EditStockModal } from "@/components/widgets/EditStockModal";
 import { useRegistry } from "@/hooks/useDashboardData";
 import {
   useDashboardHome,
@@ -52,6 +53,8 @@ export default function DashboardPage() {
   );
   const [showAddStock, setShowAddStock] =
     useState(false);
+  const [editingTicker, setEditingTicker] =
+    useState<string | null>(null);
 
   // Single request for all widget data
   const {
@@ -234,6 +237,24 @@ export default function DashboardPage() {
           portfolio={filteredPortfolio}
           portfolioLoading={portfolioData.loading}
           onAddStock={() => setShowAddStock(true)}
+          onEditStock={(ticker) =>
+            setEditingTicker(ticker)
+          }
+          onDeleteStock={(ticker) => {
+            const holding = portfolioData.holdings.find(
+              (h) => h.ticker === ticker,
+            );
+            if (
+              holding?.transaction_id &&
+              confirm(
+                `Remove ${ticker} from portfolio?`,
+              )
+            ) {
+              portfolioData.deleteHolding(
+                holding.transaction_id,
+              );
+            }
+          }}
         />
 
         <div className="space-y-4 md:space-y-6">
@@ -258,6 +279,28 @@ export default function DashboardPage() {
           await portfolioData.addHolding(data);
         }}
       />
+
+      {editingTicker && (() => {
+        const h = portfolioData.holdings.find(
+          (x) => x.ticker === editingTicker,
+        );
+        return h ? (
+          <EditStockModal
+            isOpen
+            ticker={h.ticker}
+            currentQty={h.quantity}
+            currentPrice={h.avg_price}
+            onClose={() => setEditingTicker(null)}
+            onSave={async (data) => {
+              await portfolioData.editHolding(
+                h.transaction_id,
+                data,
+              );
+              setEditingTicker(null);
+            }}
+          />
+        ) : null;
+      })()}
     </div>
   );
 }
