@@ -364,13 +364,21 @@ export function StockChart({
 
     // ── Pane 1: Candlestick + overlays ──────────
 
-    const candleData = aggOhlcv.map((d) => ({
-      time: toTime(d.date),
-      open: d.open,
-      high: d.high,
-      low: d.low,
-      close: d.close,
-    }));
+    const candleData = aggOhlcv
+      .filter(
+        (d) =>
+          d.open != null &&
+          d.high != null &&
+          d.low != null &&
+          d.close != null,
+      )
+      .map((d) => ({
+        time: toTime(d.date),
+        open: d.open,
+        high: d.high,
+        low: d.low,
+        close: d.close,
+      }));
 
     const candleSeries = chart.addSeries(
       CandlestickSeries,

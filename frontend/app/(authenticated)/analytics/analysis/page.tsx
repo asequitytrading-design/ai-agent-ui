@@ -155,13 +155,18 @@ function AnalysisTab({
       if (!el) return;
       if (!data) return; // keep last values visible
       const s = tickerCurrency(ticker);
+      const o = data.open ?? 0;
+      const h = data.high ?? 0;
+      const l = data.low ?? 0;
+      const c = data.close ?? 0;
+      const v = data.volume ?? 0;
       let html =
         `<span class="text-gray-500 dark:text-gray-400">${data.date}</span> ` +
-        `O <span class="text-gray-900 dark:text-white">${s}${data.open.toFixed(2)}</span> ` +
-        `H <span class="text-emerald-600 dark:text-emerald-400">${s}${data.high.toFixed(2)}</span> ` +
-        `L <span class="text-red-600 dark:text-red-400">${s}${data.low.toFixed(2)}</span> ` +
-        `C <span class="text-gray-900 dark:text-white">${s}${data.close.toFixed(2)}</span> ` +
-        `<span class="text-gray-500 dark:text-gray-400">Vol ${(data.volume / 1e6).toFixed(1)}M</span>`;
+        `O <span class="text-gray-900 dark:text-white">${s}${o.toFixed(2)}</span> ` +
+        `H <span class="text-emerald-600 dark:text-emerald-400">${s}${h.toFixed(2)}</span> ` +
+        `L <span class="text-red-600 dark:text-red-400">${s}${l.toFixed(2)}</span> ` +
+        `C <span class="text-gray-900 dark:text-white">${s}${c.toFixed(2)}</span> ` +
+        `<span class="text-gray-500 dark:text-gray-400">Vol ${(v / 1e6).toFixed(1)}M</span>`;
       if (data.overlays) {
         for (const ov of data.overlays) {
           html +=

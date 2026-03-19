@@ -222,7 +222,10 @@ export function WatchlistWidget({
         <>
         <div className="divide-y divide-gray-100 dark:divide-gray-800">
           {paginated.map((t, idx) => {
-            const positive = t.change >= 0;
+            const price = t.current_price ?? 0;
+            const change = t.change ?? 0;
+            const changePct = t.change_pct ?? 0;
+            const positive = change >= 0;
             const sym = currencySymbol(t.currency);
             return (
               <div
@@ -277,7 +280,7 @@ export function WatchlistWidget({
                   }}
                 >
                   {sym}
-                  {t.current_price.toLocaleString(
+                  {price.toLocaleString(
                     "en-US",
                     {
                       minimumFractionDigits: 2,
@@ -304,7 +307,7 @@ export function WatchlistWidget({
                   }}
                 >
                   {positive ? "+" : ""}
-                  {t.change_pct.toFixed(2)}%
+                  {changePct.toFixed(2)}%
                 </span>
 
                 {/* Sparkline */}

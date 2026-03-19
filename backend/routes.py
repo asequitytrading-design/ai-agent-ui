@@ -279,16 +279,42 @@ def create_app(
     async def _admin_metrics(
         current_user=None,
     ):
-        """GET /admin/metrics — LLM observability data."""
+        """GET /admin/metrics — LLM observability data.
+
+        Combines real-time cascade stats from the
+        in-memory collector with persistent request
+        totals from the Iceberg ``llm_usage`` table
+        so the count matches the dashboard widget.
+        """
         result: dict = {"timestamp": time.time()}
         if token_budget is not None:
             result["models"] = token_budget.get_status()
         else:
             result["models"] = {}
+
+        cascade_stats: dict = {}
         if obs_collector is not None:
-            result["cascade_stats"] = obs_collector.get_stats()
-        else:
-            result["cascade_stats"] = {}
+            cascade_stats = obs_collector.get_stats()
+
+        # Override ephemeral request count with
+        # persistent Iceberg total (last 30 days)
+        # so it matches the dashboard LLM widget.
+        try:
+            from tools._stock_shared import (
+                _require_repo,
+            )
+
+            repo = _require_repo()
+            usage = repo.get_dashboard_llm_usage(
+                user_id=None, days=30,
+            )
+            cascade_stats["requests_total"] = int(
+                usage.get("total_requests", 0)
+            )
+        except Exception:
+            pass  # keep in-memory count as fallback
+
+        result["cascade_stats"] = cascade_stats
         return result
 
     # ---------------------------------------------------------------

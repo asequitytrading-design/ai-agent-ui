@@ -115,7 +115,7 @@ function StockCard({
       {/* Price */}
       <p className="mt-3 font-mono text-2xl font-semibold text-gray-900 dark:text-gray-100">
         {currencySymbol(card.currency)}
-        {card.price.toLocaleString(undefined, {
+        {(card.price ?? 0).toLocaleString(undefined, {
           minimumFractionDigits: 2,
           maximumFractionDigits: 2,
         })}
