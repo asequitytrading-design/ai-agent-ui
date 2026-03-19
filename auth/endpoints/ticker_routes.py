@@ -11,7 +11,9 @@ Endpoints
 """
 
 import logging
-from typing import Dict, List
+import uuid
+from datetime import date
+from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -279,3 +281,214 @@ def put_preferences(
         user.user_id,
     )
     return {"detail": "saved"}
+
+
+# ---------------------------------------------------------------
+# Portfolio holdings (CRUD)
+# ---------------------------------------------------------------
+
+def _get_stock_repo():
+    """Lazy import to avoid circular deps."""
+    from tools._stock_shared import _require_repo
+    return _require_repo()
+
+
+class AddPortfolioRequest(BaseModel):
+    """Add a stock to the portfolio."""
+
+    ticker: str
+    quantity: float
+    price: float
+    trade_date: str  # YYYY-MM-DD
+    notes: str = ""
+
+
+class EditPortfolioRequest(BaseModel):
+    """Edit portfolio transaction fields."""
+
+    quantity: float | None = None
+    price: float | None = None
+    trade_date: str | None = None
+
+
+@router.get("/portfolio")
+def get_portfolio(
+    user: UserContext = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Return computed holdings + raw transactions."""
+    stock_repo = _get_stock_repo()
+    holdings_df = stock_repo.get_portfolio_holdings(
+        user.user_id,
+    )
+
+    # Enrich with current prices from OHLCV
+    holdings = []
+    for _, row in holdings_df.iterrows():
+        ticker = str(row["ticker"])
+        current_price = None
+        try:
+            ohlcv = stock_repo.get_ohlcv(ticker)
+            if not ohlcv.empty:
+                current_price = float(
+                    ohlcv.iloc[-1]["close"]
+                )
+        except Exception:
+            pass
+
+        qty = float(row["quantity"])
+        avg = float(row["avg_price"])
+        invested = round(qty * avg, 2)
+        current_val = (
+            round(qty * current_price, 2)
+            if current_price
+            else None
+        )
+        gain_pct = (
+            round(
+                (
+                    (current_price - avg)
+                    / avg
+                    * 100
+                ),
+                2,
+            )
+            if current_price and avg
+            else None
+        )
+
+        holdings.append({
+            "ticker": ticker,
+            "quantity": qty,
+            "avg_price": round(avg, 2),
+            "current_price": current_price,
+            "currency": str(
+                row.get("currency", "USD")
+            ),
+            "market": str(
+                row.get("market", "us")
+            ),
+            "invested": invested,
+            "current_value": current_val,
+            "gain_loss_pct": gain_pct,
+        })
+
+    # Portfolio totals per currency
+    totals: Dict[str, float] = {}
+    for h in holdings:
+        ccy = h["currency"]
+        val = h["current_value"] or 0
+        totals[ccy] = totals.get(ccy, 0) + val
+
+    return {
+        "holdings": holdings,
+        "totals": totals,
+    }
+
+
+@router.post("/portfolio")
+def add_portfolio_holding(
+    body: AddPortfolioRequest,
+    user: UserContext = Depends(get_current_user),
+) -> Dict[str, str]:
+    """Add a stock to the user's portfolio."""
+    ticker = body.ticker.upper().strip()
+    mkt = (
+        "india"
+        if ticker.endswith((".NS", ".BO"))
+        else "us"
+    )
+    ccy = "INR" if mkt == "india" else "USD"
+
+    stock_repo = _get_stock_repo()
+    txn = {
+        "transaction_id": str(uuid.uuid4()),
+        "user_id": user.user_id,
+        "ticker": ticker,
+        "side": "BUY",
+        "quantity": body.quantity,
+        "price": body.price,
+        "currency": ccy,
+        "market": mkt,
+        "trade_date": date.fromisoformat(
+            body.trade_date,
+        ),
+        "fees": 0,
+        "notes": body.notes,
+    }
+    stock_repo.add_portfolio_transaction(txn)
+
+    # Invalidate portfolio cache
+    try:
+        from cache import get_cache
+        cache = get_cache()
+        cache.invalidate(
+            f"cache:portfolio:{user.user_id}",
+        )
+    except ImportError:
+        pass
+
+    _logger.info(
+        "Portfolio: user %s added %s qty=%.2f"
+        " price=%.2f",
+        user.user_id,
+        ticker,
+        body.quantity,
+        body.price,
+    )
+    return {
+        "detail": "added",
+        "transaction_id": txn["transaction_id"],
+    }
+
+
+@router.put("/portfolio/{transaction_id}")
+def edit_portfolio_holding(
+    transaction_id: str,
+    body: EditPortfolioRequest,
+    user: UserContext = Depends(get_current_user),
+) -> Dict[str, str]:
+    """Edit price, quantity, or trade_date."""
+    updates: dict = {}
+    if body.quantity is not None:
+        updates["quantity"] = body.quantity
+    if body.price is not None:
+        updates["price"] = body.price
+    if body.trade_date is not None:
+        updates["trade_date"] = (
+            date.fromisoformat(body.trade_date)
+        )
+
+    if not updates:
+        raise HTTPException(
+            status_code=422,
+            detail="No fields to update",
+        )
+
+    stock_repo = _get_stock_repo()
+    ok = stock_repo.update_portfolio_transaction(
+        transaction_id, user.user_id, updates,
+    )
+    if not ok:
+        raise HTTPException(
+            status_code=404,
+            detail="Transaction not found",
+        )
+    return {"detail": "updated"}
+
+
+@router.delete("/portfolio/{transaction_id}")
+def delete_portfolio_holding(
+    transaction_id: str,
+    user: UserContext = Depends(get_current_user),
+) -> Dict[str, str]:
+    """Delete a portfolio transaction."""
+    stock_repo = _get_stock_repo()
+    ok = stock_repo.delete_portfolio_transaction(
+        transaction_id, user.user_id,
+    )
+    if not ok:
+        raise HTTPException(
+            status_code=404,
+            detail="Transaction not found",
+        )
+    return {"detail": "deleted"}

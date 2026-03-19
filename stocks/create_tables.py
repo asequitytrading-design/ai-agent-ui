@@ -1251,6 +1251,89 @@ def _ticker_horizon_partition_spec(schema: Schema) -> PartitionSpec:
     )
 
 
+def _portfolio_transactions_schema() -> Schema:
+    """Return the schema for ``stocks.portfolio_transactions``.
+
+    Append-only transaction ledger for user portfolio
+    holdings. Supports BUY now; SELL, DIVIDEND, SPLIT
+    planned for future phases.
+    """
+    return Schema(
+        NestedField(
+            field_id=1,
+            name="transaction_id",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=2,
+            name="user_id",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=3,
+            name="ticker",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=4,
+            name="side",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=5,
+            name="quantity",
+            field_type=DoubleType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=6,
+            name="price",
+            field_type=DoubleType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=7,
+            name="currency",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=8,
+            name="market",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=9,
+            name="trade_date",
+            field_type=DateType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=10,
+            name="fees",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=11,
+            name="notes",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=12,
+            name="created_at",
+            field_type=TimestampType(),
+            required=False,
+        ),
+    )
+
+
 def _create_table(
     catalog: SqlCatalog,
     identifier: str,
@@ -1368,6 +1451,14 @@ def create_tables() -> None:
         _LLM_USAGE_TABLE,
         usage_schema,
         _request_date_partition_spec(usage_schema),
+    )
+
+    # Portfolio transactions (no partition — small table)
+    _create_table(
+        catalog,
+        f"{_NAMESPACE}.portfolio_transactions",
+        _portfolio_transactions_schema(),
+        empty_spec,
     )
 
     _logger.info("Stocks Iceberg table initialisation complete.")

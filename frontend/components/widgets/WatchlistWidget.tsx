@@ -5,6 +5,7 @@ import { apiFetch } from "@/lib/apiFetch";
 import { API_URL } from "@/lib/config";
 import type { DashboardData } from "@/hooks/useDashboardData";
 import type { WatchlistResponse } from "@/lib/types";
+import type { PortfolioHolding } from "@/hooks/usePortfolio";
 import { WidgetSkeleton } from "./WidgetSkeleton";
 import { WidgetError } from "./WidgetError";
 
@@ -15,6 +16,10 @@ interface WatchlistWidgetProps {
   selectedTicker?: string | null;
   onSelectTicker?: (ticker: string) => void;
   onRefresh?: () => void;
+  /** Portfolio holdings for the Portfolio tab. */
+  portfolio?: PortfolioHolding[];
+  portfolioLoading?: boolean;
+  onAddStock?: () => void;
 }
 
 /** Map ISO currency code to display symbol. */
@@ -66,12 +71,19 @@ function Sparkline({
 
 type RefreshState = "idle" | "pending" | "success" | "error";
 
+type WidgetTab = "portfolio" | "watchlist";
+
 export function WatchlistWidget({
   data,
   selectedTicker,
   onSelectTicker,
   onRefresh,
+  portfolio = [],
+  portfolioLoading = false,
+  onAddStock,
 }: WatchlistWidgetProps) {
+  const [activeTab, setActiveTab] =
+    useState<WidgetTab>("portfolio");
   const [page, setPage] = useState(1);
 
   // Per-ticker refresh state
@@ -187,31 +199,117 @@ export function WatchlistWidget({
         overflow-hidden
       "
     >
-      {/* Header */}
+      {/* Header with tabs */}
       <div
         className="
-          px-5 py-4 flex items-center justify-between
+          px-5 py-3 flex items-center justify-between
           border-b border-gray-100 dark:border-gray-800
         "
       >
-        <h2
-          className="
-            text-sm font-semibold tracking-wide
-            uppercase text-gray-500 dark:text-gray-400
-          "
-          style={{
-            fontFamily: "'DM Sans', sans-serif",
-          }}
-        >
-          Watchlist
-        </h2>
-        <span className="text-xs text-gray-400 dark:text-gray-500">
-          {tickers.length} ticker{tickers.length !== 1 ? "s" : ""}
-        </span>
+        <div className="inline-flex rounded-lg bg-gray-100 dark:bg-gray-800 p-0.5">
+          <button
+            onClick={() => setActiveTab("portfolio")}
+            className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+              activeTab === "portfolio"
+                ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm"
+                : "text-gray-500 dark:text-gray-400"
+            }`}
+          >
+            Portfolio
+          </button>
+          <button
+            onClick={() => setActiveTab("watchlist")}
+            className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+              activeTab === "watchlist"
+                ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm"
+                : "text-gray-500 dark:text-gray-400"
+            }`}
+          >
+            Watchlist
+          </button>
+        </div>
+        <div className="flex items-center gap-2">
+          {activeTab === "portfolio" && onAddStock && (
+            <button
+              onClick={onAddStock}
+              title="Add stock to portfolio"
+              className="p-1 rounded-md text-gray-400 hover:text-indigo-600 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+            >
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="12" y1="5" x2="12" y2="19" />
+                <line x1="5" y1="12" x2="19" y2="12" />
+              </svg>
+            </button>
+          )}
+          <span className="text-xs text-gray-400 dark:text-gray-500">
+            {activeTab === "portfolio"
+              ? `${portfolio.length} stock${portfolio.length !== 1 ? "s" : ""}`
+              : `${tickers.length} ticker${tickers.length !== 1 ? "s" : ""}`}
+          </span>
+        </div>
       </div>
 
-      {/* Content */}
-      {tickers.length === 0 ? (
+      {/* Portfolio tab */}
+      {activeTab === "portfolio" && (
+        portfolioLoading ? (
+          <div className="px-5 py-10 text-center">
+            <div className="animate-spin h-6 w-6 border-2 border-indigo-500 border-t-transparent rounded-full mx-auto" />
+          </div>
+        ) : portfolio.length === 0 ? (
+          <div className="px-5 py-10 text-center">
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
+              No stocks in your portfolio
+            </p>
+            {onAddStock && (
+              <button
+                onClick={onAddStock}
+                className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700"
+              >
+                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
+                Add Stock
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="divide-y divide-gray-100 dark:divide-gray-800">
+            {portfolio.map((h) => {
+              const sym = currencySymbol(h.currency);
+              const gain = h.gain_loss_pct ?? 0;
+              const positive = gain >= 0;
+              return (
+                <div
+                  key={h.ticker}
+                  className="flex items-center gap-3 px-5 py-3 hover:bg-gray-50 dark:hover:bg-gray-800/50"
+                >
+                  <span className={`h-2 w-2 shrink-0 rounded-full ${positive ? "bg-emerald-500" : "bg-red-500"}`} />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">
+                      {h.ticker}
+                    </p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                      {h.quantity} shares @ {sym}{h.avg_price.toFixed(2)}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-sm font-medium text-gray-900 dark:text-white font-mono">
+                      {sym}{(h.current_value ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 font-mono">
+                      Inv: {sym}{h.invested.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </p>
+                  </div>
+                  <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums ${positive ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400" : "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"}`}>
+                    {positive ? "+" : ""}{gain.toFixed(2)}%
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )
+      )}
+
+      {/* Watchlist tab */}
+      {activeTab === "watchlist" && tickers.length === 0 ? (
         <div className="px-5 py-10 text-center">
           <p className="text-sm text-gray-500 dark:text-gray-400">
             No stocks tracked for this market. Link a

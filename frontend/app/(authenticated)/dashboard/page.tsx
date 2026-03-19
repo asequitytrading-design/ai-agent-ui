@@ -15,6 +15,9 @@ import type {
   AnalysisResponse,
 } from "@/lib/types";
 import { useChatContext } from "@/providers/ChatProvider";
+import { usePortfolio } from "@/hooks/usePortfolio";
+import { AddStockModal } from "@/components/widgets/AddStockModal";
+import { useRegistry } from "@/hooks/useDashboardData";
 import {
   useDashboardHome,
   useProfile,
@@ -40,6 +43,17 @@ export default function DashboardPage() {
   const [selectedTicker, setSelectedTicker] =
     useState<string | null>(null);
   const { openPanel } = useChatContext();
+  const portfolioData = usePortfolio();
+  const registryData = useRegistry();
+  const registryTickers = useMemo(
+    () =>
+      registryData.value?.tickers?.map(
+        (t) => t.ticker,
+      ) ?? [],
+    [registryData.value],
+  );
+  const [showAddStock, setShowAddStock] =
+    useState(false);
 
   // Single request for all widget data
   const {
@@ -205,6 +219,11 @@ export default function DashboardPage() {
           selectedTicker={selectedTicker}
           onSelectTicker={setSelectedTicker}
           onRefresh={refresh}
+          portfolio={portfolioData.holdings.filter(
+            (h) => h.market === marketFilter,
+          )}
+          portfolioLoading={portfolioData.loading}
+          onAddStock={() => setShowAddStock(true)}
         />
 
         <div className="space-y-4 md:space-y-6">
@@ -219,6 +238,15 @@ export default function DashboardPage() {
       <ForecastChartWidget
         data={filteredForecasts}
         marketFilter={marketFilter}
+      />
+
+      <AddStockModal
+        isOpen={showAddStock}
+        tickers={registryTickers}
+        onClose={() => setShowAddStock(false)}
+        onAdd={async (data) => {
+          await portfolioData.addHolding(data);
+        }}
       />
     </div>
   );

@@ -73,6 +73,7 @@ _FORECAST_RUNS = f"{_NAMESPACE}.forecast_runs"
 _FORECASTS = f"{_NAMESPACE}.forecasts"
 _QUARTERLY_RESULTS = f"{_NAMESPACE}.quarterly_results"
 _CHAT_AUDIT_LOG = f"{_NAMESPACE}.chat_audit_log"
+_PORTFOLIO = f"{_NAMESPACE}.portfolio_transactions"
 
 
 def _now_utc() -> datetime:
@@ -3005,6 +3006,230 @@ class StockRepository:
                 exc,
             )
             return empty
+
+    # ------------------------------------------------------------------
+    # Portfolio transactions
+    # ------------------------------------------------------------------
+
+    def get_portfolio_holdings(
+        self, user_id: str,
+    ) -> pd.DataFrame:
+        """Return current holdings for *user_id*.
+
+        Reads all BUY transactions, groups by ticker,
+        and computes total quantity and weighted avg
+        price.
+
+        Returns:
+            DataFrame with columns: ticker, quantity,
+            avg_price, currency, market, invested.
+        """
+        try:
+            from pyiceberg.expressions import (
+                And, EqualTo,
+            )
+
+            tbl = self._load_table(_PORTFOLIO)
+            df = tbl.scan(
+                row_filter=And(
+                    EqualTo("user_id", user_id),
+                    EqualTo("side", "BUY"),
+                ),
+            ).to_pandas()
+        except Exception:
+            df = self._table_to_df(_PORTFOLIO)
+            if not df.empty:
+                df = df[
+                    (df["user_id"] == user_id)
+                    & (df["side"] == "BUY")
+                ]
+
+        if df.empty:
+            return pd.DataFrame(
+                columns=[
+                    "ticker", "quantity",
+                    "avg_price", "currency",
+                    "market", "invested",
+                ],
+            )
+
+        # Weighted average price per ticker
+        df["invested"] = (
+            df["quantity"] * df["price"]
+        )
+        grouped = (
+            df.groupby(
+                ["ticker", "currency", "market"]
+            )
+            .agg(
+                quantity=("quantity", "sum"),
+                invested=("invested", "sum"),
+            )
+            .reset_index()
+        )
+        grouped["avg_price"] = (
+            grouped["invested"]
+            / grouped["quantity"]
+        )
+        return grouped[
+            grouped["quantity"] > 0
+        ].reset_index(drop=True)
+
+    def get_portfolio_transactions(
+        self, user_id: str,
+    ) -> pd.DataFrame:
+        """Return all portfolio transactions for user.
+
+        Returns:
+            DataFrame with all transaction rows.
+        """
+        try:
+            from pyiceberg.expressions import (
+                EqualTo,
+            )
+
+            tbl = self._load_table(_PORTFOLIO)
+            return tbl.scan(
+                row_filter=EqualTo(
+                    "user_id", user_id,
+                ),
+            ).to_pandas()
+        except Exception:
+            df = self._table_to_df(_PORTFOLIO)
+            if df.empty:
+                return df
+            return df[
+                df["user_id"] == user_id
+            ].copy()
+
+    def add_portfolio_transaction(
+        self, txn: dict,
+    ) -> None:
+        """Append a portfolio transaction.
+
+        Args:
+            txn: Dict with keys: transaction_id,
+                user_id, ticker, side, quantity,
+                price, currency, market, trade_date,
+                fees, notes.
+        """
+        row = pa.table({
+            "transaction_id": pa.array(
+                [txn["transaction_id"]],
+                pa.string(),
+            ),
+            "user_id": pa.array(
+                [txn["user_id"]], pa.string(),
+            ),
+            "ticker": pa.array(
+                [txn["ticker"]], pa.string(),
+            ),
+            "side": pa.array(
+                [txn["side"]], pa.string(),
+            ),
+            "quantity": pa.array(
+                [float(txn["quantity"])],
+                pa.float64(),
+            ),
+            "price": pa.array(
+                [float(txn["price"])],
+                pa.float64(),
+            ),
+            "currency": pa.array(
+                [txn.get("currency", "USD")],
+                pa.string(),
+            ),
+            "market": pa.array(
+                [txn.get("market", "us")],
+                pa.string(),
+            ),
+            "trade_date": pa.array(
+                [txn.get("trade_date")],
+                pa.date32(),
+            ),
+            "fees": pa.array(
+                [float(txn.get("fees", 0))],
+                pa.float64(),
+            ),
+            "notes": pa.array(
+                [txn.get("notes", "")],
+                pa.string(),
+            ),
+            "created_at": pa.array(
+                [_now_utc()], pa.timestamp("us"),
+            ),
+        })
+        self._append_rows(_PORTFOLIO, row)
+
+    def update_portfolio_transaction(
+        self,
+        transaction_id: str,
+        user_id: str,
+        updates: dict,
+    ) -> bool:
+        """Update price, quantity, or trade_date.
+
+        Performs a copy-on-write: reads all rows,
+        modifies the matching row, overwrites.
+
+        Returns:
+            True if the transaction was found and
+            updated.
+        """
+        df = self._table_to_df(_PORTFOLIO)
+        if df.empty:
+            return False
+        mask = (
+            (df["transaction_id"] == transaction_id)
+            & (df["user_id"] == user_id)
+        )
+        if not mask.any():
+            return False
+        for key in ("price", "quantity"):
+            if key in updates:
+                df.loc[mask, key] = float(
+                    updates[key]
+                )
+        if "trade_date" in updates:
+            df.loc[mask, "trade_date"] = (
+                updates["trade_date"]
+            )
+        arrow_tbl = pa.Table.from_pandas(
+            df, preserve_index=False,
+        )
+        self._overwrite_table(
+            _PORTFOLIO, arrow_tbl,
+        )
+        return True
+
+    def delete_portfolio_transaction(
+        self,
+        transaction_id: str,
+        user_id: str,
+    ) -> bool:
+        """Delete a portfolio transaction.
+
+        Returns:
+            True if the transaction was found and
+            removed.
+        """
+        df = self._table_to_df(_PORTFOLIO)
+        if df.empty:
+            return False
+        mask = (
+            (df["transaction_id"] == transaction_id)
+            & (df["user_id"] == user_id)
+        )
+        if not mask.any():
+            return False
+        df = df[~mask]
+        arrow_tbl = pa.Table.from_pandas(
+            df, preserve_index=False,
+        )
+        self._overwrite_table(
+            _PORTFOLIO, arrow_tbl,
+        )
+        return True
 
     # ------------------------------------------------------------------
     # Chat audit log
