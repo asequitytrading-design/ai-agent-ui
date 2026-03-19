@@ -865,6 +865,9 @@ const TABS: { id: TabId; label: string }[] = [
 function AnalysisPageInner() {
   const searchParams = useSearchParams();
   const tickerParam = searchParams.get("ticker");
+  const tabParam = searchParams.get("tab") as
+    | TabId
+    | null;
   const [userPrefs, updatePrefs] = usePreferences();
   const chartPrefs = (userPrefs.chart ?? {}) as Record<
     string,
@@ -874,11 +877,28 @@ function AnalysisPageInner() {
   const [tickers, setTickers] = useState<string[]>([]);
   const [selectedTicker, setSelectedTicker] =
     useState<string>("");
+  // URL tab param ALWAYS wins (hero buttons).
+  // Otherwise fall back to preference > default.
+  const resolvedTab: TabId =
+    tabParam ??
+    (chartPrefs.tab as TabId) ??
+    "analysis";
   const [activeTab, setActiveTab] =
-    useState<TabId>(
-      () =>
-        (chartPrefs.tab as TabId) ?? "analysis",
-    );
+    useState<TabId>(resolvedTab);
+
+  // Force-sync when URL param changes (hero nav
+  // on an already-mounted component)
+  const prevTabParam = useRef(tabParam);
+  useEffect(() => {
+    if (
+      tabParam &&
+      tabParam !== prevTabParam.current
+    ) {
+      setActiveTab(tabParam);
+    }
+    prevTabParam.current = tabParam;
+  }, [tabParam]);
+
   const [tickersLoading, setTickersLoading] =
     useState(true);
 

@@ -138,20 +138,47 @@ export default function DashboardPage() {
     };
   }, [analysis, marketFilter]);
 
-  // Auto-select first ticker when filtered list changes
+  // Auto-select first ticker from portfolio or watchlist
+  const filteredPortfolio = useMemo(
+    () =>
+      portfolioData.holdings.filter(
+        (h) => h.market === marketFilter,
+      ),
+    [portfolioData.holdings, marketFilter],
+  );
+
   useEffect(() => {
-    const tickers =
-      filteredWatchlist.value?.tickers ?? [];
+    // All available tickers (portfolio + watchlist)
+    const portfolioTickers = filteredPortfolio.map(
+      (h) => h.ticker,
+    );
+    const watchlistTickers = (
+      filteredWatchlist.value?.tickers ?? []
+    ).map((t) => t.ticker);
+    const allTickers = [
+      ...new Set([
+        ...portfolioTickers,
+        ...watchlistTickers,
+      ]),
+    ];
+
     if (
-      tickers.length > 0 &&
+      allTickers.length > 0 &&
       (!selectedTicker ||
-        !tickers.find(
-          (t) => t.ticker === selectedTicker,
-        ))
+        !allTickers.includes(selectedTicker))
     ) {
-      setSelectedTicker(tickers[0].ticker);
+      // Prefer first portfolio ticker, then watchlist
+      setSelectedTicker(
+        portfolioTickers[0] ??
+          watchlistTickers[0] ??
+          "",
+      );
     }
-  }, [filteredWatchlist.value, selectedTicker]);
+  }, [
+    filteredPortfolio,
+    filteredWatchlist.value,
+    selectedTicker,
+  ]);
 
   // Filter analysis to only the selected ticker
   const selectedAnalysis = useMemo<
@@ -193,9 +220,7 @@ export default function DashboardPage() {
           return inv;
         }, [portfolioData.holdings])}
         portfolioHoldingsCount={
-          portfolioData.holdings.filter(
-            (h) => h.market === marketFilter,
-          ).length
+          filteredPortfolio.length
         }
       />
 
@@ -206,9 +231,7 @@ export default function DashboardPage() {
           selectedTicker={selectedTicker}
           onSelectTicker={setSelectedTicker}
           onRefresh={refresh}
-          portfolio={portfolioData.holdings.filter(
-            (h) => h.market === marketFilter,
-          )}
+          portfolio={filteredPortfolio}
           portfolioLoading={portfolioData.loading}
           onAddStock={() => setShowAddStock(true)}
         />

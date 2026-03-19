@@ -208,7 +208,15 @@ export function WatchlistWidget({
       >
         <div className="inline-flex rounded-lg bg-gray-100 dark:bg-gray-800 p-0.5">
           <button
-            onClick={() => setActiveTab("portfolio")}
+            onClick={() => {
+              setActiveTab("portfolio");
+              // Auto-select first portfolio ticker
+              if (portfolio.length > 0) {
+                onSelectTicker?.(
+                  portfolio[0].ticker,
+                );
+              }
+            }}
             className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
               activeTab === "portfolio"
                 ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm"
@@ -218,7 +226,15 @@ export function WatchlistWidget({
             Portfolio
           </button>
           <button
-            onClick={() => setActiveTab("watchlist")}
+            onClick={() => {
+              setActiveTab("watchlist");
+              // Auto-select first watchlist ticker
+              if (tickers.length > 0) {
+                onSelectTicker?.(
+                  tickers[0].ticker,
+                );
+              }
+            }}
             className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
               activeTab === "watchlist"
                 ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm"
@@ -279,7 +295,14 @@ export function WatchlistWidget({
               return (
                 <div
                   key={h.ticker}
-                  className="flex items-center gap-3 px-5 py-3 hover:bg-gray-50 dark:hover:bg-gray-800/50"
+                  onClick={() =>
+                    onSelectTicker?.(h.ticker)
+                  }
+                  className={`flex items-center gap-3 px-5 py-3 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 ${
+                    selectedTicker === h.ticker
+                      ? "bg-indigo-50/50 dark:bg-indigo-900/20 border-l-2 border-l-indigo-500"
+                      : ""
+                  }`}
                 >
                   <span className={`h-2 w-2 shrink-0 rounded-full ${positive ? "bg-emerald-500" : "bg-red-500"}`} />
                   <div className="min-w-0 flex-1">
