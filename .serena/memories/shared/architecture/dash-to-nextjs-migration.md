@@ -1,33 +1,32 @@
-# Dash-to-Next.js Migration Status (Mar 18, 2026)
+# Dash-to-Next.js Migration — COMPLETE (Mar 19, 2026)
 
-## Fully Migrated (Native Next.js)
-| Page | Route | Status |
-|------|-------|--------|
-| Portfolio (Dashboard Home) | `/dashboard` | Native — asymmetric widget grid |
-| Analytics Home | `/analytics` | Native — stock cards + search |
-| Analysis | `/analytics/analysis` | Native — TradingView chart (lightweight-charts v5) |
-| Forecast | `/analytics/analysis?tab=forecast` | Native — tab in analysis page |
-| Compare | `/analytics/analysis?tab=compare` | Native — tab in analysis page |
-| Insights (7 tabs) | `/analytics/insights` | Native — InsightsTable + Plotly |
-| Link Ticker | `/analytics/marketplace` | Native — registry browser |
-| Admin (3 tabs) | `/admin` | Native — users + audit + LLM observability |
+## Status: ALL PAGES MIGRATED. Dash service retired.
 
-## Still on Iframe
-| Page | Route | Status |
-|------|-------|--------|
-| `/insights` | Redirect → `/analytics/insights` | Iframe REMOVED, redirects to native |
-| `/docs` | iframe → MkDocs (port 8000) | Keep — separate static site |
+## Migrated Pages
+| Old Dash Route | New Next.js Route | Ticket |
+|---------------|-------------------|--------|
+| /home | /dashboard (Portfolio) | Sprint 1 |
+| /analysis | /analytics/analysis (TradingView charts) | Sprint 1 |
+| /forecast | /analytics/analysis?tab=forecast | Sprint 1 |
+| /compare | /analytics/analysis?tab=compare | Sprint 1 |
+| /marketplace | /analytics/marketplace | Sprint 1 |
+| /insights (7 tabs) | /analytics/insights | ASETPLTFRM-112 |
+| /admin (3 tabs) | /admin | ASETPLTFRM-113 |
 
-## Iframe Cleanup Done
-- `/insights/page.tsx` — replaced with `redirect("/analytics/insights")`
-- `IFrameView.tsx` component — kept (still used by `/docs`)
-- `DASHBOARD_URL` config — kept (used by ChatPanel link detection)
+## What Was Removed (ASETPLTFRM-114)
+- DASHBOARD_URL from frontend config
+- Dashboard service from run.sh (gunicorn, port 8050)
+- Dash link detection in ChatPanel + MarkdownContent
+- 4 services now: redis, backend, frontend, docs
+- dashboard/ directory kept as archive
 
-## Architectural Differences (Dash vs Next.js)
-- Dash: in-process data access (0 network hops, 5-min TTL cache)
-- Next.js: Browser → FastAPI → Redis/Iceberg (2 hops, mitigated by Redis cache)
-- Solution: Redis write-through cache + SWR browser cache = sub-100ms on hit
+## Chart Migration
+- Plotly Dash → TradingView lightweight-charts v5 (~45KB)
+- 4-pane: Candlestick + Volume + RSI + MACD
+- D/W/M interval, indicator toggles, OHLC legend
+- Plotly kept for: forecast (fill-between), correlation heatmap, insights bars
 
-## Chart Library
-- Analysis page: `lightweight-charts` v5 (TradingView, ~45 KB)
-- Forecast/Correlation/Insights: `plotly.js-basic-dist` (kept for fill-between, heatmap)
+## Architecture Difference
+- Dash: in-process data (0 hops, 5-min TTL cache)
+- Next.js: Browser → FastAPI → Redis/Iceberg (2 hops)
+- Mitigated by: Redis write-through cache + SWR + aggregate endpoint
