@@ -14,7 +14,6 @@ import type {
   ForecastsResponse,
   AnalysisResponse,
 } from "@/lib/types";
-import { useChatContext } from "@/providers/ChatProvider";
 import { usePortfolio } from "@/hooks/usePortfolio";
 import { AddStockModal } from "@/components/widgets/AddStockModal";
 import { useRegistry } from "@/hooks/useDashboardData";
@@ -42,7 +41,6 @@ export default function DashboardPage() {
     );
   const [selectedTicker, setSelectedTicker] =
     useState<string | null>(null);
-  const { openPanel } = useChatContext();
   const portfolioData = usePortfolio();
   const registryData = useRegistry();
   const registryTickers = useMemo(
@@ -171,30 +169,6 @@ export default function DashboardPage() {
     };
   }, [filteredAnalysis, selectedTicker]);
 
-  // Quick action: open chat with pre-filled prompt
-  const handleQuickAction = useCallback(
-    (prompt: string) => {
-      openPanel();
-      setTimeout(() => {
-        const input = document.querySelector(
-          '[data-testid="chat-message-input"]',
-        ) as HTMLTextAreaElement | null;
-        if (input) {
-          const nativeSetter =
-            Object.getOwnPropertyDescriptor(
-              window.HTMLTextAreaElement.prototype,
-              "value",
-            )?.set;
-          nativeSetter?.call(input, prompt);
-          input.dispatchEvent(
-            new Event("input", { bubbles: true }),
-          );
-          input.focus();
-        }
-      }, 350);
-    },
-    [openPanel],
-  );
 
   return (
     <div className="p-4 md:p-6 space-y-4 md:space-y-6 max-w-[1600px] mx-auto">
@@ -209,8 +183,15 @@ export default function DashboardPage() {
             marketFilter: f,
           });
         }}
-        onQuickAction={handleQuickAction}
         portfolioTotals={portfolioData.totals}
+        portfolioInvestedTotals={useMemo(() => {
+          const inv: Record<string, number> = {};
+          for (const h of portfolioData.holdings) {
+            inv[h.currency] =
+              (inv[h.currency] ?? 0) + h.invested;
+          }
+          return inv;
+        }, [portfolioData.holdings])}
         portfolioHoldingsCount={
           portfolioData.holdings.filter(
             (h) => h.market === marketFilter,

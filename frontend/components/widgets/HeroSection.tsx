@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import type { DashboardData } from "@/hooks/useDashboardData";
 import type { WatchlistResponse } from "@/lib/types";
 import type { UserProfile } from "@/hooks/useEditProfile";
@@ -12,19 +13,32 @@ interface HeroSectionProps {
   profile: UserProfile | null;
   marketFilter: MarketFilter;
   onMarketFilterChange: (f: MarketFilter) => void;
-  onQuickAction: (prompt: string) => void;
-  /** Portfolio totals per currency from usePortfolio. */
+  /** Portfolio current value totals per currency. */
   portfolioTotals?: Record<string, number>;
+  /** Portfolio invested totals per currency. */
+  portfolioInvestedTotals?: Record<string, number>;
   portfolioHoldingsCount?: number;
 }
 
 const quickActions = [
-  { label: "Analyze", prompt: "Analyze AAPL", primary: true },
-  { label: "Forecast", prompt: "Forecast AAPL", primary: false },
-  { label: "Compare", prompt: "Compare AAPL vs MSFT", primary: false },
+  {
+    label: "Analyze",
+    href: "/analytics/analysis",
+    primary: true,
+  },
+  {
+    label: "Forecast",
+    href: "/analytics/analysis?tab=forecast",
+    primary: false,
+  },
+  {
+    label: "Compare",
+    href: "/analytics/analysis?tab=compare",
+    primary: false,
+  },
   {
     label: "Link Ticker",
-    prompt: "Link ticker AAPL",
+    href: "/analytics/marketplace",
     primary: false,
   },
 ] as const;
@@ -34,10 +48,11 @@ export function HeroSection({
   profile,
   marketFilter,
   onMarketFilterChange,
-  onQuickAction,
   portfolioTotals = {},
+  portfolioInvestedTotals = {},
   portfolioHoldingsCount = 0,
 }: HeroSectionProps) {
+  const router = useRouter();
   if (watchlist.loading) {
     return (
       <div className="col-span-full">
@@ -61,12 +76,15 @@ export function HeroSection({
   const portfolioValue =
     portfolioTotals[portfolioCcy] ?? 0;
 
-  // Daily change from watchlist (approximate — uses
-  // linked ticker price changes as proxy)
-  const data = watchlist.value;
-  const dailyChange = data?.daily_change ?? 0;
-  const dailyChangePct = data?.daily_change_pct ?? 0;
-  const positive = dailyChange >= 0;
+  // Total P&L: portfolio current value - invested
+  const portfolioInvested =
+    portfolioInvestedTotals?.[portfolioCcy] ?? 0;
+  const totalPnL = portfolioValue - portfolioInvested;
+  const totalPnLPct =
+    portfolioInvested > 0
+      ? (totalPnL / portfolioInvested) * 100
+      : 0;
+  const positive = totalPnL >= 0;
 
   return (
     <div className="col-span-full">
@@ -133,13 +151,18 @@ export function HeroSection({
             <div>
               <p
                 className="
-                  text-sm font-medium
-                  text-gray-500 dark:text-gray-400
+                  text-3xl font-extrabold
+                  bg-gradient-to-r from-gray-900 to-gray-600
+                  dark:from-white dark:to-gray-400
+                  bg-clip-text text-transparent
                 "
                 style={{ fontFamily: "'DM Sans', sans-serif" }}
               >
                 Welcome back,{" "}
-                {profile?.full_name || "there"}
+                {(
+                  profile?.full_name?.split(" ")[0] ||
+                  "there"
+                )}!
               </p>
               <p
                 className="
@@ -177,7 +200,7 @@ export function HeroSection({
               >
                 {positive ? "+" : ""}
                 {currSym}
-                {Math.abs(dailyChange).toLocaleString(
+                {Math.abs(totalPnL).toLocaleString(
                   "en-US",
                   {
                     minimumFractionDigits: 2,
@@ -186,7 +209,7 @@ export function HeroSection({
                 )}
                 {" ("}
                 {positive ? "+" : ""}
-                {dailyChangePct.toFixed(2)}%{")"}
+                {totalPnLPct.toFixed(2)}%{")"}
               </span>
             </div>
 
@@ -233,11 +256,11 @@ export function HeroSection({
 
           {/* Bottom row: quick actions */}
           <div className="mt-6 flex flex-wrap gap-2">
-            {quickActions.map(({ label, prompt, primary }) => (
+            {quickActions.map(({ label, href, primary }) => (
               <button
                 key={label}
                 type="button"
-                onClick={() => onQuickAction(prompt)}
+                onClick={() => router.push(href)}
                 className={`
                   rounded-lg px-4 py-2 text-sm
                   font-medium transition-colors
