@@ -611,9 +611,26 @@ GET  /avatars/*              # Static files (not versioned)
 
 ---
 
+## Testing
+
+```bash
+# Backend (Python 3.12 — always activate venv first)
+source ~/.ai-agent-ui/venv/bin/activate
+python -m pytest tests/backend/ -v        # ~416 tests
+
+# Frontend (vitest)
+cd frontend && npx vitest run             # 61 tests
+```
+
+| Suite | Tests | Coverage |
+|-------|-------|----------|
+| Backend unit | 416+ | Auth, dashboard, portfolio CRUD, cache, agents, WS, analytics |
+| Frontend unit | 61 | Auth, apiFetch, WebSocket, types, ConfirmDialog, hooks |
+| E2E (Playwright) | 49 | Full user flows across all pages |
+
 ## E2E Testing (Playwright)
 
-The `e2e/` directory contains a Playwright test suite covering all 3 app surfaces (Next.js frontend, Plotly Dash dashboard, FastAPI backend).
+The `e2e/` directory contains a Playwright test suite covering all app surfaces.
 
 ```bash
 cd e2e && npm install               # first time only

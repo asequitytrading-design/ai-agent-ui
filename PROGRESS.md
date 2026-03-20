@@ -74,8 +74,45 @@
 | `frontend/components/AppHeader.tsx` | "Link Stock" |
 | `tests/backend/test_portfolio_analytics.py` | 11 tests |
 
-Tickets: ASETPLTFRM-124 (8 pts), ASETPLTFRM-125 (2 pts) — both Done
-Sprint 3: ASETPLTFRM-76–81 moved, due Mar 26
+### Refresh Buttons & Data Pipeline
+- Per-ticker refresh on Portfolio Analysis tab (all holdings), Portfolio Forecast tab, Stock Analysis/Forecast (selected ticker)
+- Refresh triggers `POST /v1/dashboard/refresh/{ticker}` → polls `/status` → re-fetches chart data on success
+- Stock Analysis + Stock Forecast charts re-mount via `key={ticker-refreshKey}` on refresh success
+- **Freshness gate fix**: `stock_refresh.py` OHLCV gate changed from `latest >= today - 1 day` to `latest >= today` — was skipping fetches when yesterday's data existed
+
+### Dark Mode Fix
+- Created `useDomDark.ts` hook — MutationObserver on `<html>` classList to detect theme changes
+- Applied to all 4 new chart components (PortfolioChart, PortfolioForecastChart, ForecastChart, CompareChart)
+- Fixes SSR hydration mismatch where chart rendered dark on light mode page
+
+### Test Coverage Expansion (+100 new tests)
+- `test_portfolio_crud.py` — 17 tests: GET/POST/PUT/DELETE portfolio + preferences
+- `test_cache.py` — 11 tests: CacheService get/set/invalidate, NoOp fallback, Redis failure
+- `test_portfolio_analytics.py` — +6 tests: _safe_float NaN/None, cashflow-adjusted return, invested-basis total return
+- `test_ws_basic.py` — 18 tests: WS module exports, auth validation, protocol messages
+- `test_agents_basic.py` — 20 tests: config, registry CRUD, router keyword/ticker/blocked
+- `ConfirmDialog.test.tsx` — 7 tests: render, callbacks, variants
+- `types.portfolio.test.ts` — 9 tests: 5 new portfolio interfaces
+- `useDarkMode.test.ts` — 1 test: export smoke
+
+### Pre-existing Test Fixes
+- `report_builder.py` — `_extract(None)` crash fixed with None guard (CRITICAL)
+- `test_dashboard_routes.py` — Watchlist mock method names corrected (`get_ohlcv_batch` not `get_dashboard_ohlcv`)
+- `test_dashboard_routes.py` — LLM usage field name corrected (`"total_cost"` not `"total_cost_usd"`)
+- `test_audit_routes.py` — JWT secret + `_resolve_user` auth override added
+
+### Venv Fix
+- Created symlink `~/.ai-agent-ui/venv` → `backend/demoenv` (Python 3.12.9)
+- Tests now run correctly with `source ~/.ai-agent-ui/venv/bin/activate && python -m pytest`
+- Root cause: conda base (Python 3.9) was default; project venv at `backend/demoenv` was undocumented
+
+### Test Results (final)
+- Backend: 416 passed, 23 failed (pre-existing mock issues in test_stock_tools — ASETPLTFRM-126)
+- Frontend: 61 passed
+
+Tickets: ASETPLTFRM-124 (8 pts), ASETPLTFRM-125 (2 pts) — Done
+Created: ASETPLTFRM-126 (3 pts) — Fix test_stock_tools/test_chat_stream mocks (Sprint 3)
+Sprint 3: ASETPLTFRM-76–81, 126 moved, due Mar 26
 
 ---
 

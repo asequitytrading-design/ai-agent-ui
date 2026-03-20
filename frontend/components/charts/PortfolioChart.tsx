@@ -8,6 +8,7 @@
  */
 
 import { useRef, useEffect, useCallback } from "react";
+import { useDomDark } from "./useDarkMode";
 import {
   createChart,
   AreaSeries,
@@ -35,10 +36,11 @@ interface PortfolioChartProps {
 
 export function PortfolioChart({
   data,
-  isDark,
+  isDark: isDarkProp,
   height = 500,
   onCrosshairMove,
 }: PortfolioChartProps) {
+  const isDark = useDomDark(isDarkProp);
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
 

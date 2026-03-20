@@ -14,6 +14,8 @@ Typical usage::
     response = agent.run("What time is it?", history=[])
 """
 
+from __future__ import annotations
+
 import logging
 from abc import ABC
 from typing import Dict, Iterator, List

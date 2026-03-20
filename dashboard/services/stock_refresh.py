@@ -237,7 +237,7 @@ def run_full_refresh(ticker: str, horizon_months: int = 9) -> RefreshResult:
         _latest_date = _repo.get_latest_ohlcv_date(ticker)
         _ohlcv_fresh = (
             _latest_date is not None
-            and _latest_date >= date.today() - timedelta(days=1)
+            and _latest_date >= date.today()
         )
         if _ohlcv_fresh:
             fetch_msg = (

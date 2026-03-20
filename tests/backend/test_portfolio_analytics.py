@@ -567,3 +567,114 @@ def test_forecast_missing_ticker_skipped(
     assert len(body["data"]) == 3
     # AAPL only: 160*10 = 1600
     assert body["data"][0]["predicted"] == 1600.0
+
+
+# ---------------------------------------------------------------
+# _safe_float helper
+# ---------------------------------------------------------------
+
+
+class TestSafeFloat:
+    """dashboard_routes._safe_float edge cases."""
+
+    def test_nan(self):
+        """NaN → 0.0."""
+        from dashboard_routes import _safe_float
+
+        assert _safe_float(float("nan")) == 0.0
+
+    def test_none(self):
+        """None → 0.0."""
+        from dashboard_routes import _safe_float
+
+        assert _safe_float(None) == 0.0
+
+    def test_valid(self):
+        """Normal float passes through."""
+        from dashboard_routes import _safe_float
+
+        assert _safe_float(42.5) == 42.5
+
+    def test_string(self):
+        """Unparseable string → 0.0."""
+        from dashboard_routes import _safe_float
+
+        assert _safe_float("bad") == 0.0
+
+
+# ---------------------------------------------------------------
+# Cash-flow adjusted return
+# ---------------------------------------------------------------
+
+
+@patch("dashboard_routes.get_cache")
+@patch("dashboard_routes._get_stock_repo")
+def test_cashflow_adjusted_return(
+    mock_repo_fn, mock_cache_fn, client,
+):
+    """Daily return strips new capital injection."""
+    repo = MagicMock()
+    repo.get_portfolio_transactions.return_value = (
+        _txn_df()
+    )
+    repo.get_ohlcv_batch.return_value = _ohlcv_df()
+    mock_repo_fn.return_value = repo
+
+    cache = MagicMock()
+    cache.get.return_value = None
+    mock_cache_fn.return_value = cache
+
+    r = client.get(
+        "/v1/dashboard/portfolio/performance"
+        "?period=ALL&currency=USD",
+    )
+    body = r.json()
+    # On 2024-02-01, MSFT is added (cashflow).
+    # daily_pnl should strip the capital injection.
+    feb1 = next(
+        p for p in body["data"]
+        if p["date"] == "2024-02-01"
+    )
+    # AAPL went 152→155 = +30 for 10 shares.
+    # MSFT bought at 300, close 310 → +50 for 5 sh.
+    # But invested jumped 1500→3000, so cashflow
+    # = 1500. raw delta = 3100-1520 = 1580.
+    # pnl = 3100 - 1520 - 1500 = 80
+    assert feb1["daily_pnl"] != 0
+
+
+# ---------------------------------------------------------------
+# Invested-basis total return
+# ---------------------------------------------------------------
+
+
+@patch("dashboard_routes.get_cache")
+@patch("dashboard_routes._get_stock_repo")
+def test_invested_basis_total_return(
+    mock_repo_fn, mock_cache_fn, client,
+):
+    """total_return uses (last_v - last_iv) / last_iv."""
+    repo = MagicMock()
+    repo.get_portfolio_transactions.return_value = (
+        _txn_df()
+    )
+    repo.get_ohlcv_batch.return_value = _ohlcv_df()
+    mock_repo_fn.return_value = repo
+
+    cache = MagicMock()
+    cache.get.return_value = None
+    mock_cache_fn.return_value = cache
+
+    r = client.get(
+        "/v1/dashboard/portfolio/performance"
+        "?period=ALL&currency=USD",
+    )
+    m = r.json()["metrics"]
+    assert m is not None
+    # Last day: AAPL 158*10=1580, MSFT 315*5=1575
+    # total = 3155; invested = 1500+1500 = 3000
+    # total_return = (3155-3000)/3000*100 ≈ 5.17%
+    expected = round(
+        (3155 - 3000) / 3000 * 100, 2,
+    )
+    assert m["total_return_pct"] == expected

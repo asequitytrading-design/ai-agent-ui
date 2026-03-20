@@ -328,8 +328,78 @@ export function WatchlistWidget({
                   <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums ${positive ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400" : "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"}`}>
                     {positive ? "+" : ""}{gain.toFixed(2)}%
                   </span>
-                  {/* Edit / Delete actions */}
+                  {/* Refresh / Edit / Delete actions */}
                   <div className="flex items-center gap-0.5 shrink-0">
+                    <button
+                      onClick={(e) =>
+                        startRefresh(h.ticker, e)
+                      }
+                      disabled={
+                        refreshing[h.ticker] === "pending"
+                      }
+                      title={
+                        refreshing[h.ticker] === "pending"
+                          ? "Refreshing..."
+                          : refreshing[h.ticker] === "success"
+                            ? "Updated!"
+                            : refreshing[h.ticker] === "error"
+                              ? "Refresh failed"
+                              : "Refresh ticker data"
+                      }
+                      className="p-1 rounded text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors disabled:opacity-50"
+                    >
+                      {refreshing[h.ticker] ===
+                      "pending" ? (
+                        <svg
+                          className="w-3.5 h-3.5 animate-spin"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                        >
+                          <circle
+                            cx="12" cy="12" r="10"
+                            stroke="currentColor"
+                            strokeWidth="3"
+                            strokeDasharray="50 20"
+                          />
+                        </svg>
+                      ) : refreshing[h.ticker] ===
+                        "success" ? (
+                        <svg
+                          className="w-3.5 h-3.5 text-emerald-500"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2.5"
+                        >
+                          <polyline points="20 6 9 17 4 12" />
+                        </svg>
+                      ) : refreshing[h.ticker] ===
+                        "error" ? (
+                        <svg
+                          className="w-3.5 h-3.5 text-red-500"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2.5"
+                        >
+                          <line x1="18" y1="6" x2="6" y2="18" />
+                          <line x1="6" y1="6" x2="18" y2="18" />
+                        </svg>
+                      ) : (
+                        <svg
+                          className="w-3.5 h-3.5"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+                          <path d="M21 3v5h-5" />
+                        </svg>
+                      )}
+                    </button>
                     {onEditStock && (
                       <button
                         onClick={(e) => {

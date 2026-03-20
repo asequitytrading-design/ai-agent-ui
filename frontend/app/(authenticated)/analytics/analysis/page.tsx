@@ -867,6 +867,85 @@ function PortfolioTab({
   const { resolvedTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
 
+  // Refresh counter to force re-fetch after
+  // background refresh completes.
+  const [refreshKey, setRefreshKey] = useState(0);
+  type RefreshState =
+    | "idle"
+    | "pending"
+    | "success"
+    | "error";
+  const [refreshState, setRefreshState] =
+    useState<RefreshState>("idle");
+
+  const startRefresh = useCallback(async () => {
+    setRefreshState("pending");
+    try {
+      // Get portfolio tickers
+      const tr = await apiFetch(
+        `${API_URL}/users/me/portfolio`,
+      );
+      if (!tr.ok) throw new Error("fetch failed");
+      const pf = await tr.json();
+      const tickers: string[] = (
+        pf.holdings ?? []
+      ).map(
+        (h: { ticker: string }) => h.ticker,
+      );
+      if (tickers.length === 0) {
+        setRefreshState("idle");
+        return;
+      }
+
+      // Start refresh for all tickers
+      await Promise.all(
+        tickers.map((t) =>
+          apiFetch(
+            `${API_URL}/dashboard/refresh/`
+            + `${encodeURIComponent(t)}`,
+            { method: "POST" },
+          ),
+        ),
+      );
+
+      // Poll until all done (max 3 min)
+      const pending = new Set(tickers);
+      for (let i = 0; i < 90; i++) {
+        await new Promise((ok) =>
+          setTimeout(ok, 2000),
+        );
+        for (const t of [...pending]) {
+          const sr = await apiFetch(
+            `${API_URL}/dashboard/refresh/`
+            + `${encodeURIComponent(t)}/status`,
+          );
+          if (!sr.ok) continue;
+          const s = await sr.json();
+          if (
+            s.status === "success" ||
+            s.status === "error"
+          ) {
+            pending.delete(t);
+          }
+        }
+        if (pending.size === 0) break;
+      }
+
+      setRefreshState("success");
+      setRefreshKey((k) => k + 1);
+      setTimeout(
+        () => setRefreshState("idle"),
+        3000,
+      );
+    } catch {
+      setRefreshState("error");
+      setTimeout(
+        () => setRefreshState("idle"),
+        5000,
+      );
+    }
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -893,7 +972,7 @@ function PortfolioTab({
     return () => {
       cancelled = true;
     };
-  }, [period, currency]);
+  }, [period, currency, refreshKey]);
 
   // Crosshair ref for tooltip
   const tooltipRef = useRef<HTMLDivElement>(null);
@@ -978,21 +1057,59 @@ function PortfolioTab({
               </span>
             </div>
           </div>
-          {/* Period pills */}
-          <div className="inline-flex rounded-md bg-gray-100 dark:bg-gray-800 p-0.5">
-            {PERIOD_OPTIONS.map((p) => (
-              <button
-                key={p}
-                onClick={() => setPeriod(p)}
-                className={`px-2 py-0.5 text-[10px] font-medium rounded transition-colors ${
-                  period === p
-                    ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm"
-                    : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
-                }`}
-              >
-                {p}
-              </button>
-            ))}
+          <div className="flex items-center gap-2">
+            {/* Refresh button */}
+            <button
+              onClick={startRefresh}
+              disabled={refreshState === "pending"}
+              title={
+                refreshState === "pending"
+                  ? "Refreshing..."
+                  : refreshState === "success"
+                    ? "Updated!"
+                    : refreshState === "error"
+                      ? "Refresh failed"
+                      : "Refresh portfolio data"
+              }
+              className="p-1 rounded-md text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors disabled:opacity-50"
+            >
+              {refreshState === "pending" ? (
+                <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                </svg>
+              ) : refreshState === "success" ? (
+                <svg className="w-4 h-4 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M20 6 9 17l-5-5" />
+                </svg>
+              ) : refreshState === "error" ? (
+                <svg className="w-4 h-4 text-red-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M18 6 6 18M6 6l12 12" />
+                </svg>
+              ) : (
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                  <path d="M3 3v5h5" />
+                  <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+                  <path d="M16 16h5v5" />
+                </svg>
+              )}
+            </button>
+            {/* Period pills */}
+            <div className="inline-flex rounded-md bg-gray-100 dark:bg-gray-800 p-0.5">
+              {PERIOD_OPTIONS.map((p) => (
+                <button
+                  key={p}
+                  onClick={() => setPeriod(p)}
+                  className={`px-2 py-0.5 text-[10px] font-medium rounded transition-colors ${
+                    period === p
+                      ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm"
+                      : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                  }`}
+                >
+                  {p}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
         <PortfolioChart
@@ -1102,6 +1219,79 @@ function PortfolioForecastTab({
   const { resolvedTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
 
+  // Refresh state
+  const [fcRefreshKey, setFcRefreshKey] =
+    useState(0);
+  type FcRefreshState =
+    | "idle"
+    | "pending"
+    | "success"
+    | "error";
+  const [fcRefreshState, setFcRefreshState] =
+    useState<FcRefreshState>("idle");
+
+  const startFcRefresh = useCallback(async () => {
+    setFcRefreshState("pending");
+    try {
+      const tr = await apiFetch(
+        `${API_URL}/users/me/portfolio`,
+      );
+      if (!tr.ok) throw new Error("fetch failed");
+      const pf = await tr.json();
+      const tickers: string[] = (
+        pf.holdings ?? []
+      ).map(
+        (h: { ticker: string }) => h.ticker,
+      );
+      if (tickers.length === 0) {
+        setFcRefreshState("idle");
+        return;
+      }
+      await Promise.all(
+        tickers.map((t) =>
+          apiFetch(
+            `${API_URL}/dashboard/refresh/`
+            + `${encodeURIComponent(t)}`,
+            { method: "POST" },
+          ),
+        ),
+      );
+      const pending = new Set(tickers);
+      for (let i = 0; i < 90; i++) {
+        await new Promise((ok) =>
+          setTimeout(ok, 2000),
+        );
+        for (const t of [...pending]) {
+          const sr = await apiFetch(
+            `${API_URL}/dashboard/refresh/`
+            + `${encodeURIComponent(t)}/status`,
+          );
+          if (!sr.ok) continue;
+          const s = await sr.json();
+          if (
+            s.status === "success" ||
+            s.status === "error"
+          ) {
+            pending.delete(t);
+          }
+        }
+        if (pending.size === 0) break;
+      }
+      setFcRefreshState("success");
+      setFcRefreshKey((k) => k + 1);
+      setTimeout(
+        () => setFcRefreshState("idle"),
+        3000,
+      );
+    } catch {
+      setFcRefreshState("error");
+      setTimeout(
+        () => setFcRefreshState("idle"),
+        5000,
+      );
+    }
+  }, []);
+
   // Always fetch 9M; truncate client-side
   useEffect(() => {
     let cancelled = false;
@@ -1139,7 +1329,7 @@ function PortfolioForecastTab({
     return () => {
       cancelled = true;
     };
-  }, [currency]);
+  }, [currency, fcRefreshKey]);
 
   // Client-side horizon truncation
   const truncated = useMemo(() => {
@@ -1258,20 +1448,59 @@ function PortfolioForecastTab({
               </span>
             </div>
           </div>
-          <div className="inline-flex rounded-lg bg-gray-100 dark:bg-gray-800 p-1">
-            {([3, 6, 9] as const).map((h) => (
-              <button
-                key={h}
-                onClick={() => setHorizon(h)}
-                className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
-                  horizon === h
-                    ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm"
-                    : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
-                }`}
-              >
-                {h}M
-              </button>
-            ))}
+          <div className="flex items-center gap-2">
+            {/* Refresh button */}
+            <button
+              onClick={startFcRefresh}
+              disabled={fcRefreshState === "pending"}
+              title={
+                fcRefreshState === "pending"
+                  ? "Refreshing..."
+                  : fcRefreshState === "success"
+                    ? "Updated!"
+                    : fcRefreshState === "error"
+                      ? "Refresh failed"
+                      : "Refresh portfolio data"
+              }
+              className="p-1 rounded-md text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors disabled:opacity-50"
+            >
+              {fcRefreshState === "pending" ? (
+                <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                </svg>
+              ) : fcRefreshState === "success" ? (
+                <svg className="w-4 h-4 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M20 6 9 17l-5-5" />
+                </svg>
+              ) : fcRefreshState === "error" ? (
+                <svg className="w-4 h-4 text-red-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M18 6 6 18M6 6l12 12" />
+                </svg>
+              ) : (
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                  <path d="M3 3v5h5" />
+                  <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+                  <path d="M16 16h5v5" />
+                </svg>
+              )}
+            </button>
+            {/* Horizon picker */}
+            <div className="inline-flex rounded-lg bg-gray-100 dark:bg-gray-800 p-1">
+              {([3, 6, 9] as const).map((h) => (
+                <button
+                  key={h}
+                  onClick={() => setHorizon(h)}
+                  className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+                    horizon === h
+                      ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm"
+                      : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                  }`}
+                >
+                  {h}M
+                </button>
+              ))}
+            </div>
           </div>
         </div>
         <PortfolioForecastChart
@@ -1486,6 +1715,69 @@ function AnalysisPageInner() {
     [updatePrefs],
   );
 
+  // Per-ticker refresh (stock analysis tabs)
+  type TickerRefreshState =
+    | "idle"
+    | "pending"
+    | "success"
+    | "error";
+  const [tickerRefresh, setTickerRefresh] =
+    useState<TickerRefreshState>("idle");
+  const [tickerRefreshKey, setTickerRefreshKey] =
+    useState(0);
+  const startTickerRefresh = useCallback(
+    async () => {
+      if (!selectedTicker) return;
+      setTickerRefresh("pending");
+      try {
+        const t = encodeURIComponent(
+          selectedTicker,
+        );
+        const r = await apiFetch(
+          `${API_URL}/dashboard/refresh/${t}`,
+          { method: "POST" },
+        );
+        if (!r.ok)
+          throw new Error(`HTTP ${r.status}`);
+        // Poll for completion
+        for (let i = 0; i < 90; i++) {
+          await new Promise((ok) =>
+            setTimeout(ok, 2000),
+          );
+          const sr = await apiFetch(
+            `${API_URL}/dashboard/refresh/${t}/status`,
+          );
+          if (!sr.ok) break;
+          const s = await sr.json();
+          if (s.status === "success") {
+            setTickerRefresh("success");
+            setTickerRefreshKey((k) => k + 1);
+            setTimeout(
+              () => setTickerRefresh("idle"),
+              3000,
+            );
+            return;
+          }
+          if (s.status === "error") {
+            setTickerRefresh("error");
+            setTimeout(
+              () => setTickerRefresh("idle"),
+              5000,
+            );
+            return;
+          }
+        }
+      } catch {
+        setTickerRefresh("error");
+        setTimeout(
+          () => setTickerRefresh("idle"),
+          5000,
+        );
+      }
+    },
+    [selectedTicker],
+  );
+
   if (tickersLoading) {
     return (
       <div className="animate-pulse rounded-xl bg-gray-200 dark:bg-gray-800 h-[700px]" />
@@ -1531,11 +1823,47 @@ function AnalysisPageInner() {
           ))}
         </div>
 
-        {/* Searchable ticker — RIGHT */}
+        {/* Searchable ticker + refresh — RIGHT */}
         <div
           className={`relative ${activeTab === "compare" || activeTab.startsWith("portfolio") ? "invisible" : ""}`}
         >
           <div className="flex items-center gap-1.5">
+            <button
+              onClick={startTickerRefresh}
+              disabled={
+                tickerRefresh === "pending"
+              }
+              title={
+                tickerRefresh === "pending"
+                  ? "Refreshing..."
+                  : tickerRefresh === "success"
+                    ? "Updated!"
+                    : tickerRefresh === "error"
+                      ? "Refresh failed"
+                      : `Refresh ${selectedTicker} data`
+              }
+              className="p-1 rounded-md text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors disabled:opacity-50"
+            >
+              {tickerRefresh === "pending" ? (
+                <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
+                  <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" strokeDasharray="50 20" />
+                </svg>
+              ) : tickerRefresh === "success" ? (
+                <svg className="w-3.5 h-3.5 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+              ) : tickerRefresh === "error" ? (
+                <svg className="w-3.5 h-3.5 text-red-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              ) : (
+                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+                  <path d="M21 3v5h-5" />
+                </svg>
+              )}
+            </button>
             <span className="text-xs font-medium text-gray-500 dark:text-gray-400">
               Ticker
             </span>
@@ -1610,6 +1938,7 @@ function AnalysisPageInner() {
       {/* Tab content — full width */}
       {activeTab === "analysis" && (
         <AnalysisTab
+          key={`${selectedTicker}-${tickerRefreshKey}`}
           ticker={selectedTicker}
           prefs={chartPrefs}
           onPrefsChange={(v) =>
@@ -1618,7 +1947,10 @@ function AnalysisPageInner() {
         />
       )}
       {activeTab === "forecast" && (
-        <ForecastTab ticker={selectedTicker} />
+        <ForecastTab
+          key={`${selectedTicker}-${tickerRefreshKey}`}
+          ticker={selectedTicker}
+        />
       )}
       {activeTab === "compare" && <CompareTab />}
       {activeTab === "portfolio" && (

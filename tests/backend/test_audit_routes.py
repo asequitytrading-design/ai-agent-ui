@@ -4,6 +4,7 @@ Exercises ``/v1/audit/chat-sessions`` POST (save) and GET (list).
 All Iceberg access is mocked via :func:`unittest.mock.patch`.
 """
 
+import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -11,8 +12,14 @@ import pytest
 from fastapi import APIRouter
 from fastapi.testclient import TestClient
 
-from auth.dependencies import get_current_user
-from auth.models import UserContext
+# Ensure JWT secret is set for test env
+os.environ.setdefault(
+    "JWT_SECRET_KEY",
+    "test-secret-key-that-is-at-least-32-chars-long",
+)
+
+from auth.dependencies import get_current_user  # noqa: E402
+from auth.models import UserContext  # noqa: E402
 
 
 # ---------------------------------------------------------------
@@ -86,8 +93,13 @@ _VALID_SESSION = {
 @pytest.fixture()
 def client():
     """TestClient with auth override."""
+    from audit_routes import _resolve_user
+
     app = _make_app()
     app.dependency_overrides[get_current_user] = (
+        lambda: _TEST_USER
+    )
+    app.dependency_overrides[_resolve_user] = (
         lambda: _TEST_USER
     )
     yield TestClient(app)

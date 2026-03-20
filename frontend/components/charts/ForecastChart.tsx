@@ -11,6 +11,7 @@ import {
   useEffect,
   useCallback,
 } from "react";
+import { useDomDark } from "./useDarkMode";
 import {
   createChart,
   AreaSeries,
@@ -46,10 +47,11 @@ export function ForecastChart({
   forecastPredicted,
   forecastUpper,
   forecastLower,
-  isDark,
+  isDark: isDarkProp,
   height = 550,
   onCrosshairMove,
 }: ForecastChartProps) {
+  const isDark = useDomDark(isDarkProp);
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
 

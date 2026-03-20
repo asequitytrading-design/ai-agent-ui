@@ -7,6 +7,7 @@
  */
 
 import { useRef, useEffect } from "react";
+import { useDomDark } from "./useDarkMode";
 import {
   createChart,
   LineSeries,
@@ -43,9 +44,10 @@ interface CompareChartProps {
 
 export function CompareChart({
   series,
-  isDark,
+  isDark: isDarkProp,
   height = 400,
 }: CompareChartProps) {
+  const isDark = useDomDark(isDarkProp);
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
 

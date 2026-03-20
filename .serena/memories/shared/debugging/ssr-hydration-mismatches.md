@@ -1,50 +1,41 @@
-# SSR Hydration Mismatches in Next.js App Router
+# SSR Hydration Mismatches — TradingView Charts
 
 ## Problem
-`"use client"` components still run on the server for SSR. If they produce different HTML on server vs client, React throws a hydration error and regenerates the entire tree.
+TradingView lightweight-charts renders with dark background on a light mode page (or vice versa). The chart `useEffect` runs with stale `isDark` value from SSR/initial render.
 
-## Common Causes
+## Root Cause
+`useTheme()` hook resolves theme from localStorage on client, but during SSR or first hydration, the value may differ from the DOM's actual `<html class="dark">` state. The chart builds once with the wrong colors and the `useEffect` deps don't catch the mismatch.
 
-### 1. crypto.randomUUID() in useState
+## Fix: `useDomDark` Hook
+File: `frontend/components/charts/useDarkMode.ts`
+
 ```typescript
-// BAD — different UUID on server vs client
-const [id] = useState(() => crypto.randomUUID());
-
-// GOOD — generate only on client via useRef
-const ref = useRef("");
-if (typeof window !== "undefined" && !ref.current) {
-  ref.current = crypto.randomUUID();
+export function useDomDark(isDark: boolean) {
+  const [domDark, setDomDark] = useState(() =>
+    document.documentElement.classList.contains("dark")
+  );
+  useEffect(() => {
+    const el = document.documentElement;
+    const update = () => setDomDark(el.classList.contains("dark"));
+    update();
+    const obs = new MutationObserver(update);
+    obs.observe(el, { attributes: true, attributeFilter: ["class"] });
+    return () => obs.disconnect();
+  }, []);
+  return isDark || domDark;
 }
 ```
 
-### 2. localStorage reads during render
+Usage in chart components:
 ```typescript
-// BAD — localStorage doesn't exist on server
-const [theme] = useState(localStorage.getItem("theme"));
-
-// GOOD — initialize with default, hydrate in useEffect
-const [theme, setTheme] = useState("system");
-useEffect(() => setTheme(localStorage.getItem("theme") ?? "system"), []);
+export function MyChart({ isDark: isDarkProp, ... }) {
+  const isDark = useDomDark(isDarkProp);
+  // ... use isDark for chart colors
+}
 ```
 
-### 3. SVG filter elements
-SVG `<filter>`, `<defs>`, and `<linearGradient>` elements can render differently between server and client. Wrap chart components with a mounted guard.
+## Applied To
+All 5 chart components: StockChart (already had inline version), PortfolioChart, PortfolioForecastChart, ForecastChart, CompareChart.
 
-### 4. Context providers with browser APIs
-WebSocket connections, localStorage reads in providers cause mismatches.
-
-## Nuclear Fix: Mounted Guard on Layout
-For auth-gated layouts where everything needs browser APIs:
-```typescript
-const [mounted, setMounted] = useState(false);
-useEffect(() => setMounted(true), []);
-if (!mounted) return <Spinner />;
-return <LayoutProvider><ChatProvider>...</ChatProvider></LayoutProvider>;
-```
-This shows a brief spinner on first render but eliminates all hydration mismatches.
-
-## When to Use
-- Auth-gated routes with JWT/localStorage
-- Pages with WebSocket connections
-- Charts with SVG filters (react-plotly.js, custom SVG)
-- Any component reading `window`, `document`, `localStorage` during render
+## Key Insight
+The `StockChart.tsx` already solved this with an inline MutationObserver + `actualDark = isDark || domDark`. The shared hook extracts this pattern for reuse.

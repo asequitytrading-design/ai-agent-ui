@@ -34,4 +34,16 @@
 - **Auth**: Query param token → JWT via `apiFetch` auto-refresh
 - **Caching**: In-process TTL dicts → Redis write-through + SWR browser cache
 - **Destructive actions**: `ConfirmDialog` component on delete/unlink/revoke/deactivate flows
+- **Refresh**: Per-ticker refresh buttons on Portfolio Analysis, Portfolio Forecast, Stock Analysis tabs
+- **Dark mode**: `useDomDark` MutationObserver hook ensures TradingView charts match page theme
 - **Service**: `run.sh` no longer starts Dash (4 services: redis, backend, frontend, docs)
+
+## Testing
+
+```bash
+source ~/.ai-agent-ui/venv/bin/activate   # Python 3.12 required
+python -m pytest tests/backend/ -v        # 416+ backend tests
+cd frontend && npx vitest run             # 61 frontend tests
+```
+
+Note: `~/.ai-agent-ui/venv` is a symlink to `backend/demoenv`. Do NOT use system Python (conda 3.9) — PEP 604 syntax requires 3.12.

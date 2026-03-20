@@ -116,35 +116,61 @@ class TestWatchlist:
         data = resp.json()
         assert data["tickers"] == []
 
+    @patch("dashboard_routes.get_cache")
     @patch("dashboard_routes._get_stock_repo")
     @patch(
         "dashboard_routes._helpers._get_repo",
     )
     def test_with_data(
-        self, mock_user_repo, mock_stock_repo, client,
+        self, mock_user_repo,
+        mock_stock_repo, mock_cache, client,
     ):
         """One ticker returns price + change."""
         mock_user_repo.return_value.get_user_tickers \
             .return_value = ["AAPL"]
 
-        prices = [148.0, 149.0, 150.0, 151.0, 152.0]
-        df = pd.DataFrame({"close": prices})
+        cache = MagicMock()
+        cache.get.return_value = None
+        mock_cache.return_value = cache
 
-        repo_inst = mock_stock_repo.return_value
-        repo_inst.get_dashboard_ohlcv.return_value = df
-        repo_inst.get_dashboard_company_info \
-            .return_value = {
-                "company_name": "Apple Inc.",
-            }
+        prices = [
+            148.0, 149.0, 150.0, 151.0, 152.0,
+        ]
+        ohlcv_df = pd.DataFrame({
+            "ticker": ["AAPL"] * 5,
+            "date": [
+                "2024-01-01", "2024-01-02",
+                "2024-01-03", "2024-01-04",
+                "2024-01-05",
+            ],
+            "close": prices,
+        })
+        info_df = pd.DataFrame([{
+            "ticker": "AAPL",
+            "company_name": "Apple Inc.",
+            "currency": "USD",
+        }])
 
-        resp = client.get("/v1/dashboard/watchlist")
+        repo = mock_stock_repo.return_value
+        repo.get_ohlcv_batch.return_value = (
+            ohlcv_df
+        )
+        repo.get_company_info_batch.return_value = (
+            info_df
+        )
+
+        resp = client.get(
+            "/v1/dashboard/watchlist",
+        )
 
         assert resp.status_code == 200
         data = resp.json()
         assert len(data["tickers"]) == 1
         ticker = data["tickers"][0]
         assert ticker["ticker"] == "AAPL"
-        assert ticker["company_name"] == "Apple Inc."
+        assert (
+            ticker["company_name"] == "Apple Inc."
+        )
         assert ticker["current_price"] == 152.0
         assert ticker["previous_close"] == 151.0
         assert ticker["change"] == 1.0
@@ -304,36 +330,44 @@ class TestAnalysis:
 class TestLLMUsage:
     """GET /v1/dashboard/llm-usage."""
 
+    @patch("dashboard_routes.get_cache")
     @patch("dashboard_routes._get_stock_repo")
     def test_returns_structure(
-        self, mock_stock_repo, client,
+        self, mock_stock_repo, mock_cache,
+        client,
     ):
         """Verify response fields."""
-        repo_inst = mock_stock_repo.return_value
-        repo_inst.get_dashboard_llm_usage.return_value = {
+        cache = MagicMock()
+        cache.get.return_value = None
+        mock_cache.return_value = cache
+
+        repo = mock_stock_repo.return_value
+        repo.get_dashboard_llm_usage.return_value = {
             "total_requests": 42,
-            "total_cost_usd": 1.23,
+            "total_cost": 1.23,
             "avg_latency_ms": 250.0,
-            "models": [
-                {
-                    "model": "llama-3.3-70b",
-                    "provider": "groq",
-                    "request_count": 42,
-                    "total_tokens": 50000,
-                    "estimated_cost_usd": 1.23,
+            "per_model": {
+                "llama-3.3-70b": {
+                    "requests": 42,
+                    "cost": 1.23,
                 },
-            ],
+            },
             "daily_trend": [],
         }
 
-        resp = client.get("/v1/dashboard/llm-usage")
+        resp = client.get(
+            "/v1/dashboard/llm-usage",
+        )
 
         assert resp.status_code == 200
         data = resp.json()
         assert data["total_requests"] == 42
         assert data["total_cost_usd"] == 1.23
         assert len(data["models"]) == 1
-        assert data["models"][0]["model"] == "llama-3.3-70b"
+        assert (
+            data["models"][0]["model"]
+            == "llama-3.3-70b"
+        )
 
     @patch("dashboard_routes._get_stock_repo")
     def test_superuser_sees_all(
@@ -368,3 +402,433 @@ class TestLLMUsage:
         assert call_kwargs.kwargs.get("user_id") is None
 
         app.dependency_overrides.clear()
+
+
+# ---------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------
+
+
+class TestRegistry:
+    """GET /v1/dashboard/registry."""
+
+    @patch("dashboard_routes.get_cache")
+    @patch("dashboard_routes._get_stock_repo")
+    def test_happy_path(
+        self, mock_repo_fn, mock_cache_fn, client,
+    ):
+        """Registry with company info."""
+        repo = MagicMock()
+        repo.get_all_registry.return_value = {
+            "AAPL": {"last_fetch_date": "2026-03-19"},
+            "MSFT": {"last_fetch_date": "2026-03-18"},
+        }
+        info_df = pd.DataFrame([
+            {
+                "ticker": "AAPL",
+                "company_name": "Apple Inc.",
+                "currency": "USD",
+                "current_price": 175.0,
+            },
+            {
+                "ticker": "MSFT",
+                "company_name": "Microsoft Corp.",
+                "currency": "USD",
+                "current_price": 420.0,
+            },
+        ])
+        repo.get_company_info_batch.return_value = (
+            info_df
+        )
+        mock_repo_fn.return_value = repo
+
+        cache = MagicMock()
+        cache.get.return_value = None
+        mock_cache_fn.return_value = cache
+
+        resp = client.get("/v1/dashboard/registry")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["tickers"]) == 2
+        # Sorted by ticker
+        assert data["tickers"][0]["ticker"] == "AAPL"
+        assert (
+            data["tickers"][0]["company_name"]
+            == "Apple Inc."
+        )
+        assert (
+            data["tickers"][0]["current_price"]
+            == 175.0
+        )
+
+    @patch("dashboard_routes.get_cache")
+    @patch("dashboard_routes._get_stock_repo")
+    def test_empty_registry(
+        self, mock_repo_fn, mock_cache_fn, client,
+    ):
+        """No registered tickers."""
+        repo = MagicMock()
+        repo.get_all_registry.return_value = {}
+        mock_repo_fn.return_value = repo
+
+        cache = MagicMock()
+        cache.get.return_value = None
+        mock_cache_fn.return_value = cache
+
+        resp = client.get("/v1/dashboard/registry")
+
+        assert resp.status_code == 200
+        assert resp.json()["tickers"] == []
+
+
+# ---------------------------------------------------------------
+# Compare
+# ---------------------------------------------------------------
+
+
+class TestCompare:
+    """GET /v1/dashboard/compare."""
+
+    @patch("dashboard_routes.get_cache")
+    @patch("dashboard_routes._get_stock_repo")
+    def test_happy_path(
+        self, mock_repo_fn, mock_cache_fn, client,
+    ):
+        """Two tickers with normalized series."""
+        repo = MagicMock()
+
+        dates = [
+            "2024-01-01", "2024-01-02",
+            "2024-01-03", "2024-01-04",
+            "2024-01-05",
+        ]
+        rows = []
+        aapl_c = [150, 152, 155, 153, 158]
+        msft_c = [300, 305, 310, 308, 315]
+        for i, d in enumerate(dates):
+            rows.append({
+                "ticker": "AAPL",
+                "date": d,
+                "close": aapl_c[i],
+            })
+            rows.append({
+                "ticker": "MSFT",
+                "date": d,
+                "close": msft_c[i],
+            })
+        ohlcv_df = pd.DataFrame(rows)
+
+        repo.get_ohlcv_batch.return_value = ohlcv_df
+        repo.get_analysis_summary_batch.return_value = (
+            pd.DataFrame(columns=["ticker"])
+        )
+        repo.get_company_info_batch.return_value = (
+            pd.DataFrame(columns=["ticker"])
+        )
+        repo.get_technical_indicators_batch \
+            .return_value = (
+                pd.DataFrame(columns=["ticker"])
+            )
+        mock_repo_fn.return_value = repo
+
+        cache = MagicMock()
+        cache.get.return_value = None
+        mock_cache_fn.return_value = cache
+
+        resp = client.get(
+            "/v1/dashboard/compare"
+            "?tickers=AAPL,MSFT",
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert set(data["tickers"]) == {
+            "AAPL", "MSFT",
+        }
+        assert len(data["series"]) == 2
+        assert len(data["correlation"]) == 2
+        # First normalized value is always 100
+        for s in data["series"]:
+            assert s["normalized"][0] == 100.0
+
+    @patch("dashboard_routes.get_cache")
+    @patch("dashboard_routes._get_stock_repo")
+    def test_less_than_two_tickers(
+        self, mock_repo_fn, mock_cache_fn, client,
+    ):
+        """Single ticker → empty compare."""
+        cache = MagicMock()
+        cache.get.return_value = None
+        mock_cache_fn.return_value = cache
+
+        resp = client.get(
+            "/v1/dashboard/compare"
+            "?tickers=AAPL",
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["series"] == []
+        assert data["correlation"] == []
+
+
+# ---------------------------------------------------------------
+# Home (aggregate)
+# ---------------------------------------------------------------
+
+
+class TestHome:
+    """GET /v1/dashboard/home."""
+
+    @patch("dashboard_routes.get_cache")
+    @patch("dashboard_routes._get_stock_repo")
+    @patch(
+        "dashboard_routes._helpers._get_repo",
+    )
+    def test_returns_all_widgets(
+        self, mock_user_repo,
+        mock_stock_repo, mock_cache_fn, client,
+    ):
+        """Verify all 4 widget keys present."""
+        mock_user_repo.return_value \
+            .get_user_tickers.return_value = []
+
+        repo = MagicMock()
+        repo.get_dashboard_llm_usage.return_value = {
+            "total_requests": 0,
+            "total_cost": 0,
+            "models": [],
+        }
+        mock_stock_repo.return_value = repo
+
+        cache = MagicMock()
+        cache.get.return_value = None
+        mock_cache_fn.return_value = cache
+
+        resp = client.get("/v1/dashboard/home")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        for key in (
+            "watchlist", "forecasts",
+            "analysis", "llm_usage",
+        ):
+            assert key in data
+
+
+# ---------------------------------------------------------------
+# Chart: OHLCV
+# ---------------------------------------------------------------
+
+
+class TestChartOHLCV:
+    """GET /v1/dashboard/chart/ohlcv."""
+
+    @patch("dashboard_routes.get_cache")
+    @patch("dashboard_routes._get_stock_repo")
+    def test_happy_path(
+        self, mock_repo_fn, mock_cache_fn, client,
+    ):
+        """Returns OHLCV points for a ticker."""
+        repo = MagicMock()
+        df = pd.DataFrame([
+            {
+                "date": "2024-01-01",
+                "open": 150.0,
+                "high": 155.0,
+                "low": 148.0,
+                "close": 153.0,
+                "volume": 1000000,
+            },
+        ])
+        repo.get_ohlcv.return_value = df
+        mock_repo_fn.return_value = repo
+
+        cache = MagicMock()
+        cache.get.return_value = None
+        mock_cache_fn.return_value = cache
+
+        resp = client.get(
+            "/v1/dashboard/chart/ohlcv"
+            "?ticker=AAPL",
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ticker"] == "AAPL"
+        assert len(data["data"]) == 1
+        assert data["data"][0]["close"] == 153.0
+
+    @patch("dashboard_routes.get_cache")
+    @patch("dashboard_routes._get_stock_repo")
+    def test_empty_data(
+        self, mock_repo_fn, mock_cache_fn, client,
+    ):
+        """No OHLCV data → empty response."""
+        repo = MagicMock()
+        repo.get_ohlcv.return_value = (
+            pd.DataFrame()
+        )
+        mock_repo_fn.return_value = repo
+
+        cache = MagicMock()
+        cache.get.return_value = None
+        mock_cache_fn.return_value = cache
+
+        resp = client.get(
+            "/v1/dashboard/chart/ohlcv"
+            "?ticker=AAPL",
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["data"] == []
+
+
+# ---------------------------------------------------------------
+# Chart: Indicators
+# ---------------------------------------------------------------
+
+
+class TestChartIndicators:
+    """GET /v1/dashboard/chart/indicators."""
+
+    @patch("dashboard_routes.get_cache")
+    @patch("dashboard_routes._get_stock_repo")
+    def test_happy_path(
+        self, mock_repo_fn, mock_cache_fn, client,
+    ):
+        """Returns indicator points."""
+        repo = MagicMock()
+        df = pd.DataFrame([
+            {
+                "date": "2024-01-01",
+                "sma_50": 148.0,
+                "sma_200": 145.0,
+                "ema_20": 150.0,
+                "rsi_14": 55.0,
+                "macd": 1.5,
+                "macd_signal": 1.2,
+                "macd_hist": 0.3,
+                "bb_upper": 160.0,
+                "bb_lower": 140.0,
+            },
+        ])
+        repo.get_technical_indicators \
+            .return_value = df
+        mock_repo_fn.return_value = repo
+
+        cache = MagicMock()
+        cache.get.return_value = None
+        mock_cache_fn.return_value = cache
+
+        resp = client.get(
+            "/v1/dashboard/chart/indicators"
+            "?ticker=AAPL",
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ticker"] == "AAPL"
+        assert len(data["data"]) == 1
+        assert data["data"][0]["rsi_14"] == 55.0
+
+    @patch("dashboard_routes.get_cache")
+    @patch("dashboard_routes._get_stock_repo")
+    def test_empty_data(
+        self, mock_repo_fn, mock_cache_fn, client,
+    ):
+        """No indicators → empty response."""
+        repo = MagicMock()
+        repo.get_technical_indicators \
+            .return_value = pd.DataFrame()
+        mock_repo_fn.return_value = repo
+
+        cache = MagicMock()
+        cache.get.return_value = None
+        mock_cache_fn.return_value = cache
+
+        resp = client.get(
+            "/v1/dashboard/chart/indicators"
+            "?ticker=AAPL",
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["data"] == []
+
+
+# ---------------------------------------------------------------
+# Chart: Forecast Series
+# ---------------------------------------------------------------
+
+
+class TestChartForecastSeries:
+    """GET /v1/dashboard/chart/forecast-series."""
+
+    @patch("dashboard_routes.get_cache")
+    @patch("dashboard_routes._get_stock_repo")
+    def test_happy_path(
+        self, mock_repo_fn, mock_cache_fn, client,
+    ):
+        """Returns forecast points with bands."""
+        repo = MagicMock()
+        df = pd.DataFrame([
+            {
+                "forecast_date": "2024-03-01",
+                "predicted_price": 165.0,
+                "lower_bound": 155.0,
+                "upper_bound": 175.0,
+            },
+            {
+                "forecast_date": "2024-04-01",
+                "predicted_price": 170.0,
+                "lower_bound": 158.0,
+                "upper_bound": 182.0,
+            },
+        ])
+        repo.get_latest_forecast_series \
+            .return_value = df
+        mock_repo_fn.return_value = repo
+
+        cache = MagicMock()
+        cache.get.return_value = None
+        mock_cache_fn.return_value = cache
+
+        resp = client.get(
+            "/v1/dashboard/chart/forecast-series"
+            "?ticker=AAPL&horizon=9",
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ticker"] == "AAPL"
+        assert data["horizon_months"] == 9
+        assert len(data["data"]) == 2
+        assert (
+            data["data"][0]["predicted"] == 165.0
+        )
+
+    @patch("dashboard_routes.get_cache")
+    @patch("dashboard_routes._get_stock_repo")
+    def test_empty_data(
+        self, mock_repo_fn, mock_cache_fn, client,
+    ):
+        """No forecast data → empty response."""
+        repo = MagicMock()
+        repo.get_latest_forecast_series \
+            .return_value = pd.DataFrame()
+        mock_repo_fn.return_value = repo
+
+        cache = MagicMock()
+        cache.get.return_value = None
+        mock_cache_fn.return_value = cache
+
+        resp = client.get(
+            "/v1/dashboard/chart/forecast-series"
+            "?ticker=AAPL&horizon=9",
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["data"] == []
+        assert data["horizon_months"] == 9

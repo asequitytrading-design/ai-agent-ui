@@ -15,6 +15,9 @@ Session-by-session record of what was built, changed, and fixed.
 - **CompareChart.tsx** — TradingView replacement for Plotly normalized price comparison (one LineSeries per ticker)
 - **ConfirmDialog.tsx** — reusable confirmation modal with danger/warning variants, applied to 5 destructive flows (delete stock, unlink ticker, revoke session, revoke all, deactivate user)
 - **`_safe_float()` helper** — NaN-safe numeric conversion for Iceberg NULL values with OHLCV price fallback
+- **`useDomDark.ts` hook** — MutationObserver-based dark mode detection for all TradingView charts, fixes SSR hydration mismatch
+- **Per-ticker refresh buttons** on Portfolio Analysis, Portfolio Forecast, Stock Analysis tabs — triggers 6-step pipeline + polls + auto-refreshes charts
+- **100 new tests** across 8 files: portfolio CRUD (17), cache layer (11), WS basic (18), agents basic (20), portfolio analytics +6, ConfirmDialog (7), portfolio types (9), useDomDark (1)
 - 11 backend tests for portfolio analytics (cash-flow metrics, invested timeline, horizon fetch)
 
 ### Changed
@@ -31,8 +34,14 @@ Session-by-session record of what was built, changed, and fixed.
 - **Horizon picker empty**: `get_latest_forecast_series(ticker, 3)` filtered by non-existent `horizon_months=3` rows. Fixed: always query 9M
 - **Metrics inflated** (+501% total return): raw portfolio value includes capital contributions. Fixed: cash-flow-adjusted daily returns, invested-basis total return, gain% drawdown
 - **React hooks order**: `useRef`/`useCallback` placed after conditional returns violated Rules of Hooks
+- **OHLCV freshness gate**: `stock_refresh.py` gate changed from `latest >= today - 1 day` to `latest >= today` — was skipping fetches when yesterday's close existed
+- **Dark mode on charts**: TradingView charts rendered dark on light mode page due to SSR hydration mismatch — fixed with `useDomDark` MutationObserver hook
+- **report_builder.py crash**: `_extract(None)` passed None to `re.search()` — added None guard to `_extract`, `_parse_analysis`, `_parse_forecast`
+- **test_dashboard_routes.py**: Watchlist mock used wrong method names (`get_dashboard_ohlcv` → `get_ohlcv_batch`); LLM usage mock used wrong field (`total_cost_usd` → `total_cost`)
+- **test_audit_routes.py**: Missing JWT secret in test env + wrong auth dependency override (`_resolve_user`)
+- **Venv symlink**: `~/.ai-agent-ui/venv` → `backend/demoenv` — tests were running on conda Python 3.9 instead of project 3.12
 
-Tickets: ASETPLTFRM-124 (8 pts), ASETPLTFRM-125 (2 pts)
+Tickets: ASETPLTFRM-124 (8 pts), ASETPLTFRM-125 (2 pts), ASETPLTFRM-126 (3 pts, Sprint 3)
 Branch: feature/sprint2-planning
 
 ---

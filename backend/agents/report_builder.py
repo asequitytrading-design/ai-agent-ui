@@ -25,8 +25,12 @@ from typing import Any
 _logger = logging.getLogger(__name__)
 
 
-def _extract(text: str, label: str) -> str | None:
-    """Extract a value after a label like '  Label : value'."""
+def _extract(
+    text: str | None, label: str,
+) -> str | None:
+    """Extract a value after ``Label : value``."""
+    if not text:
+        return None
     m = re.search(
         rf"{re.escape(label)}\s*:\s*(.+)",
         text,
@@ -34,8 +38,12 @@ def _extract(text: str, label: str) -> str | None:
     return m.group(1).strip() if m else None
 
 
-def _parse_analysis(text: str) -> dict[str, Any]:
-    """Parse analyse_stock_price text output into a dict."""
+def _parse_analysis(
+    text: str | None,
+) -> dict[str, Any]:
+    """Parse analyse_stock_price output."""
+    if text is None:
+        return {}
     d: dict[str, Any] = {}
     d["current_price"] = _extract(text, "Current Price")
     d["all_time_high"] = _extract(text, "All Time High")
@@ -66,8 +74,12 @@ def _parse_analysis(text: str) -> dict[str, Any]:
     return d
 
 
-def _parse_forecast(text: str) -> dict[str, Any]:
-    """Parse forecast_stock text output into a dict."""
+def _parse_forecast(
+    text: str | None,
+) -> dict[str, Any]:
+    """Parse forecast_stock output."""
+    if text is None:
+        return {}
     d: dict[str, Any] = {}
     d["current_price"] = _extract(text, "CURRENT PRICE")
     d["sentiment"] = _extract(text, "SENTIMENT")

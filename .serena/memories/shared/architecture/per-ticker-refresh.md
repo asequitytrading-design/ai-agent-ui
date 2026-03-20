@@ -16,17 +16,35 @@
 5. **Quarterly results** — `stock_data_tool.fetch_quarterly_results()` — non-critical
 6. **Prophet forecast** — trains model, computes MAE/RMSE/MAPE, saves to forecast_runs + forecasts — CRITICAL
 
-## Skip Conditions
-- OHLCV: skipped if today's data already exists
-- Forecast: skipped if last run < 7 days old
+## Freshness Gates (Skip Conditions)
+- **OHLCV**: skipped if `latest_date >= date.today()` — only skip if today's data exists. Do NOT use `today - 1 day` — that skips fetches when yesterday's close is the latest and today's market data is available.
+- **Technical analysis**: skipped if analysis_date == today (inside `analyse_stock_price`)
+- **Forecast**: skipped if last run < 7 days old (Prophet training is expensive)
 
-## Frontend: `WatchlistWidget.tsx`
-Per-ticker refresh icon on each row:
+## Frontend Refresh Buttons
+
+### WatchlistWidget (Dashboard)
+Per-ticker refresh icon on each row (both Portfolio and Watchlist tabs):
 - ↻ (idle) → spinner (pending, polls every 2s) → ✓ (success, 3s) → ↻
 - On success: calls `onRefresh()` to reload dashboard data via SWR mutate
 - On error: shows ✗ for 5s then resets
 
+### Portfolio Analysis Tab
+Single refresh button in chart header (next to period pills):
+- Fetches all portfolio tickers from `GET /users/me/portfolio`
+- Triggers `POST /dashboard/refresh/{ticker}` for each holding in parallel
+- Polls all tickers until all complete
+- On success: increments `refreshKey` → `useEffect` re-fetches performance data
+
+### Portfolio Forecast Tab
+Same pattern as Portfolio Analysis — refreshes all holdings, re-fetches both performance + forecast data via `fcRefreshKey`.
+
+### Stock Analysis / Stock Forecast Tabs
+Single refresh button next to ticker dropdown:
+- Refreshes the currently selected ticker only
+- On success: increments `tickerRefreshKey` → both AnalysisTab and ForecastTab re-mount via React `key` prop
+
 ## Cache Invalidation
-On successful refresh, invalidates all related cache keys:
+On successful refresh, the backend status endpoint invalidates all related cache keys:
 `cache:dash:*`, `cache:chart:ohlcv:{ticker}`, `cache:chart:indicators:{ticker}`,
 `cache:chart:forecast:{ticker}:*`, `cache:insights:*`
