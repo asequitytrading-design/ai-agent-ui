@@ -22,22 +22,17 @@ interface HeroSectionProps {
 
 const quickActions = [
   {
-    label: "Analyze",
-    href: "/analytics/analysis",
+    label: "Portfolio Analysis",
+    href: "/analytics/analysis?tab=portfolio",
     primary: true,
   },
   {
-    label: "Forecast",
-    href: "/analytics/analysis?tab=forecast",
+    label: "Portfolio Forecast",
+    href: "/analytics/analysis?tab=portfolio-forecast",
     primary: false,
   },
   {
-    label: "Compare",
-    href: "/analytics/analysis?tab=compare",
-    primary: false,
-  },
-  {
-    label: "Link Ticker",
+    label: "Link Stock",
     href: "/analytics/marketplace",
     primary: false,
   },

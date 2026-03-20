@@ -17,6 +17,7 @@ import type {
 import { usePortfolio } from "@/hooks/usePortfolio";
 import { AddStockModal } from "@/components/widgets/AddStockModal";
 import { EditStockModal } from "@/components/widgets/EditStockModal";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useRegistry } from "@/hooks/useDashboardData";
 import {
   useDashboardHome,
@@ -55,6 +56,11 @@ export default function DashboardPage() {
     useState(false);
   const [editingTicker, setEditingTicker] =
     useState<string | null>(null);
+  const [deleteConfirm, setDeleteConfirm] =
+    useState<{
+      ticker: string;
+      txnId: string;
+    } | null>(null);
 
   // Single request for all widget data
   const {
@@ -244,15 +250,11 @@ export default function DashboardPage() {
             const holding = portfolioData.holdings.find(
               (h) => h.ticker === ticker,
             );
-            if (
-              holding?.transaction_id &&
-              confirm(
-                `Remove ${ticker} from portfolio?`,
-              )
-            ) {
-              portfolioData.deleteHolding(
-                holding.transaction_id,
-              );
+            if (holding?.transaction_id) {
+              setDeleteConfirm({
+                ticker,
+                txnId: holding.transaction_id,
+              });
             }
           }}
         />
@@ -279,6 +281,27 @@ export default function DashboardPage() {
         onAdd={async (data) => {
           await portfolioData.addHolding(data);
         }}
+      />
+
+      <ConfirmDialog
+        open={deleteConfirm !== null}
+        title="Remove Stock"
+        message={
+          deleteConfirm
+            ? `Remove ${deleteConfirm.ticker} from your portfolio? This cannot be undone.`
+            : ""
+        }
+        confirmLabel="Remove"
+        variant="danger"
+        onConfirm={() => {
+          if (deleteConfirm) {
+            portfolioData.deleteHolding(
+              deleteConfirm.txnId,
+            );
+          }
+          setDeleteConfirm(null);
+        }}
+        onCancel={() => setDeleteConfirm(null)}
       />
 
       {editingTicker && (() => {

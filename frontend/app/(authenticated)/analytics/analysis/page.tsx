@@ -14,28 +14,31 @@ import { CompareContent } from "../compare/page";
 import { apiFetch } from "@/lib/apiFetch";
 import { useTheme } from "@/hooks/useTheme";
 import { API_URL } from "@/lib/config";
-import {
-  PlotlyChart,
-} from "@/components/charts/PlotlyChart";
-import {
-  buildForecastChart,
-  buildForecastShapes,
-} from "@/components/charts/chartBuilders";
+import { ForecastChart } from "@/components/charts/ForecastChart";
 import { StockChart } from "@/components/charts/StockChart";
 import { usePreferences } from "@/hooks/usePreferences";
+import { PortfolioChart } from "@/components/charts/PortfolioChart";
+import { PortfolioForecastChart } from "@/components/charts/PortfolioForecastChart";
 import type {
   OHLCVResponse,
   IndicatorsResponse,
   ForecastSeriesResponse,
   ForecastsResponse,
   TickerForecast,
+  PortfolioPerformanceResponse,
+  PortfolioForecastResponse,
 } from "@/lib/types";
 
 // ---------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------
 
-type TabId = "analysis" | "forecast" | "compare";
+type TabId =
+  | "analysis"
+  | "forecast"
+  | "compare"
+  | "portfolio"
+  | "portfolio-forecast";
 
 // ---------------------------------------------------------------
 // Helpers
@@ -512,38 +515,37 @@ function ForecastTab({ ticker }: { ticker: string }) {
     };
   }, [series, horizon]);
 
-  // --- Forecast chart traces ---
-  const forecastTraces = useMemo(() => {
-    if (!ohlcv || !truncatedSeries) return [];
-    return buildForecastChart(
-      ohlcv.data.map((d) => d.date),
-      ohlcv.data.map((d) => d.close),
-      truncatedSeries.data.map((d) => d.date),
-      truncatedSeries.data.map((d) => d.predicted),
-      truncatedSeries.data.map((d) => d.upper),
-      truncatedSeries.data.map((d) => d.lower),
-      ticker,
-      summary?.sentiment,
-    );
-  }, [ohlcv, truncatedSeries, ticker, summary?.sentiment]);
+  const { resolvedTheme: fcTheme } = useTheme();
+  const fcIsDark = fcTheme === "dark";
 
-  // --- Shapes + annotations (today line, price, targets) ---
-  const { shapes, annotations } = useMemo(() => {
-    const currentPrice =
-      ohlcv && ohlcv.data.length > 0
-        ? ohlcv.data[ohlcv.data.length - 1].close
-        : null;
-    // Only show targets up to selected horizon
-    const targets = (summary?.targets ?? [])
-      .filter((t) => t.horizon_months <= horizon)
-      .map((t) => ({
-        horizon_months: t.horizon_months,
-        target_date: t.target_date,
-        target_price: t.target_price,
-        pct_change: t.pct_change,
-      }));
-    return buildForecastShapes(currentPrice, targets);
-  }, [ohlcv, summary, horizon]);
+  // Crosshair tooltip ref
+  const fcTooltip = useRef<HTMLDivElement>(null);
+  const handleFcMove = useCallback(
+    (info: {
+      date: string;
+      price: number;
+      isForecast: boolean;
+      lower?: number;
+      upper?: number;
+    } | null) => {
+      const el = fcTooltip.current;
+      if (!el || !info) return;
+      const s = tickerCurrency(ticker);
+      const tag = info.isForecast
+        ? '<span class="text-emerald-500 text-[9px]">FORECAST</span> '
+        : "";
+      let html =
+        `<span class="text-gray-500 dark:text-gray-400">${info.date}</span> `
+        + tag
+        + `<span class="text-gray-900 dark:text-white font-semibold">${s}${info.price.toFixed(2)}</span>`;
+      if (info.lower != null && info.upper != null) {
+        html +=
+          ` <span class="text-gray-400 dark:text-gray-500">${s}${info.lower.toFixed(2)} \u2014 ${s}${info.upper.toFixed(2)}</span>`;
+      }
+      el.innerHTML = html;
+    },
+    [ticker],
+  );
 
   if (loading) {
     return (
@@ -582,27 +584,10 @@ function ForecastTab({ ticker }: { ticker: string }) {
   return (
     <div className="space-y-6">
       {/* Forecast chart */}
-      <div
-        className="
-          rounded-xl border border-gray-200
-          dark:border-gray-700 bg-white
-          dark:bg-gray-900 shadow-sm p-4
-        "
-      >
-        <div
-          className="
-            flex flex-col sm:flex-row
-            sm:items-center sm:justify-between
-            gap-2 mb-3
-          "
-        >
-          <div className="flex items-baseline gap-2">
-            <h3
-              className="
-                text-sm font-semibold text-gray-900
-                dark:text-gray-100
-              "
-            >
+      <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-sm overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-b border-gray-100 dark:border-gray-800">
+          <div className="flex items-center gap-3">
+            <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
               Prophet Forecast
               {summary?.sentiment && (
                 <span className="ml-1">
@@ -617,66 +602,72 @@ function ForecastTab({ ticker }: { ticker: string }) {
               )}
             </h3>
             {summary && (
-              <span
-                className="
-                  text-xs text-gray-400
-                  dark:text-gray-500
-                "
-              >
+              <span className="text-xs text-gray-400 dark:text-gray-500">
                 as of {summary.run_date}
               </span>
             )}
+            <span
+              ref={fcTooltip}
+              className="text-xs font-mono text-gray-600 dark:text-gray-300"
+            />
+            <div className="flex items-center gap-3 text-[10px] text-gray-400 dark:text-gray-500">
+              <span className="flex items-center gap-1">
+                <span className="inline-block w-4 h-0.5 bg-indigo-500" />
+                Historical
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="inline-block w-4 h-0.5 border-t-2 border-dashed border-emerald-500" />
+                Forecast
+              </span>
+            </div>
           </div>
           {/* Horizon picker */}
-          <div
-            className="
-              inline-flex rounded-lg
-              bg-gray-100 dark:bg-gray-800 p-1
-            "
-          >
+          <div className="inline-flex rounded-lg bg-gray-100 dark:bg-gray-800 p-1">
             {([3, 6, 9] as HorizonId[]).map((h) => (
               <button
                 key={h}
                 onClick={() => setHorizon(h)}
-                className={`
-                  px-3 py-1 text-xs font-medium
-                  rounded-md transition-colors
-                  ${
-                    horizon === h
-                      ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm"
-                      : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
-                  }
-                `}
+                className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+                  horizon === h
+                    ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm"
+                    : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                }`}
               >
                 {h}M
               </button>
             ))}
           </div>
         </div>
-        <PlotlyChart
-          data={forecastTraces}
+        <ForecastChart
+          historicalDates={
+            ohlcv?.data.map((d) => d.date) ?? []
+          }
+          historicalPrices={
+            ohlcv?.data.map((d) => d.close) ?? []
+          }
+          forecastDates={
+            truncatedSeries?.data.map(
+              (d) => d.date,
+            ) ?? []
+          }
+          forecastPredicted={
+            truncatedSeries?.data.map(
+              (d) => d.predicted,
+            ) ?? []
+          }
+          forecastUpper={
+            truncatedSeries?.data.map(
+              (d) => d.upper,
+            ) ?? []
+          }
+          forecastLower={
+            truncatedSeries?.data.map(
+              (d) => d.lower,
+            ) ?? []
+          }
+          isDark={fcIsDark}
           height={550}
-          config={{ scrollZoom: true }}
-          layout={{
-            hovermode: "x unified",
-            margin: { t: 30, r: 80, b: 40, l: 60 },
-            shapes,
-            annotations,
-            xaxis: {
-              rangeslider: { visible: false },
-            },
-            yaxis: {
-              side: "right",
-              tickformat: ",.0f",
-            },
-            legend: {
-              orientation: "h",
-              x: 0.5,
-              xanchor: "center",
-              y: 1.08,
-              font: { size: 11 },
-            },
-          }}
+          onCrosshairMove={handleFcMove}
         />
       </div>
 
@@ -849,13 +840,533 @@ function CompareTab() {
 }
 
 // ---------------------------------------------------------------
+// Tab: Portfolio Performance
+// ---------------------------------------------------------------
+
+const PERIOD_OPTIONS = [
+  "1D", "1W", "1M", "3M", "6M", "1Y", "ALL",
+] as const;
+
+function PortfolioTab({
+  marketFilter,
+}: {
+  marketFilter: string;
+}) {
+  const [data, setData] =
+    useState<PortfolioPerformanceResponse | null>(
+      null,
+    );
+  const [loading, setLoading] = useState(true);
+  const [error, setError] =
+    useState<string | null>(null);
+  const [period, setPeriod] = useState("ALL");
+  const currency =
+    marketFilter === "india" ? "INR" : "USD";
+  const sym = currency === "INR" ? "\u20B9" : "$";
+
+  const { resolvedTheme } = useTheme();
+  const isDark = resolvedTheme === "dark";
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+
+    apiFetch(
+      `${API_URL}/dashboard/portfolio/performance`
+      + `?period=${period}&currency=${currency}`,
+    )
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json() as Promise<PortfolioPerformanceResponse>;
+      })
+      .then((d) => {
+        if (!cancelled) setData(d);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [period, currency]);
+
+  // Crosshair ref for tooltip
+  const tooltipRef = useRef<HTMLDivElement>(null);
+  const handleCrosshair = useCallback(
+    (pt: {
+      date: string;
+      value: number;
+      invested_value: number;
+      daily_pnl: number;
+      daily_return_pct: number;
+    } | null) => {
+      const el = tooltipRef.current;
+      if (!el || !pt) return;
+      const pos = pt.daily_pnl >= 0;
+      const gl = pt.invested_value > 0
+        ? ((pt.value - pt.invested_value) / pt.invested_value * 100)
+        : 0;
+      const glPos = gl >= 0;
+      el.innerHTML =
+        `<span class="text-gray-500 dark:text-gray-400">${pt.date}</span> `
+        + `<span class="text-gray-900 dark:text-white font-semibold">${sym}${pt.value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span> `
+        + `<span class="text-gray-400 dark:text-gray-500">Inv ${sym}${pt.invested_value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span> `
+        + `<span class="${glPos ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}">`
+        + `${glPos ? "+" : ""}${gl.toFixed(2)}%</span> `
+        + `<span class="${pos ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}">`
+        + `${pos ? "+" : ""}${sym}${pt.daily_pnl.toFixed(2)}</span>`;
+    },
+    [sym],
+  );
+
+  if (loading) {
+    return <ChartSkeleton h="h-[500px]" />;
+  }
+
+  if (error) {
+    return (
+      <div className="rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 px-5 py-10 text-center text-sm text-red-600 dark:text-red-400">
+        {error}
+      </div>
+    );
+  }
+
+  if (!data || data.data.length === 0) {
+    return (
+      <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 px-5 py-10 text-center text-sm text-gray-500 dark:text-gray-400">
+        Add stocks to your portfolio to see
+        performance.{" "}
+        <Link
+          href="/dashboard"
+          className="text-indigo-600 dark:text-indigo-400 underline"
+        >
+          Go to Dashboard
+        </Link>
+      </div>
+    );
+  }
+
+  const m = data.metrics;
+
+  return (
+    <div className="space-y-4">
+      {/* Chart card */}
+      <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-sm overflow-hidden">
+        {/* Header */}
+        <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 border-b border-gray-100 dark:border-gray-800">
+          <div className="flex items-center gap-3 text-xs font-mono">
+            <span className="font-semibold text-gray-900 dark:text-gray-100">
+              Portfolio ({currency})
+            </span>
+            <span
+              ref={tooltipRef}
+              className="text-gray-600 dark:text-gray-300"
+            />
+            <div className="flex items-center gap-3 text-[10px] text-gray-400 dark:text-gray-500">
+              <span className="flex items-center gap-1">
+                <span className="inline-block w-4 h-0.5 bg-indigo-500" />
+                Market Value
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="inline-block w-4 h-0.5 border-t-2 border-dashed border-amber-500" />
+                Invested
+              </span>
+            </div>
+          </div>
+          {/* Period pills */}
+          <div className="inline-flex rounded-md bg-gray-100 dark:bg-gray-800 p-0.5">
+            {PERIOD_OPTIONS.map((p) => (
+              <button
+                key={p}
+                onClick={() => setPeriod(p)}
+                className={`px-2 py-0.5 text-[10px] font-medium rounded transition-colors ${
+                  period === p
+                    ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm"
+                    : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                }`}
+              >
+                {p}
+              </button>
+            ))}
+          </div>
+        </div>
+        <PortfolioChart
+          data={data.data}
+          isDark={isDark}
+          height={Math.max(
+            400,
+            typeof window !== "undefined"
+              ? window.innerHeight - 280
+              : 500,
+          )}
+          onCrosshairMove={handleCrosshair}
+        />
+      </div>
+
+      {/* Metrics cards */}
+      {m && (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+          {[
+            {
+              label: "Total Return",
+              value: `${m.total_return_pct >= 0 ? "+" : ""}${m.total_return_pct.toFixed(2)}%`,
+              positive: m.total_return_pct >= 0,
+            },
+            {
+              label: "Annualized",
+              value: `${m.annualized_return_pct >= 0 ? "+" : ""}${m.annualized_return_pct.toFixed(2)}%`,
+              positive:
+                m.annualized_return_pct >= 0,
+            },
+            {
+              label: "Max Drawdown",
+              value: `${m.max_drawdown_pct.toFixed(2)}%`,
+              positive: false,
+            },
+            {
+              label: "Sharpe Ratio",
+              value:
+                m.sharpe_ratio != null
+                  ? m.sharpe_ratio.toFixed(2)
+                  : "N/A",
+              positive:
+                m.sharpe_ratio != null &&
+                m.sharpe_ratio > 0,
+            },
+            {
+              label: `Best Day (${m.best_day_date})`,
+              value: `+${m.best_day_pct.toFixed(2)}%`,
+              positive: true,
+            },
+            {
+              label: `Worst Day (${m.worst_day_date})`,
+              value: `${m.worst_day_pct.toFixed(2)}%`,
+              positive: false,
+            },
+          ].map((card) => (
+            <div
+              key={card.label}
+              className="rounded-lg p-3 bg-gray-50 dark:bg-gray-800/50 border border-gray-100 dark:border-gray-700/50"
+            >
+              <p className="text-[10px] font-medium uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-1">
+                {card.label}
+              </p>
+              <p
+                className={`font-mono text-lg font-semibold ${
+                  card.positive
+                    ? "text-emerald-600 dark:text-emerald-400"
+                    : "text-red-600 dark:text-red-400"
+                }`}
+              >
+                {card.value}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------
+// Tab: Portfolio Forecast
+// ---------------------------------------------------------------
+
+function PortfolioForecastTab({
+  marketFilter,
+}: {
+  marketFilter: string;
+}) {
+  const [perf, setPerf] =
+    useState<PortfolioPerformanceResponse | null>(
+      null,
+    );
+  const [forecast, setForecast] =
+    useState<PortfolioForecastResponse | null>(
+      null,
+    );
+  const [loading, setLoading] = useState(true);
+  const [error, setError] =
+    useState<string | null>(null);
+  const [horizon, setHorizon] =
+    useState<3 | 6 | 9>(9);
+  const currency =
+    marketFilter === "india" ? "INR" : "USD";
+  const sym = currency === "INR" ? "\u20B9" : "$";
+
+  const { resolvedTheme } = useTheme();
+  const isDark = resolvedTheme === "dark";
+
+  // Always fetch 9M; truncate client-side
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+
+    Promise.all([
+      apiFetch(
+        `${API_URL}/dashboard/portfolio/performance`
+        + `?period=6M&currency=${currency}`,
+      ).then((r) => {
+        if (!r.ok) throw new Error(`Perf: HTTP ${r.status}`);
+        return r.json() as Promise<PortfolioPerformanceResponse>;
+      }),
+      apiFetch(
+        `${API_URL}/dashboard/portfolio/forecast`
+        + `?horizon=9&currency=${currency}`,
+      ).then((r) => {
+        if (!r.ok) throw new Error(`Forecast: HTTP ${r.status}`);
+        return r.json() as Promise<PortfolioForecastResponse>;
+      }),
+    ])
+      .then(([p, f]) => {
+        if (cancelled) return;
+        setPerf(p);
+        setForecast(f);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currency]);
+
+  // Client-side horizon truncation
+  const truncated = useMemo(() => {
+    if (!forecast?.data.length) return forecast;
+    const max = Math.ceil(
+      (forecast.data.length * horizon) / 9,
+    );
+    return {
+      ...forecast,
+      data: forecast.data.slice(0, max),
+    };
+  }, [forecast, horizon]);
+
+  // Crosshair tooltip — hooks MUST be before
+  // any early returns (Rules of Hooks).
+  const fcTooltipRef =
+    useRef<HTMLDivElement>(null);
+  const fmtNum = useCallback(
+    (n: number) =>
+      n.toLocaleString("en-US", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }),
+    [],
+  );
+  const handleFcCrosshair = useCallback(
+    (info: {
+      date: string;
+      value: number;
+      invested: number;
+      gainPct: number;
+      isForecast: boolean;
+    } | null) => {
+      const el = fcTooltipRef.current;
+      if (!el || !info) return;
+      const pos = info.gainPct >= 0;
+      const tag = info.isForecast
+        ? '<span class="text-emerald-500 text-[9px]">FORECAST</span> '
+        : "";
+      el.innerHTML =
+        `<span class="text-gray-500 dark:text-gray-400">${info.date}</span> `
+        + tag
+        + `<span class="text-gray-900 dark:text-white font-semibold">${sym}${fmtNum(info.value)}</span> `
+        + `<span class="text-gray-400 dark:text-gray-500">Inv ${sym}${fmtNum(info.invested)}</span> `
+        + `<span class="${pos ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}">`
+        + `${pos ? "+" : ""}${info.gainPct.toFixed(2)}%</span>`;
+    },
+    [sym, fmtNum],
+  );
+
+  if (loading) {
+    return <ChartSkeleton h="h-[500px]" />;
+  }
+
+  if (error) {
+    return (
+      <div className="rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 px-5 py-10 text-center text-sm text-red-600 dark:text-red-400">
+        {error}
+      </div>
+    );
+  }
+
+  if (
+    !truncated ||
+    truncated.data.length === 0
+  ) {
+    return (
+      <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 px-5 py-10 text-center text-sm text-gray-500 dark:text-gray-400">
+        Run forecasts on your holdings first.
+      </div>
+    );
+  }
+
+  // Summary values
+  const invested = forecast?.total_invested ?? 0;
+  const curVal = forecast?.current_value ?? 0;
+  const endVal =
+    truncated.data[truncated.data.length - 1]
+      .predicted;
+  // Unrealized P&L (current vs invested)
+  const unrealizedPnl = curVal - invested;
+  const unrealizedPct =
+    invested > 0
+      ? (unrealizedPnl / invested) * 100
+      : 0;
+  // Expected return on cost basis
+  const expReturn =
+    invested > 0
+      ? ((endVal - invested) / invested) * 100
+      : 0;
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-sm overflow-hidden">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 px-4 py-3 border-b border-gray-100 dark:border-gray-800">
+          <div className="flex items-center gap-3">
+            <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+              Portfolio Forecast
+            </h3>
+            <span
+              ref={fcTooltipRef}
+              className="text-xs font-mono text-gray-600 dark:text-gray-300"
+            />
+            <div className="flex items-center gap-3 text-[10px] text-gray-400 dark:text-gray-500">
+              <span className="flex items-center gap-1">
+                <span className="inline-block w-4 h-0.5 bg-indigo-500" />
+                Market Value
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="inline-block w-4 h-0.5 border-t-2 border-dashed border-amber-500" />
+                Invested
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="inline-block w-4 h-0.5 border-t border-dashed border-emerald-500" />
+                Forecast
+              </span>
+            </div>
+          </div>
+          <div className="inline-flex rounded-lg bg-gray-100 dark:bg-gray-800 p-1">
+            {([3, 6, 9] as const).map((h) => (
+              <button
+                key={h}
+                onClick={() => setHorizon(h)}
+                className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+                  horizon === h
+                    ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm"
+                    : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                }`}
+              >
+                {h}M
+              </button>
+            ))}
+          </div>
+        </div>
+        <PortfolioForecastChart
+          perfData={perf?.data ?? []}
+          forecastData={truncated.data}
+          isDark={isDark}
+          height={Math.max(
+            400,
+            typeof window !== "undefined"
+              ? window.innerHeight - 320
+              : 480,
+          )}
+          onCrosshairMove={handleFcCrosshair}
+        />
+      </div>
+
+      {/* Summary cards — 4 with explainability */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {/* Total Invested */}
+        <div className="rounded-lg p-4 bg-gray-50 dark:bg-gray-800/50 border border-gray-100 dark:border-gray-700/50">
+          <p className="text-[10px] font-medium uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-1">
+            Total Invested
+          </p>
+          <p className="font-mono text-xl font-semibold text-gray-900 dark:text-gray-100">
+            {sym}{fmtNum(invested)}
+          </p>
+        </div>
+        {/* Current Value + unrealized P&L */}
+        <div className="rounded-lg p-4 bg-gray-50 dark:bg-gray-800/50 border border-gray-100 dark:border-gray-700/50">
+          <p className="text-[10px] font-medium uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-1">
+            Current Value
+          </p>
+          <p className="font-mono text-xl font-semibold text-gray-900 dark:text-gray-100">
+            {sym}{fmtNum(curVal)}
+          </p>
+          <p
+            className={`text-[10px] font-mono mt-0.5 ${
+              unrealizedPnl >= 0
+                ? "text-emerald-600 dark:text-emerald-400"
+                : "text-red-600 dark:text-red-400"
+            }`}
+          >
+            {unrealizedPnl >= 0 ? "+" : ""}
+            {sym}{fmtNum(Math.abs(unrealizedPnl))}
+            {" ("}
+            {unrealizedPnl >= 0 ? "+" : ""}
+            {unrealizedPct.toFixed(2)}%{")"}
+          </p>
+        </div>
+        {/* Predicted */}
+        <div className="rounded-lg p-4 bg-gray-50 dark:bg-gray-800/50 border border-gray-100 dark:border-gray-700/50">
+          <p className="text-[10px] font-medium uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-1">
+            Predicted ({horizon}M)
+          </p>
+          <p className="font-mono text-xl font-semibold text-gray-900 dark:text-gray-100">
+            {sym}{fmtNum(endVal)}
+          </p>
+        </div>
+        {/* Expected Return (on cost) */}
+        <div className="rounded-lg p-4 bg-gray-50 dark:bg-gray-800/50 border border-gray-100 dark:border-gray-700/50">
+          <p className="text-[10px] font-medium uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-1">
+            Expected Return (on cost)
+          </p>
+          <p
+            className={`font-mono text-xl font-semibold ${
+              expReturn >= 0
+                ? "text-emerald-600 dark:text-emerald-400"
+                : "text-red-600 dark:text-red-400"
+            }`}
+          >
+            {expReturn >= 0 ? "+" : ""}
+            {expReturn.toFixed(2)}%
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------
 // Tabs
 // ---------------------------------------------------------------
 
 const TABS: { id: TabId; label: string }[] = [
-  { id: "analysis", label: "Analysis" },
-  { id: "forecast", label: "Forecast" },
-  { id: "compare", label: "Compare" },
+  {
+    id: "portfolio",
+    label: "Portfolio Analysis",
+  },
+  {
+    id: "portfolio-forecast",
+    label: "Portfolio Forecast",
+  },
+  { id: "analysis", label: "Stock Analysis" },
+  { id: "forecast", label: "Stock Forecast" },
+  { id: "compare", label: "Compare Stocks" },
 ];
 
 // ---------------------------------------------------------------
@@ -1000,8 +1511,8 @@ function AnalysisPageInner() {
     <div className="space-y-3">
       {/* Header: Tabs (left) + Ticker search (right) */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        {/* Tab pills — LEFT */}
-        <div className="inline-flex rounded-lg bg-gray-100 dark:bg-gray-800 p-1">
+        {/* Tabs — underline style (matches Insights/Admin) */}
+        <div className="flex gap-1 overflow-x-auto border-b border-gray-200 dark:border-gray-700 pb-px">
           {TABS.map((tab) => (
             <button
               key={tab.id}
@@ -1009,10 +1520,10 @@ function AnalysisPageInner() {
                 setActiveTab(tab.id);
                 updatePrefs("chart", { tab: tab.id });
               }}
-              className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${
+              className={`whitespace-nowrap px-3 py-2 text-sm font-medium rounded-t-lg transition-colors ${
                 activeTab === tab.id
-                  ? "bg-indigo-600 text-white shadow-sm"
-                  : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200"
+                  ? "text-indigo-600 dark:text-indigo-400 border-b-2 border-indigo-600 dark:border-indigo-400 -mb-px"
+                  : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
               }`}
             >
               {tab.label}
@@ -1022,7 +1533,7 @@ function AnalysisPageInner() {
 
         {/* Searchable ticker — RIGHT */}
         <div
-          className={`relative ${activeTab === "compare" ? "invisible" : ""}`}
+          className={`relative ${activeTab === "compare" || activeTab.startsWith("portfolio") ? "invisible" : ""}`}
         >
           <div className="flex items-center gap-1.5">
             <span className="text-xs font-medium text-gray-500 dark:text-gray-400">
@@ -1110,6 +1621,24 @@ function AnalysisPageInner() {
         <ForecastTab ticker={selectedTicker} />
       )}
       {activeTab === "compare" && <CompareTab />}
+      {activeTab === "portfolio" && (
+        <PortfolioTab
+          marketFilter={
+            (chartPrefs.marketFilter as string)
+            ?? (userPrefs.dashboard as Record<string, unknown>)?.marketFilter as string
+            ?? "india"
+          }
+        />
+      )}
+      {activeTab === "portfolio-forecast" && (
+        <PortfolioForecastTab
+          marketFilter={
+            (chartPrefs.marketFilter as string)
+            ?? (userPrefs.dashboard as Record<string, unknown>)?.marketFilter as string
+            ?? "india"
+          }
+        />
+      )}
     </div>
   );
 }

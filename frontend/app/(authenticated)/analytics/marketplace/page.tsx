@@ -7,6 +7,7 @@ import {
   useRegistry,
   useUserTickers,
 } from "@/hooks/useDashboardData";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 
 const PAGE_SIZE = 12;
 
@@ -30,6 +31,8 @@ export default function MarketplacePage() {
   const [market, setMarket] = useState<MarketFilter>("all");
   const [page, setPage] = useState(1);
   const [busyTickers, setBusyTickers] = useState<Set<string>>(new Set());
+  const [unlinkConfirm, setUnlinkConfirm] =
+    useState<string | null>(null);
 
   // Filtered + searched list
   const filtered = useMemo(() => {
@@ -250,7 +253,7 @@ export default function MarketplacePage() {
                       {linked ? (
                         <button
                           disabled={busy}
-                          onClick={() => unlinkTicker(t.ticker)}
+                          onClick={() => setUnlinkConfirm(t.ticker)}
                           className="rounded-lg border border-red-300 px-3 py-1 text-xs font-medium text-red-600 transition-colors hover:bg-red-50 disabled:opacity-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
                         >
                           {busy ? "..." : "Unlink"}
@@ -295,6 +298,22 @@ export default function MarketplacePage() {
           </button>
         </div>
       )}
+      <ConfirmDialog
+        open={unlinkConfirm !== null}
+        title="Unlink Stock"
+        message={
+          unlinkConfirm
+            ? `Unlink ${unlinkConfirm}? You can re-link it later.`
+            : ""
+        }
+        confirmLabel="Unlink"
+        variant="warning"
+        onConfirm={() => {
+          if (unlinkConfirm) unlinkTicker(unlinkConfirm);
+          setUnlinkConfirm(null);
+        }}
+        onCancel={() => setUnlinkConfirm(null)}
+      />
     </div>
   );
 }

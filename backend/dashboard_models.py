@@ -256,3 +256,51 @@ class DashboardHomeResponse(BaseModel):
     llm_usage: LLMUsageResponse = Field(
         default_factory=LLMUsageResponse,
     )
+
+
+# ---------------------------------------------------------------
+# Portfolio Performance & Forecast
+# ---------------------------------------------------------------
+
+class PortfolioDailyPoint(BaseModel):
+    date: str
+    value: float
+    invested_value: float
+    daily_pnl: float
+    daily_return_pct: float
+
+
+class PortfolioMetrics(BaseModel):
+    total_return_pct: float
+    annualized_return_pct: float
+    max_drawdown_pct: float
+    sharpe_ratio: float | None = None
+    best_day_pct: float
+    best_day_date: str
+    worst_day_pct: float
+    worst_day_date: str
+
+
+class PortfolioPerformanceResponse(BaseModel):
+    data: list[PortfolioDailyPoint] = Field(
+        default_factory=list,
+    )
+    metrics: PortfolioMetrics | None = None
+    currency: str = "USD"
+
+
+class PortfolioForecastPoint(BaseModel):
+    date: str
+    predicted: float
+    lower: float
+    upper: float
+
+
+class PortfolioForecastResponse(BaseModel):
+    data: list[PortfolioForecastPoint] = Field(
+        default_factory=list,
+    )
+    horizon_months: int = 9
+    current_value: float = 0.0
+    total_invested: float = 0.0
+    currency: str = "USD"

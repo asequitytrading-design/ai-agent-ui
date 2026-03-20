@@ -273,21 +273,27 @@ graph TD
 
 ## Frontend SPA
 
-The frontend is a full SPA with a **collapsible sidebar** for navigation and a **native portfolio dashboard** as the post-login landing page. Four Dash pages (Home, Analysis, Compare, Link Ticker) have been migrated to native Next.js with **react-plotly.js** charts. A **chat side panel** (FAB-triggered, resizable drawer) provides access to the agentic chat from any page.
+The frontend is a full SPA with a **collapsible sidebar** for navigation and a **native portfolio dashboard** as the post-login landing page. All pages use **TradingView lightweight-charts** (~45 KB) for stock and portfolio visualizations. A **chat side panel** (FAB-triggered, resizable drawer) provides access to the agentic chat from any page.
+
+**Analysis page** — 5 tabs with underline navigation:
+- **Portfolio Analysis**: daily value vs invested (TradingView dual-line + P&L histogram), cash-flow-adjusted metrics
+- **Portfolio Forecast**: weighted Prophet forecast with confidence band, 4 explainable summary cards
+- **Stock Analysis**: multi-pane candlestick chart (OHLC + Volume + RSI + MACD)
+- **Stock Forecast**: Prophet forecast with confidence band per ticker
+- **Compare Stocks**: normalized price comparison (multi-line)
 
 ```
 ┌────┬───────────────────────────────────────────────────────────┐
-│ ◀  │  ✦ AI Agent  Dashboard › Home         [Sign out]  [🗑]   │ ← header + breadcrumb
+│ ◀  │  ✦ AI Agent  Dashboard › Analysis      [Sign out]  [💬]  │ ← header + breadcrumb
 │    ├───────────────────────────────────────────────────────────┤
-│ P  │                                                           │
-│ o  │  /portfolio    → Native portfolio dashboard (widgets)     │
-│ r  │  /dashboard/*  → Native pages: Home, Analysis, Compare,  │
-│ t  │                  Link Ticker (react-plotly.js charts)     │
-│ f  │  /dashboard/*  → Iframe: Insights, Admin (Dash :8050)    │
-│ o  │  /docs         → Iframe: MkDocs (:8000)                  │
-│ l  │                                                           │
-│ i  │                              ┌─────────────────┐          │
-│ o  │                              │ Chat Side Panel │ ← FAB   │
+│ S  │                                                           │
+│ i  │  /dashboard      → Portfolio dashboard (hero, widgets)    │
+│ d  │  /analytics/*    → Analysis, Insights, Link Stock         │
+│ e  │  /admin          → Users, Audit Log, LLM Observability    │
+│ b  │  /docs           → MkDocs (:8000)                         │
+│ a  │                                                           │
+│ r  │                              ┌─────────────────┐          │
+│    │                              │ Chat Side Panel │ ← FAB   │
 │    │                              │ (resizable)     │          │
 │ ▼  │                              └─────────────────┘          │
 └────┴───────────────────────────────────────────────────────────┘

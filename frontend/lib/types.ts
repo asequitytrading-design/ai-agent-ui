@@ -239,6 +239,50 @@ export interface ForecastSeriesResponse {
 }
 
 // ---------------------------------------------------------------
+// Portfolio Performance & Forecast
+// ---------------------------------------------------------------
+
+export interface PortfolioDailyPoint {
+  date: string;
+  value: number;
+  invested_value: number;
+  daily_pnl: number;
+  daily_return_pct: number;
+}
+
+export interface PortfolioMetrics {
+  total_return_pct: number;
+  annualized_return_pct: number;
+  max_drawdown_pct: number;
+  sharpe_ratio: number | null;
+  best_day_pct: number;
+  best_day_date: string;
+  worst_day_pct: number;
+  worst_day_date: string;
+}
+
+export interface PortfolioPerformanceResponse {
+  data: PortfolioDailyPoint[];
+  metrics: PortfolioMetrics | null;
+  currency: string;
+}
+
+export interface PortfolioForecastPoint {
+  date: string;
+  predicted: number;
+  lower: number;
+  upper: number;
+}
+
+export interface PortfolioForecastResponse {
+  data: PortfolioForecastPoint[];
+  horizon_months: number;
+  current_value: number;
+  total_invested: number;
+  currency: string;
+}
+
+// ---------------------------------------------------------------
 // Insights
 // ---------------------------------------------------------------
 

@@ -434,12 +434,20 @@ def add_portfolio_holding(
     }
     stock_repo.add_portfolio_transaction(txn)
 
-    # Invalidate portfolio cache
+    # Invalidate portfolio caches
     try:
         from cache import get_cache
         cache = get_cache()
         cache.invalidate(
             f"cache:portfolio:{user.user_id}",
+        )
+        cache.invalidate(
+            f"cache:portfolio:perf:"
+            f"{user.user_id}:*",
+        )
+        cache.invalidate(
+            f"cache:portfolio:forecast:"
+            f"{user.user_id}:*",
         )
     except ImportError:
         pass
@@ -490,6 +498,22 @@ def edit_portfolio_holding(
             status_code=404,
             detail="Transaction not found",
         )
+
+    # Invalidate portfolio caches
+    try:
+        from cache import get_cache
+        cache = get_cache()
+        cache.invalidate(
+            f"cache:portfolio:perf:"
+            f"{user.user_id}:*",
+        )
+        cache.invalidate(
+            f"cache:portfolio:forecast:"
+            f"{user.user_id}:*",
+        )
+    except ImportError:
+        pass
+
     return {"detail": "updated"}
 
 
@@ -508,4 +532,20 @@ def delete_portfolio_holding(
             status_code=404,
             detail="Transaction not found",
         )
+
+    # Invalidate portfolio caches
+    try:
+        from cache import get_cache
+        cache = get_cache()
+        cache.invalidate(
+            f"cache:portfolio:perf:"
+            f"{user.user_id}:*",
+        )
+        cache.invalidate(
+            f"cache:portfolio:forecast:"
+            f"{user.user_id}:*",
+        )
+    except ImportError:
+        pass
+
     return {"detail": "deleted"}

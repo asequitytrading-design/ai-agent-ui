@@ -4,6 +4,39 @@ Session-by-session record of what was built, changed, and fixed.
 
 ---
 
+## Mar 20, 2026 — Portfolio Analytics, TradingView Migration, UX Polish
+
+### Added
+- **Portfolio Performance endpoint** `GET /v1/dashboard/portfolio/performance` — daily value + invested series with cash-flow-adjusted metrics (total return, annualized, max drawdown, Sharpe, best/worst day)
+- **Portfolio Forecast endpoint** `GET /v1/dashboard/portfolio/forecast` — weighted Prophet forecast aggregation with `total_invested` for explainable cards
+- **PortfolioChart.tsx** — TradingView chart: AreaSeries (market value) + LineSeries (invested, amber dashed) + HistogramSeries (daily P&L)
+- **PortfolioForecastChart.tsx** — TradingView chart: dual historical lines + forecast (dashed green) + confidence band + flat invested projection
+- **ForecastChart.tsx** — TradingView replacement for Plotly per-ticker forecast with confidence band + crosshair tooltip
+- **CompareChart.tsx** — TradingView replacement for Plotly normalized price comparison (one LineSeries per ticker)
+- **ConfirmDialog.tsx** — reusable confirmation modal with danger/warning variants, applied to 5 destructive flows (delete stock, unlink ticker, revoke session, revoke all, deactivate user)
+- **`_safe_float()` helper** — NaN-safe numeric conversion for Iceberg NULL values with OHLCV price fallback
+- 11 backend tests for portfolio analytics (cash-flow metrics, invested timeline, horizon fetch)
+
+### Changed
+- **Analysis page tabs**: renamed and reordered — Portfolio Analysis → Portfolio Forecast → Stock Analysis → Stock Forecast → Compare Stocks
+- **Tab style**: pill-style → underline-style (matching Insights/Admin pages)
+- **"Link Ticker" → "Link Stock"** across sidebar, header breadcrumb, and HeroSection
+- **HeroSection buttons**: "Portfolio Analysis" (primary), "Portfolio Forecast", "Link Stock"
+- **Correlation heatmap removed** from Compare Stocks page
+- **Plotly removed** from analysis and compare pages (only Insights page still uses Plotly)
+- Portfolio forecast endpoint always fetches 9M forecasts; client truncates for 3M/6M horizons
+
+### Fixed
+- **NaN handling**: Iceberg NULL → pandas NaN is truthy in Python — `val or 0` and `val <= 0` silently fail. Fixed with `_safe_float()` using `math.isnan()`
+- **Horizon picker empty**: `get_latest_forecast_series(ticker, 3)` filtered by non-existent `horizon_months=3` rows. Fixed: always query 9M
+- **Metrics inflated** (+501% total return): raw portfolio value includes capital contributions. Fixed: cash-flow-adjusted daily returns, invested-basis total return, gain% drawdown
+- **React hooks order**: `useRef`/`useCallback` placed after conditional returns violated Rules of Hooks
+
+Tickets: ASETPLTFRM-124 (8 pts), ASETPLTFRM-125 (2 pts)
+Branch: feature/sprint2-planning
+
+---
+
 ## Mar 18–19, 2026 — Performance, TradingView Charts, Portfolio Management, Dash Retirement
 
 ### Added

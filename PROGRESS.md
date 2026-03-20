@@ -2,6 +2,83 @@
 
 ---
 
+# Session: Mar 20, 2026 — Portfolio Analytics, TradingView Migration, UX Polish
+
+## Sprint 2 continuation on `feature/sprint2-planning`
+
+### Portfolio Performance & Forecast (ASETPLTFRM-124, 8 pts)
+
+**Backend** (`dashboard_routes.py`, `dashboard_models.py`):
+- `GET /v1/dashboard/portfolio/performance` — daily portfolio value + invested series
+  - Cash-flow-adjusted metrics: daily returns strip capital contributions
+  - Total return uses invested basis, max drawdown on gain% series
+  - `_safe_float()` helper for NaN-safe Iceberg NULL handling with OHLCV fallback
+- `GET /v1/dashboard/portfolio/forecast` — weighted Prophet forecast aggregation
+  - Always fetches 9M from Iceberg; client truncates for 3M/6M
+  - Returns `total_invested` for explainable summary cards
+- 5 Pydantic models: PortfolioDailyPoint (with `invested_value`), PortfolioMetrics, PortfolioPerformanceResponse, PortfolioForecastPoint, PortfolioForecastResponse (with `total_invested`)
+- Cache invalidation on portfolio add/edit/delete for perf + forecast keys
+
+**Frontend** — Analysis page 5 tabs:
+- Portfolio Analysis: TradingView `PortfolioChart.tsx` (AreaSeries value + LineSeries invested amber + HistogramSeries P&L), 6 metrics cards, crosshair tooltip with gain/loss %
+- Portfolio Forecast: TradingView `PortfolioForecastChart.tsx` (dual historical lines + forecast + confidence band), 4 explainable summary cards (Invested → Current Value with P&L → Predicted → Expected Return on cost), horizon picker 3M/6M/9M
+
+### TradingView Migration — Stock Forecast + Compare
+- `ForecastChart.tsx` — replaces Plotly for per-ticker forecast (historical + forecast + confidence band + crosshair)
+- `CompareChart.tsx` — replaces Plotly for normalized price comparison (one LineSeries per ticker, colored legend)
+- Correlation heatmap section removed from Compare Stocks
+- Plotly removed from analysis + compare pages (only Insights still uses Plotly)
+
+### ConfirmDialog (ASETPLTFRM-125, 2 pts)
+- Reusable `ConfirmDialog.tsx` with danger (red) / warning (amber) variants
+- Applied to 5 destructive flows: delete stock, unlink ticker, revoke session, revoke all, deactivate user
+- Escape key + backdrop click dismiss, auto-focus on confirm button
+
+### UX Polish
+- Tab labels: Portfolio Analysis, Portfolio Forecast, Stock Analysis, Stock Forecast, Compare Stocks
+- Tab order: Portfolio first, then Stock, then Compare
+- Tab style: underline (matching Insights/Admin pages)
+- Tab preference persistence for all new tab IDs
+- HeroSection buttons: "Portfolio Analysis", "Portfolio Forecast", "Link Stock"
+- "Link Ticker" → "Link Stock" everywhere (sidebar, header, hero)
+- Chart legends in headers (Market Value + Invested + Forecast indicators)
+- Invested line: amber dashed 2px (visible against all backgrounds)
+
+### Bug Fixes
+- NaN handling: Iceberg NULL → pandas NaN is truthy, breaks `or`/comparison fallbacks → `_safe_float()` with `math.isnan()`
+- Horizon picker empty: forecast endpoint filtered by `horizon_months` but only 9M rows exist → always fetch 9M
+- Metrics inflated (+501% return): raw value includes capital contributions → cash-flow-adjusted formulas
+- React hooks order: `useRef`/`useCallback` after conditional returns → moved before early returns
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `backend/dashboard_models.py` | +`invested_value`, +`total_invested` on portfolio models |
+| `backend/dashboard_routes.py` | +2 endpoints, +`_safe_float()`, cash-flow-adjusted metrics |
+| `auth/endpoints/ticker_routes.py` | +cache invalidation for perf/forecast |
+| `frontend/lib/types.ts` | +5 TypeScript interfaces |
+| `frontend/components/charts/PortfolioChart.tsx` | +invested LineSeries (amber), +gain/loss tooltip |
+| `frontend/components/charts/PortfolioForecastChart.tsx` | New — TradingView forecast chart |
+| `frontend/components/charts/ForecastChart.tsx` | New — TradingView per-ticker forecast |
+| `frontend/components/charts/CompareChart.tsx` | New — TradingView compare chart |
+| `frontend/components/ConfirmDialog.tsx` | New — reusable confirmation dialog |
+| `frontend/app/(authenticated)/analytics/analysis/page.tsx` | 5 tabs, TradingView everywhere, underline style |
+| `frontend/app/(authenticated)/analytics/compare/page.tsx` | TradingView, removed correlation |
+| `frontend/app/(authenticated)/dashboard/page.tsx` | ConfirmDialog for delete |
+| `frontend/app/(authenticated)/analytics/marketplace/page.tsx` | ConfirmDialog for unlink |
+| `frontend/components/SessionManagementModal.tsx` | ConfirmDialog for revoke |
+| `frontend/app/(authenticated)/admin/page.tsx` | ConfirmDialog for deactivate |
+| `frontend/components/widgets/HeroSection.tsx` | Updated labels + links |
+| `frontend/lib/constants.tsx` | "Link Stock" |
+| `frontend/components/AppHeader.tsx` | "Link Stock" |
+| `tests/backend/test_portfolio_analytics.py` | 11 tests |
+
+Tickets: ASETPLTFRM-124 (8 pts), ASETPLTFRM-125 (2 pts) — both Done
+Sprint 3: ASETPLTFRM-76–81 moved, due Mar 26
+
+---
+
 # Session: Mar 18–19, 2026 — Performance, Charts, Portfolio, Dash Retirement
 
 ## Sprint 2 Complete (46 story points, 11 tickets — 100% delivered)

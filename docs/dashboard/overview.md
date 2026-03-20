@@ -10,17 +10,28 @@
 | Old Dash Route | New Next.js Route | Status |
 |---------------|-------------------|--------|
 | `/home` | `/dashboard` (Portfolio) | Native |
-| `/analysis` | `/analytics/analysis` | Native (TradingView charts) |
-| `/forecast` | `/analytics/analysis?tab=forecast` | Native |
-| `/compare` | `/analytics/analysis?tab=compare` | Native |
-| `/marketplace` | `/analytics/marketplace` | Native |
+| `/analysis` | `/analytics/analysis?tab=analysis` (Stock Analysis) | Native (TradingView) |
+| `/forecast` | `/analytics/analysis?tab=forecast` (Stock Forecast) | Native (TradingView) |
+| `/compare` | `/analytics/analysis?tab=compare` (Compare Stocks) | Native (TradingView) |
+| — | `/analytics/analysis?tab=portfolio` (Portfolio Analysis) | New (TradingView) |
+| — | `/analytics/analysis?tab=portfolio-forecast` (Portfolio Forecast) | New (TradingView) |
+| `/marketplace` | `/analytics/marketplace` (Link Stock) | Native |
 | `/insights` | `/analytics/insights` (7 tabs) | Native |
 | `/admin` | `/admin` (3 tabs) | Native |
 
+## Analysis Page — 5 Tabs
+
+1. **Portfolio Analysis** — daily value vs invested (AreaSeries + LineSeries), cash-flow-adjusted metrics
+2. **Portfolio Forecast** — weighted Prophet forecast with confidence band, explainable summary cards
+3. **Stock Analysis** — multi-pane candlestick (OHLC + Volume + RSI + MACD)
+4. **Stock Forecast** — per-ticker Prophet forecast with confidence band
+5. **Compare Stocks** — normalized price comparison (multi-line)
+
 ## Architecture Changes
 
-- **Charts**: Plotly Dash → TradingView lightweight-charts v5 (~45KB)
+- **Charts**: Plotly Dash → TradingView lightweight-charts v5 (~45KB) on all pages except Insights
 - **Data**: Direct Iceberg reads → FastAPI endpoints + Redis cache
 - **Auth**: Query param token → JWT via `apiFetch` auto-refresh
 - **Caching**: In-process TTL dicts → Redis write-through + SWR browser cache
+- **Destructive actions**: `ConfirmDialog` component on delete/unlink/revoke/deactivate flows
 - **Service**: `run.sh` no longer starts Dash (4 services: redis, backend, frontend, docs)

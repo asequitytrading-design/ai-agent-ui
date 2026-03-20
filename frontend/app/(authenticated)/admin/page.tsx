@@ -19,6 +19,7 @@ import {
 import type { UserFormData } from "@/components/admin/UserModal";
 import { UserModal } from "@/components/admin/UserModal";
 import { ResetPasswordModal } from "@/components/admin/ResetPasswordModal";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import {
   InsightsTable,
   type Column,
@@ -181,6 +182,8 @@ function UsersTab() {
   const [resetSaving, setResetSaving] =
     useState(false);
   const [resetError, setResetError] = useState("");
+  const [deactivateUser, setDeactivateUser] =
+    useState<UserResponse | null>(null);
 
   const filtered = useMemo(() => {
     if (!search.trim()) return admin.users;
@@ -344,7 +347,11 @@ function UsersTab() {
               Reset Pwd
             </button>
             <button
-              onClick={() => handleToggle(r)}
+              onClick={() =>
+                r.is_active
+                  ? setDeactivateUser(r)
+                  : handleToggle(r)
+              }
               className={`px-2 py-1 text-xs rounded transition-colors ${
                 r.is_active
                   ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 hover:bg-red-200 dark:hover:bg-red-900/50"
@@ -421,6 +428,24 @@ function UsersTab() {
         error={resetError}
         onClose={() => setResetOpen(false)}
         onSave={handleReset}
+      />
+      <ConfirmDialog
+        open={deactivateUser !== null}
+        title="Deactivate User"
+        message={
+          deactivateUser
+            ? `Deactivate ${deactivateUser.full_name}? They will lose access immediately.`
+            : ""
+        }
+        confirmLabel="Deactivate"
+        variant="danger"
+        onConfirm={() => {
+          if (deactivateUser) {
+            handleToggle(deactivateUser);
+          }
+          setDeactivateUser(null);
+        }}
+        onCancel={() => setDeactivateUser(null)}
       />
     </div>
   );

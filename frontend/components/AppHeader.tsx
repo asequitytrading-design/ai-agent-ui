@@ -74,7 +74,7 @@ export function AppHeader({
     const subTitles: Record<string, string> = {
       analysis: "Analysis",
       insights: "Insights",
-      marketplace: "Link Ticker",
+      marketplace: "Link Stock",
     };
 
     const rootTitle = rootTitles[root] ?? "Home";

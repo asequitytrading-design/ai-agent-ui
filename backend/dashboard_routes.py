@@ -35,6 +35,11 @@ from dashboard_models import (
     ModelUsage,
     OHLCVPoint,
     OHLCVResponse,
+    PortfolioDailyPoint,
+    PortfolioForecastPoint,
+    PortfolioForecastResponse,
+    PortfolioMetrics,
+    PortfolioPerformanceResponse,
     RegistryResponse,
     RegistryTicker,
     SignalInfo,
@@ -1173,7 +1178,504 @@ def create_dashboard_router() -> APIRouter:
                 "error": str(exc),
             }
 
+    # -------------------------------------------------------
+    # Portfolio Performance & Forecast
+    # -------------------------------------------------------
+
+    @router.get(
+        "/portfolio/performance",
+        response_model=PortfolioPerformanceResponse,
+    )
+    async def get_portfolio_performance(
+        period: str = Query(
+            "ALL",
+            description=(
+                "1D|1W|1M|3M|6M|1Y|ALL"
+            ),
+        ),
+        currency: str = Query(
+            "USD", description="USD|INR",
+        ),
+        user: UserContext = Depends(
+            get_current_user,
+        ),
+    ):
+        """Daily portfolio value time series."""
+        cache = get_cache()
+        cache_key = (
+            f"cache:portfolio:perf:"
+            f"{user.user_id}:{currency}:{period}"
+        )
+        hit = cache.get(cache_key)
+        if hit is not None:
+            return Response(
+                content=hit,
+                media_type="application/json",
+            )
+
+        result = _build_portfolio_performance(
+            user.user_id, currency, period,
+        )
+        cache.set(
+            cache_key,
+            result.model_dump_json(),
+            TTL_VOLATILE,
+        )
+        return result
+
+    @router.get(
+        "/portfolio/forecast",
+        response_model=PortfolioForecastResponse,
+    )
+    async def get_portfolio_forecast(
+        horizon: int = Query(
+            9, description="3|6|9",
+        ),
+        currency: str = Query(
+            "USD", description="USD|INR",
+        ),
+        user: UserContext = Depends(
+            get_current_user,
+        ),
+    ):
+        """Weighted portfolio forecast."""
+        cache = get_cache()
+        cache_key = (
+            f"cache:portfolio:forecast:"
+            f"{user.user_id}:{currency}:{horizon}"
+        )
+        hit = cache.get(cache_key)
+        if hit is not None:
+            return Response(
+                content=hit,
+                media_type="application/json",
+            )
+
+        result = _build_portfolio_forecast(
+            user.user_id, currency, horizon,
+        )
+        cache.set(
+            cache_key,
+            result.model_dump_json(),
+            TTL_STABLE,
+        )
+        return result
+
     return router
+
+
+# ----------------------------------------------------------
+# Portfolio helpers
+# ----------------------------------------------------------
+
+_PERIOD_DAYS = {
+    "1D": 1, "1W": 7, "1M": 30, "3M": 90,
+    "6M": 180, "1Y": 365,
+}
+
+
+def _is_currency_match(
+    ticker: str, currency: str,
+) -> bool:
+    """True if ticker belongs to *currency*."""
+    india = ticker.endswith(
+        (".NS", ".BO"),
+    )
+    return (
+        (currency == "INR" and india)
+        or (currency == "USD" and not india)
+    )
+
+
+def _safe_float(val) -> float:
+    """Convert to float; NaN / None → 0.0."""
+    if val is None:
+        return 0.0
+    try:
+        import math as _m
+        f = float(val)
+        return 0.0 if _m.isnan(f) else f
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def _build_portfolio_performance(
+    user_id: str, currency: str, period: str,
+) -> PortfolioPerformanceResponse:
+    """Compute daily portfolio value series."""
+    import math
+    stock_repo = _get_stock_repo()
+
+    txn_df = (
+        stock_repo.get_portfolio_transactions(
+            user_id,
+        )
+    )
+    if txn_df.empty:
+        return PortfolioPerformanceResponse(
+            currency=currency,
+        )
+
+    # Filter BUY + currency
+    buys = txn_df[txn_df["side"] == "BUY"].copy()
+    buys = buys[
+        buys["ticker"].apply(
+            lambda t: _is_currency_match(
+                t, currency,
+            )
+        )
+    ]
+    if buys.empty:
+        return PortfolioPerformanceResponse(
+            currency=currency,
+        )
+
+    tickers = buys["ticker"].unique().tolist()
+    ohlcv_df = stock_repo.get_ohlcv_batch(tickers)
+    if ohlcv_df.empty:
+        return PortfolioPerformanceResponse(
+            currency=currency,
+        )
+
+    # Build per-ticker close maps and lot lists
+    close_maps: dict[str, dict[str, float]] = {}
+    for t in tickers:
+        t_df = ohlcv_df[ohlcv_df["ticker"] == t]
+        if t_df.empty:
+            continue
+        close_maps[t] = {
+            str(row["date"]): float(row["close"])
+            for _, row in t_df.iterrows()
+        }
+
+    # Lots: (ticker, qty, trade_date, buy_price)
+    # If price is 0/NULL, use OHLCV close on
+    # trade_date as fallback.
+    lots: list[
+        tuple[str, float, str, float]
+    ] = []
+    for _, row in buys.iterrows():
+        t = str(row["ticker"])
+        if t not in close_maps:
+            continue
+        qty = float(row["quantity"])
+        td = str(row["trade_date"])
+        bp = _safe_float(row.get("price"))
+        if bp <= 0:
+            bp = close_maps[t].get(td, 0) or 0
+        lots.append((t, qty, td, bp))
+
+    if not lots:
+        return PortfolioPerformanceResponse(
+            currency=currency,
+        )
+
+    # Union of all dates across tickers
+    all_dates: set[str] = set()
+    for cm in close_maps.values():
+        all_dates.update(cm.keys())
+    sorted_dates = sorted(all_dates)
+
+    # Compute daily portfolio value + invested
+    values: list[
+        tuple[str, float, float]
+    ] = []
+    for d in sorted_dates:
+        val = 0.0
+        inv = 0.0
+        for t, qty, td, bp in lots:
+            if d < td:
+                continue
+            price = close_maps[t].get(d)
+            if price is not None:
+                val += qty * price
+                inv += qty * bp
+        if val > 0:
+            values.append((
+                d, round(val, 2),
+                round(inv, 2),
+            ))
+
+    if not values:
+        return PortfolioPerformanceResponse(
+            currency=currency,
+        )
+
+    # Period filter
+    cutoff_days = _PERIOD_DAYS.get(
+        period.upper(),
+    )
+    if cutoff_days is not None:
+        from datetime import datetime, timedelta
+        last = datetime.strptime(
+            values[-1][0], "%Y-%m-%d",
+        )
+        cutoff = (
+            last - timedelta(days=cutoff_days)
+        ).strftime("%Y-%m-%d")
+        values = [
+            (d, v, iv) for d, v, iv in values
+            if d >= cutoff
+        ]
+
+    if len(values) < 2:
+        return PortfolioPerformanceResponse(
+            currency=currency,
+        )
+
+    # Daily P&L and returns — adjusted for
+    # capital contributions (cash-flow neutral).
+    points: list[PortfolioDailyPoint] = []
+    returns: list[float] = []
+    for i, (d, v, iv) in enumerate(values):
+        if i == 0:
+            points.append(PortfolioDailyPoint(
+                date=d, value=v,
+                invested_value=iv,
+                daily_pnl=0.0,
+                daily_return_pct=0.0,
+            ))
+            continue
+        prev_v = values[i - 1][1]
+        prev_iv = values[i - 1][2]
+        # Strip new capital added today
+        cashflow = iv - prev_iv
+        pnl = round(v - prev_v - cashflow, 2)
+        ret = (
+            round(
+                (v - prev_v - cashflow)
+                / prev_v * 100,
+                4,
+            )
+            if prev_v else 0.0
+        )
+        returns.append(ret)
+        points.append(PortfolioDailyPoint(
+            date=d, value=v,
+            invested_value=iv,
+            daily_pnl=pnl,
+            daily_return_pct=ret,
+        ))
+
+    # Metrics — all based on invested cost basis
+    last_v = values[-1][1]
+    last_iv = values[-1][2]
+    total_ret = (
+        (last_v - last_iv) / last_iv * 100
+        if last_iv else 0.0
+    )
+    n_days = len(values)
+    gain_ratio = (
+        last_v / last_iv if last_iv else 1.0
+    )
+    ann_ret = (
+        (gain_ratio ** (252 / n_days) - 1) * 100
+        if last_iv and n_days > 1
+        else 0.0
+    )
+
+    # Max drawdown — on gain% series so capital
+    # injections don't distort the trough.
+    max_dd = 0.0
+    peak_g = None
+    for _, v, iv in values:
+        g = (
+            (v - iv) / iv * 100 if iv else 0.0
+        )
+        if peak_g is None or g > peak_g:
+            peak_g = g
+        dd = g - peak_g
+        if dd < max_dd:
+            max_dd = dd
+
+    # Sharpe (annualized, risk-free=0)
+    sharpe = None
+    if returns:
+        avg_r = sum(returns) / len(returns)
+        if len(returns) > 1:
+            var = sum(
+                (r - avg_r) ** 2 for r in returns
+            ) / (len(returns) - 1)
+            std = math.sqrt(var)
+            if std > 0:
+                sharpe = round(
+                    avg_r / std * math.sqrt(252),
+                    4,
+                )
+
+    # Best / worst day
+    best_i = max(
+        range(1, len(points)),
+        key=lambda i: points[i].daily_return_pct,
+    )
+    worst_i = min(
+        range(1, len(points)),
+        key=lambda i: points[i].daily_return_pct,
+    )
+
+    metrics = PortfolioMetrics(
+        total_return_pct=round(total_ret, 2),
+        annualized_return_pct=round(ann_ret, 2),
+        max_drawdown_pct=round(max_dd, 2),
+        sharpe_ratio=sharpe,
+        best_day_pct=round(
+            points[best_i].daily_return_pct, 2,
+        ),
+        best_day_date=points[best_i].date,
+        worst_day_pct=round(
+            points[worst_i].daily_return_pct, 2,
+        ),
+        worst_day_date=points[worst_i].date,
+    )
+
+    return PortfolioPerformanceResponse(
+        data=points,
+        metrics=metrics,
+        currency=currency,
+    )
+
+
+def _build_portfolio_forecast(
+    user_id: str, currency: str, horizon: int,
+) -> PortfolioForecastResponse:
+    """Weighted aggregation of per-ticker forecasts."""
+    stock_repo = _get_stock_repo()
+    holdings_df = stock_repo.get_portfolio_holdings(
+        user_id,
+    )
+    if holdings_df.empty:
+        return PortfolioForecastResponse(
+            currency=currency,
+            horizon_months=horizon,
+        )
+
+    # Filter by currency
+    holdings_df = holdings_df[
+        holdings_df["ticker"].apply(
+            lambda t: _is_currency_match(
+                t, currency,
+            )
+        )
+    ]
+    if holdings_df.empty:
+        return PortfolioForecastResponse(
+            currency=currency,
+            horizon_months=horizon,
+        )
+
+    # Gather per-ticker forecasts + current prices
+    forecasts: dict[
+        str, list[tuple[str, float, float, float]]
+    ] = {}
+    weights: dict[str, float] = {}
+    current_value = 0.0
+    total_invested = 0.0
+
+    for _, row in holdings_df.iterrows():
+        t = str(row["ticker"])
+        qty = float(row["quantity"])
+        avg_p = _safe_float(row.get("avg_price"))
+
+        # Current price from OHLCV
+        ohlcv = stock_repo.get_ohlcv(t)
+        if ohlcv.empty:
+            continue
+        cur_price = float(ohlcv.iloc[-1]["close"])
+        current_value += qty * cur_price
+        # If avg_price missing/zero, fallback to
+        # current price as cost estimate
+        if avg_p <= 0:
+            avg_p = cur_price
+        total_invested += qty * avg_p
+        weights[t] = qty
+
+        # Always fetch 9M; client truncates
+        fc_df = stock_repo.get_latest_forecast_series(
+            t, 9,
+        )
+        if fc_df.empty:
+            continue
+        forecasts[t] = [
+            (
+                str(r["forecast_date"]),
+                float(r["predicted_price"]),
+                float(r["lower_bound"]),
+                float(r["upper_bound"]),
+            )
+            for _, r in fc_df.iterrows()
+        ]
+
+    if not forecasts:
+        return PortfolioForecastResponse(
+            currency=currency,
+            horizon_months=horizon,
+            current_value=round(current_value, 2),
+            total_invested=round(
+                total_invested, 2,
+            ),
+        )
+
+    # Union of forecast dates, forward-fill
+    all_dates: set[str] = set()
+    for pts in forecasts.values():
+        for d, _, _, _ in pts:
+            all_dates.add(d)
+    sorted_dates = sorted(all_dates)
+
+    # Build per-ticker date maps
+    fc_maps: dict[
+        str,
+        dict[str, tuple[float, float, float]],
+    ] = {}
+    for t, pts in forecasts.items():
+        m: dict[
+            str, tuple[float, float, float]
+        ] = {}
+        for d, p, lo, hi in pts:
+            m[d] = (p, lo, hi)
+        fc_maps[t] = m
+
+    # Aggregate
+    points: list[PortfolioForecastPoint] = []
+    # Track last known values for forward-fill
+    last_known: dict[
+        str, tuple[float, float, float]
+    ] = {}
+    for d in sorted_dates:
+        pred = 0.0
+        lower = 0.0
+        upper = 0.0
+        for t, qty in weights.items():
+            if t not in fc_maps:
+                continue
+            vals = fc_maps[t].get(d)
+            if vals:
+                last_known[t] = vals
+            else:
+                vals = last_known.get(t)
+            if vals:
+                pred += qty * vals[0]
+                lower += qty * vals[1]
+                upper += qty * vals[2]
+        if pred > 0:
+            points.append(
+                PortfolioForecastPoint(
+                    date=d,
+                    predicted=round(pred, 2),
+                    lower=round(lower, 2),
+                    upper=round(upper, 2),
+                )
+            )
+
+    return PortfolioForecastResponse(
+        data=points,
+        horizon_months=horizon,
+        current_value=round(current_value, 2),
+        total_invested=round(
+            total_invested, 2,
+        ),
+        currency=currency,
+    )
 
 
 # ----------------------------------------------------------

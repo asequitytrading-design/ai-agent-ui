@@ -3,7 +3,8 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { apiFetch } from "@/lib/apiFetch";
 import { API_URL } from "@/lib/config";
-import { PlotlyChart, CHART_COLORS } from "@/components/charts/PlotlyChart";
+import { CompareChart, COMPARE_COLORS } from "@/components/charts/CompareChart";
+import { useTheme } from "@/hooks/useTheme";
 import type {
   CompareResponse,
   CompareMetric,
@@ -118,36 +119,8 @@ export function CompareContent() {
     }
   }, [selected]);
 
-  // Build normalized price chart traces
-  const priceTraces = useMemo<Plotly.Data[]>(() => {
-    if (!data) return [];
-    return data.series.map((s, i) => ({
-      x: s.dates,
-      y: s.normalized,
-      type: "scatter" as const,
-      mode: "lines" as const,
-      name: s.ticker,
-      line: { color: CHART_COLORS[i % CHART_COLORS.length], width: 2 },
-    }));
-  }, [data]);
-
-  // Build correlation heatmap trace
-  const heatmapTraces = useMemo(() => {
-    if (!data || data.correlation.length === 0) return [];
-    return [
-      {
-        z: data.correlation,
-        x: data.tickers,
-        y: data.tickers,
-        type: "heatmap",
-        colorscale: "RdBu",
-        zmin: -1,
-        zmax: 1,
-        hovertemplate:
-          "%{y} vs %{x}: %{z:.3f}<extra></extra>",
-      },
-    ] as Plotly.Data[];
-  }, [data]);
+  const { resolvedTheme } = useTheme();
+  const isDark = resolvedTheme === "dark";
 
   // ----------------------------------------------------------
   // Render
@@ -239,35 +212,37 @@ export function CompareContent() {
       {data && !loading && (
         <>
           {/* Normalized price chart */}
-          <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900">
-            <h2 className="mb-2 text-sm font-semibold text-gray-700 dark:text-gray-300">
-              Normalized Price (base = 100)
-            </h2>
-            <PlotlyChart
-              data={priceTraces}
-              layout={{
-                yaxis: { title: { text: "Normalized Price" } },
-                xaxis: { title: { text: "Date" } },
-              }}
-              height={380}
+          <div className="rounded-xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900 overflow-hidden">
+            <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-100 dark:border-gray-800">
+              <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
+                Normalized Price (base = 100)
+              </h2>
+              <div className="flex items-center gap-3 text-[10px] text-gray-400 dark:text-gray-500">
+                {data.series.map((s, i) => (
+                  <span
+                    key={s.ticker}
+                    className="flex items-center gap-1"
+                  >
+                    <span
+                      className="inline-block w-3 h-0.5"
+                      style={{
+                        backgroundColor:
+                          COMPARE_COLORS[
+                            i % COMPARE_COLORS.length
+                          ],
+                      }}
+                    />
+                    {s.ticker}
+                  </span>
+                ))}
+              </div>
+            </div>
+            <CompareChart
+              series={data.series}
+              isDark={isDark}
+              height={400}
             />
           </div>
-
-          {/* Correlation heatmap */}
-          {heatmapTraces.length > 0 && (
-            <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900">
-              <h2 className="mb-2 text-sm font-semibold text-gray-700 dark:text-gray-300">
-                Return Correlation
-              </h2>
-              <PlotlyChart
-                data={heatmapTraces}
-                layout={{
-                  yaxis: { autorange: "reversed" as const },
-                }}
-                height={Math.max(300, data.tickers.length * 60)}
-              />
-            </div>
-          )}
 
           {/* Metrics table */}
           {data.metrics.length > 0 && (
