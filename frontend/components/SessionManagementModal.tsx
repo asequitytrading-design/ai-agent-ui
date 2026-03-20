@@ -7,7 +7,9 @@
  * highlighted with a green accent.
  */
 
+import { useState } from "react";
 import type { SessionInfo } from "@/hooks/useSessionManagement";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 
 interface SessionManagementModalProps {
   isOpen: boolean;
@@ -178,6 +180,13 @@ export function SessionManagementModal({
   onRevoke,
   onRevokeAll,
 }: SessionManagementModalProps) {
+  // Confirm dialog state — hooks must be before
+  // any early return (Rules of Hooks).
+  const [revokeId, setRevokeId] =
+    useState<string | null>(null);
+  const [showRevokeAll, setShowRevokeAll] =
+    useState(false);
+
   if (!isOpen) return null;
 
   const sorted = [...sessions].sort((a, b) => {
@@ -229,7 +238,7 @@ export function SessionManagementModal({
           <div className="flex items-center gap-2">
             {sessions.length > 1 && (
               <button
-                onClick={onRevokeAll}
+                onClick={() => setShowRevokeAll(true)}
                 disabled={revokingAll}
                 className={
                   "text-xs font-medium px-3 py-1.5 rounded-lg" +
@@ -389,7 +398,7 @@ export function SessionManagementModal({
                       {!isCurrent && (
                         <button
                           onClick={() =>
-                            onRevoke(session.session_id)
+                            setRevokeId(session.session_id)
                           }
                           disabled={isRevoking || revokingAll}
                           className={
@@ -440,6 +449,34 @@ export function SessionManagementModal({
           </button>
         </div>
       </div>
+
+      {/* Revoke single session confirm */}
+      <ConfirmDialog
+        open={revokeId !== null}
+        title="Revoke Session"
+        message="Revoke this session? The device will be signed out."
+        confirmLabel="Revoke"
+        variant="danger"
+        onConfirm={() => {
+          if (revokeId) onRevoke(revokeId);
+          setRevokeId(null);
+        }}
+        onCancel={() => setRevokeId(null)}
+      />
+
+      {/* Revoke all confirm */}
+      <ConfirmDialog
+        open={showRevokeAll}
+        title="Revoke All Sessions"
+        message="Sign out all other devices? You will stay signed in on this device."
+        confirmLabel="Revoke All"
+        variant="danger"
+        onConfirm={() => {
+          onRevokeAll();
+          setShowRevokeAll(false);
+        }}
+        onCancel={() => setShowRevokeAll(false)}
+      />
     </div>
   );
 }

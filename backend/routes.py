@@ -15,6 +15,7 @@ import logging
 import queue
 import threading
 import time
+from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -53,7 +54,45 @@ def create_app(
     Returns:
         A fully configured :class:`~fastapi.FastAPI` instance.
     """
-    app = FastAPI(title="AI Agent API")
+    @asynccontextmanager
+    async def _lifespan(a):
+        """Startup: warm Redis cache."""
+        try:
+            from cache_warmup import (
+                warm_shared,
+                warm_tickers,
+                warm_frequent_users,
+            )
+
+            warm_shared()
+
+            top_n = getattr(
+                settings,
+                "cache_warm_top_users",
+                5,
+            )
+            threading.Thread(
+                target=warm_tickers,
+                daemon=True,
+                name="cache-warmup-tickers",
+            ).start()
+            threading.Thread(
+                target=warm_frequent_users,
+                args=(top_n,),
+                daemon=True,
+                name="cache-warmup-users",
+            ).start()
+        except Exception:
+            _logger.warning(
+                "cache warm-up skipped",
+                exc_info=True,
+            )
+        yield
+
+    app = FastAPI(
+        title="AI Agent API",
+        lifespan=_lifespan,
+    )
 
     # CORS: whitelist known front-end origins.
     _allowed_origins = [
@@ -66,7 +105,7 @@ def create_app(
         CORSMiddleware,
         allow_origins=_allowed_origins,
         allow_credentials=True,
-        allow_methods=["GET", "POST", "PATCH", "DELETE"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=[
             "Authorization",
             "Content-Type",
@@ -240,16 +279,42 @@ def create_app(
     async def _admin_metrics(
         current_user=None,
     ):
-        """GET /admin/metrics — LLM observability data."""
+        """GET /admin/metrics — LLM observability data.
+
+        Combines real-time cascade stats from the
+        in-memory collector with persistent request
+        totals from the Iceberg ``llm_usage`` table
+        so the count matches the dashboard widget.
+        """
         result: dict = {"timestamp": time.time()}
         if token_budget is not None:
             result["models"] = token_budget.get_status()
         else:
             result["models"] = {}
+
+        cascade_stats: dict = {}
         if obs_collector is not None:
-            result["cascade_stats"] = obs_collector.get_stats()
-        else:
-            result["cascade_stats"] = {}
+            cascade_stats = obs_collector.get_stats()
+
+        # Override ephemeral request count with
+        # persistent Iceberg total (last 30 days)
+        # so it matches the dashboard LLM widget.
+        try:
+            from tools._stock_shared import (
+                _require_repo,
+            )
+
+            repo = _require_repo()
+            usage = repo.get_dashboard_llm_usage(
+                user_id=None, days=30,
+            )
+            cascade_stats["requests_total"] = int(
+                usage.get("total_requests", 0)
+            )
+        except Exception:
+            pass  # keep in-memory count as fallback
+
+        result["cascade_stats"] = cascade_stats
         return result
 
     # ---------------------------------------------------------------
@@ -407,6 +472,24 @@ def create_app(
         dependencies=[Depends(superuser_only)],
     )
     app.include_router(admin_router)
+
+    # Dashboard + audit + insights endpoints.
+    from dashboard_routes import create_dashboard_router
+    from audit_routes import create_audit_router
+    from insights_routes import create_insights_router
+
+    app.include_router(
+        create_dashboard_router(),
+        prefix="/v1",
+    )
+    app.include_router(
+        create_audit_router(),
+        prefix="/v1",
+    )
+    app.include_router(
+        create_insights_router(),
+        prefix="/v1",
+    )
 
     # Bulk data import/export endpoints.
     from bulk_data import create_bulk_router

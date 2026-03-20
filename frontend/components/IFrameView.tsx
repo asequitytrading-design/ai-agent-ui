@@ -16,7 +16,7 @@ interface IFrameViewProps {
 
 export function IFrameView({ src, title, loading, error, onLoad, onError }: IFrameViewProps) {
   return (
-    <div className="flex-1 relative overflow-hidden">
+    <div className="relative overflow-hidden" style={{ height: "calc(100vh - 3.5rem)" }}>
       {loading && !error && (
         <div className="absolute inset-0 flex items-center justify-center bg-gray-50 dark:bg-gray-900 z-10">
           <div className="flex flex-col items-center gap-3">

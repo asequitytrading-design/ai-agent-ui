@@ -2,6 +2,193 @@
 
 ---
 
+# Session: Mar 20, 2026 — Portfolio Analytics, TradingView Migration, UX Polish
+
+## Sprint 2 continuation on `feature/sprint2-planning`
+
+### Portfolio Performance & Forecast (ASETPLTFRM-124, 8 pts)
+
+**Backend** (`dashboard_routes.py`, `dashboard_models.py`):
+- `GET /v1/dashboard/portfolio/performance` — daily portfolio value + invested series
+  - Cash-flow-adjusted metrics: daily returns strip capital contributions
+  - Total return uses invested basis, max drawdown on gain% series
+  - `_safe_float()` helper for NaN-safe Iceberg NULL handling with OHLCV fallback
+- `GET /v1/dashboard/portfolio/forecast` — weighted Prophet forecast aggregation
+  - Always fetches 9M from Iceberg; client truncates for 3M/6M
+  - Returns `total_invested` for explainable summary cards
+- 5 Pydantic models: PortfolioDailyPoint (with `invested_value`), PortfolioMetrics, PortfolioPerformanceResponse, PortfolioForecastPoint, PortfolioForecastResponse (with `total_invested`)
+- Cache invalidation on portfolio add/edit/delete for perf + forecast keys
+
+**Frontend** — Analysis page 5 tabs:
+- Portfolio Analysis: TradingView `PortfolioChart.tsx` (AreaSeries value + LineSeries invested amber + HistogramSeries P&L), 6 metrics cards, crosshair tooltip with gain/loss %
+- Portfolio Forecast: TradingView `PortfolioForecastChart.tsx` (dual historical lines + forecast + confidence band), 4 explainable summary cards (Invested → Current Value with P&L → Predicted → Expected Return on cost), horizon picker 3M/6M/9M
+
+### TradingView Migration — Stock Forecast + Compare
+- `ForecastChart.tsx` — replaces Plotly for per-ticker forecast (historical + forecast + confidence band + crosshair)
+- `CompareChart.tsx` — replaces Plotly for normalized price comparison (one LineSeries per ticker, colored legend)
+- Correlation heatmap section removed from Compare Stocks
+- Plotly removed from analysis + compare pages (only Insights still uses Plotly)
+
+### ConfirmDialog (ASETPLTFRM-125, 2 pts)
+- Reusable `ConfirmDialog.tsx` with danger (red) / warning (amber) variants
+- Applied to 5 destructive flows: delete stock, unlink ticker, revoke session, revoke all, deactivate user
+- Escape key + backdrop click dismiss, auto-focus on confirm button
+
+### UX Polish
+- Tab labels: Portfolio Analysis, Portfolio Forecast, Stock Analysis, Stock Forecast, Compare Stocks
+- Tab order: Portfolio first, then Stock, then Compare
+- Tab style: underline (matching Insights/Admin pages)
+- Tab preference persistence for all new tab IDs
+- HeroSection buttons: "Portfolio Analysis", "Portfolio Forecast", "Link Stock"
+- "Link Ticker" → "Link Stock" everywhere (sidebar, header, hero)
+- Chart legends in headers (Market Value + Invested + Forecast indicators)
+- Invested line: amber dashed 2px (visible against all backgrounds)
+
+### Bug Fixes
+- NaN handling: Iceberg NULL → pandas NaN is truthy, breaks `or`/comparison fallbacks → `_safe_float()` with `math.isnan()`
+- Horizon picker empty: forecast endpoint filtered by `horizon_months` but only 9M rows exist → always fetch 9M
+- Metrics inflated (+501% return): raw value includes capital contributions → cash-flow-adjusted formulas
+- React hooks order: `useRef`/`useCallback` after conditional returns → moved before early returns
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `backend/dashboard_models.py` | +`invested_value`, +`total_invested` on portfolio models |
+| `backend/dashboard_routes.py` | +2 endpoints, +`_safe_float()`, cash-flow-adjusted metrics |
+| `auth/endpoints/ticker_routes.py` | +cache invalidation for perf/forecast |
+| `frontend/lib/types.ts` | +5 TypeScript interfaces |
+| `frontend/components/charts/PortfolioChart.tsx` | +invested LineSeries (amber), +gain/loss tooltip |
+| `frontend/components/charts/PortfolioForecastChart.tsx` | New — TradingView forecast chart |
+| `frontend/components/charts/ForecastChart.tsx` | New — TradingView per-ticker forecast |
+| `frontend/components/charts/CompareChart.tsx` | New — TradingView compare chart |
+| `frontend/components/ConfirmDialog.tsx` | New — reusable confirmation dialog |
+| `frontend/app/(authenticated)/analytics/analysis/page.tsx` | 5 tabs, TradingView everywhere, underline style |
+| `frontend/app/(authenticated)/analytics/compare/page.tsx` | TradingView, removed correlation |
+| `frontend/app/(authenticated)/dashboard/page.tsx` | ConfirmDialog for delete |
+| `frontend/app/(authenticated)/analytics/marketplace/page.tsx` | ConfirmDialog for unlink |
+| `frontend/components/SessionManagementModal.tsx` | ConfirmDialog for revoke |
+| `frontend/app/(authenticated)/admin/page.tsx` | ConfirmDialog for deactivate |
+| `frontend/components/widgets/HeroSection.tsx` | Updated labels + links |
+| `frontend/lib/constants.tsx` | "Link Stock" |
+| `frontend/components/AppHeader.tsx` | "Link Stock" |
+| `tests/backend/test_portfolio_analytics.py` | 11 tests |
+
+### Refresh Buttons & Data Pipeline
+- Per-ticker refresh on Portfolio Analysis tab (all holdings), Portfolio Forecast tab, Stock Analysis/Forecast (selected ticker)
+- Refresh triggers `POST /v1/dashboard/refresh/{ticker}` → polls `/status` → re-fetches chart data on success
+- Stock Analysis + Stock Forecast charts re-mount via `key={ticker-refreshKey}` on refresh success
+- **Freshness gate fix**: `stock_refresh.py` OHLCV gate changed from `latest >= today - 1 day` to `latest >= today` — was skipping fetches when yesterday's data existed
+
+### Dark Mode Fix
+- Created `useDomDark.ts` hook — MutationObserver on `<html>` classList to detect theme changes
+- Applied to all 4 new chart components (PortfolioChart, PortfolioForecastChart, ForecastChart, CompareChart)
+- Fixes SSR hydration mismatch where chart rendered dark on light mode page
+
+### Test Coverage Expansion (+100 new tests)
+- `test_portfolio_crud.py` — 17 tests: GET/POST/PUT/DELETE portfolio + preferences
+- `test_cache.py` — 11 tests: CacheService get/set/invalidate, NoOp fallback, Redis failure
+- `test_portfolio_analytics.py` — +6 tests: _safe_float NaN/None, cashflow-adjusted return, invested-basis total return
+- `test_ws_basic.py` — 18 tests: WS module exports, auth validation, protocol messages
+- `test_agents_basic.py` — 20 tests: config, registry CRUD, router keyword/ticker/blocked
+- `ConfirmDialog.test.tsx` — 7 tests: render, callbacks, variants
+- `types.portfolio.test.ts` — 9 tests: 5 new portfolio interfaces
+- `useDarkMode.test.ts` — 1 test: export smoke
+
+### Pre-existing Test Fixes
+- `report_builder.py` — `_extract(None)` crash fixed with None guard (CRITICAL)
+- `test_dashboard_routes.py` — Watchlist mock method names corrected (`get_ohlcv_batch` not `get_dashboard_ohlcv`)
+- `test_dashboard_routes.py` — LLM usage field name corrected (`"total_cost"` not `"total_cost_usd"`)
+- `test_audit_routes.py` — JWT secret + `_resolve_user` auth override added
+
+### Venv Fix
+- Created symlink `~/.ai-agent-ui/venv` → `backend/demoenv` (Python 3.12.9)
+- Tests now run correctly with `source ~/.ai-agent-ui/venv/bin/activate && python -m pytest`
+- Root cause: conda base (Python 3.9) was default; project venv at `backend/demoenv` was undocumented
+
+### Test Results (final)
+- Backend: 416 passed, 23 failed (pre-existing mock issues in test_stock_tools — ASETPLTFRM-126)
+- Frontend: 61 passed
+
+Tickets: ASETPLTFRM-124 (8 pts), ASETPLTFRM-125 (2 pts) — Done
+Created: ASETPLTFRM-126 (3 pts) — Fix test_stock_tools/test_chat_stream mocks (Sprint 3)
+Sprint 3: ASETPLTFRM-76–81, 126 moved, due Mar 26
+
+---
+
+# Session: Mar 18–19, 2026 — Performance, Charts, Portfolio, Dash Retirement
+
+## Sprint 2 Complete (46 story points, 11 tickets — 100% delivered)
+
+### Performance (ASETPLTFRM-115)
+- Redis write-through cache for 22 endpoints with invalidation map
+- Cache warm-up at startup (shared + per-ticker + top N users)
+- SWR frontend caching (all pages converted from raw useEffect)
+- Aggregate `/dashboard/home` endpoint (4 requests → 1)
+- Iceberg N+1 queries eliminated, predicate push-down
+
+### Charts (ASETPLTFRM-115)
+- TradingView lightweight-charts v5 replacing broken Plotly candlestick
+- 4-pane: Candlestick + Volume + RSI + MACD with crosshair + zoom
+- D/W/M interval selector with candle aggregation
+- Indicator toggles, OHLC legend, Bollinger Bands
+- Dark/light mode sync via DOM classList read
+
+### Dash Migration (ASETPLTFRM-112, 113, 114)
+- Insights (7 tabs) + Admin (3 tabs) fully native in Next.js
+- Dash service retired from run.sh (4 services now)
+- iframe removed, DASHBOARD_URL removed
+- Chat FAB → AppHeader toggle
+
+### Portfolio Management (ASETPLTFRM-118)
+- Iceberg `portfolio_transactions` table (append-only)
+- CRUD: add/edit/delete stocks with searchable ticker dropdown
+- WatchlistWidget 2-tab (Portfolio | Watchlist)
+- HeroSection: portfolio value per currency, total P&L
+- Per-ticker refresh pipeline (6-step background job)
+
+### User Preferences (ASETPLTFRM-116, 117)
+- localStorage + Redis sync with sliding 7-day TTL
+- Chart settings, market filter, active tab persist
+- Smart cache warming for top N frequent users
+
+### Code Cleanup (ASETPLTFRM-72, 73, 74, 75)
+- Unit tests for report_builder.py (16 cases)
+- gen_api_docs.py: lightweight import + proper auth detection
+- Agent _build_llm dedup (BaseAgent), Redis port variable
+
+### Files: ~100 new/modified across frontend + backend + docs
+### Tickets: ASETPLTFRM-72-75, 112-118 (11 Done)
+### PRs: Pending (branch: feature/sprint2-planning)
+
+---
+
+# Session: Mar 16, 2026 — Dashboard UI Overhaul + Dash-to-Next.js Migration
+
+## 2026-03-16 — Dashboard UI Overhaul + Dash-to-Next.js Migration
+
+### Sprint 1 Complete (ASETPLTFRM-82 to 106)
+- **Native portfolio dashboard** replacing chat-first landing page with widgets (watchlist, analysis signals, LLM usage donut, forecast chart)
+- **Collapsible sidebar navigation**: Portfolio, Dashboard (collapsible: Home, Analysis, Insights, Link Ticker), Docs, Admin
+- **Chat side panel**: FAB-triggered resizable drawer with past sessions, agent switcher, WebSocket streaming
+- **Global India/US country filter** with correct ₹/$ currency symbols across all widgets
+- **6 backend dashboard endpoints** + Iceberg chat_audit_log table
+- **14 backend + 22 frontend tests**
+- Removed Dash header, consolidated navigation to Next.js sidebar
+- Bug fixes: hydration mismatch, sidebar layout, iframe height, currency display, signal N/A values
+
+### Sprint 2 In Progress (ASETPLTFRM-107 to 114)
+- **react-plotly.js** chart wrapper with auto dark/light theming
+- **4 Dash pages migrated to native Next.js**: Home (stock cards), Link Ticker (paginated table), Compare (charts + heatmap), Analysis (tabbed: candlestick+RSI+MACD, forecast, compare)
+- **Unified chart**: candlestick + volume + RSI + MACD on shared x-axis with range selector (3M/6M/1Y/2Y/3Y/Max)
+- Remaining: Insights migration (8 SP), Admin migration (5 SP), Dash retirement (2 SP)
+
+### Files: ~60 new/modified across frontend + backend
+### Tickets: ASETPLTFRM-82 to 114 (25 Done, 5 In Progress/To Do)
+### PRs: Pending (branch: feature/sprint2-planning)
+
+---
+
 # Session: Mar 15, 2026 — WSL2 compat, LLM cascade, report template, auto-docs
 
 ## Summary

@@ -1,6 +1,6 @@
 # AI Agent UI
 
-A fullstack agentic chat application powered by LangChain, FastAPI, and Next.js. The backend runs an LLM in a tool-calling loop; the frontend is a single-page app that embeds the Docs and Dashboard in-context alongside the chat interface. JWT authentication and role-based access control protect all three surfaces.
+A fullstack agentic chat application powered by LangChain, FastAPI, and Next.js. The backend runs an LLM in a tool-calling loop; the frontend is a single-page app with portfolio management, stock analysis (TradingView charts), and a chat side panel. JWT authentication and role-based access control protect all surfaces. Redis provides caching and session management.
 
 ---
 
@@ -8,9 +8,9 @@ A fullstack agentic chat application powered by LangChain, FastAPI, and Next.js.
 
 | Service | Stack | Port | Purpose |
 |---------|-------|------|---------|
-| **Frontend** | Next.js 16 + React 19 + Tailwind 4 | `3000` | Chat UI + SPA shell (login, chat, docs, dashboard, admin) |
-| **Backend** | FastAPI + LangChain + N-tier Groq/Anthropic | `8181` | Agentic loop + REST/WebSocket API + Auth endpoints |
-| **Dashboard** | Plotly Dash + Dash Bootstrap (FLATLY) | `8050` | Stock analysis dashboard (Home / Analysis / Forecast / Compare / Marketplace / 7 Insights tabs) + Admin UI |
+| **Frontend** | Next.js 16 + React 19 + Tailwind 4 + lightweight-charts v5 | `3000` | Portfolio dashboard, TradingView charts, collapsible sidebar, chat side panel |
+| **Backend** | FastAPI + LangChain + N-tier Groq/Anthropic | `8181` | Agentic loop + REST/WebSocket API + Auth + Redis cache |
+| **Redis** | Redis 7 | `6379` | Token deny-list, user preferences, API cache (write-through) |
 | **Docs** | MkDocs Material | `8000` | Project documentation |
 
 ---
@@ -273,23 +273,31 @@ graph TD
 
 ## Frontend SPA
 
-The entire UI is one mounted React component. The `view` state switches between chat, docs, dashboard, and admin without unmounting — chat history is always preserved.
+The frontend is a full SPA with a **collapsible sidebar** for navigation and a **native portfolio dashboard** as the post-login landing page. All pages use **TradingView lightweight-charts** (~45 KB) for stock and portfolio visualizations. A **chat side panel** (FAB-triggered, resizable drawer) provides access to the agentic chat from any page.
+
+**Analysis page** — 5 tabs with underline navigation:
+- **Portfolio Analysis**: daily value vs invested (TradingView dual-line + P&L histogram), cash-flow-adjusted metrics
+- **Portfolio Forecast**: weighted Prophet forecast with confidence band, 4 explainable summary cards
+- **Stock Analysis**: multi-pane candlestick chart (OHLC + Volume + RSI + MACD)
+- **Stock Forecast**: Prophet forecast with confidence band per ticker
+- **Compare Stocks**: normalized price comparison (multi-line)
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│  ✦ AI Agent  [General | Stock Analysis]  [Sign out]  [🗑]    │ ← header
-│           (breadcrumb label when view ≠ chat)                │
-├──────────────────────────────────────────────────────────────┤
-│                                                              │
-│  view = "chat"            │  view = "docs" / "dashboard"    │
-│  ─────────────────────    │    / "admin"                    │
-│  scrollable messages      │  <iframe src={iframeUrl ??      │
-│  + StatusBadge (stream)   │    baseServiceUrl}?token=jwt>   │
-│  + input textarea         │                                  │
-│                                                              │
-└──────────────────────────────────────────────────────────────┘
-                                              [⊞] ← FAB (bottom-right)
-                                         Chat / Docs / Dashboard / Admin
+┌────┬───────────────────────────────────────────────────────────┐
+│ ◀  │  ✦ AI Agent  Dashboard › Analysis      [Sign out]  [💬]  │ ← header + breadcrumb
+│    ├───────────────────────────────────────────────────────────┤
+│ S  │                                                           │
+│ i  │  /dashboard      → Portfolio dashboard (hero, widgets)    │
+│ d  │  /analytics/*    → Analysis, Insights, Link Stock         │
+│ e  │  /admin          → Users, Audit Log, LLM Observability    │
+│ b  │  /docs           → MkDocs (:8000)                         │
+│ a  │                                                           │
+│ r  │                              ┌─────────────────┐          │
+│    │                              │ Chat Side Panel │ ← FAB   │
+│    │                              │ (resizable)     │          │
+│ ▼  │                              └─────────────────┘          │
+└────┴───────────────────────────────────────────────────────────┘
+  ↑ collapsible sidebar
 ```
 
 ---
@@ -447,6 +455,7 @@ ai-agent-ui/
 | Next.js | 16 | Framework |
 | React | 19 | UI |
 | Tailwind CSS | 4 | Styling |
+| react-plotly.js | 2 | Interactive charts (candlestick, heatmap, line) |
 | react-markdown + remark-gfm | 10 / 4 | Markdown rendering |
 | TypeScript | 5 | Type safety |
 
@@ -602,9 +611,26 @@ GET  /avatars/*              # Static files (not versioned)
 
 ---
 
+## Testing
+
+```bash
+# Backend (Python 3.12 — always activate venv first)
+source ~/.ai-agent-ui/venv/bin/activate
+python -m pytest tests/backend/ -v        # ~416 tests
+
+# Frontend (vitest)
+cd frontend && npx vitest run             # 61 tests
+```
+
+| Suite | Tests | Coverage |
+|-------|-------|----------|
+| Backend unit | 416+ | Auth, dashboard, portfolio CRUD, cache, agents, WS, analytics |
+| Frontend unit | 61 | Auth, apiFetch, WebSocket, types, ConfirmDialog, hooks |
+| E2E (Playwright) | 49 | Full user flows across all pages |
+
 ## E2E Testing (Playwright)
 
-The `e2e/` directory contains a Playwright test suite covering all 3 app surfaces (Next.js frontend, Plotly Dash dashboard, FastAPI backend).
+The `e2e/` directory contains a Playwright test suite covering all app surfaces.
 
 ```bash
 cd e2e && npm install               # first time only
