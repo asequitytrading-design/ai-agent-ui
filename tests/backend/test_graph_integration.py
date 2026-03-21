@@ -31,6 +31,7 @@ def _make_graph():
         "get_dividend_projection",
         "suggest_rebalancing",
         "get_portfolio_summary",
+        "get_risk_metrics",
         "get_forecast_summary",
         "get_portfolio_forecast",
     ]:

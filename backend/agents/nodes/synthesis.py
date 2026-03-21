@@ -37,6 +37,8 @@ def synthesis(state: dict) -> dict:
     final = state.get("final_response", "")
 
     if final and len(final) >= _PASSTHROUGH_MIN_CHARS:
+        # Store in query cache for deduplication
+        _store_in_cache(state, final)
         return {"final_response": final}
 
     # Need synthesis — use FallbackLLM
@@ -80,7 +82,9 @@ def synthesis(state: dict) -> dict:
             )
 
         resp = llm.invoke(messages)
-        return {"final_response": resp.content}
+        synthesized = resp.content
+        _store_in_cache(state, synthesized)
+        return {"final_response": synthesized}
 
     except Exception:
         _logger.warning(
@@ -93,3 +97,20 @@ def synthesis(state: dict) -> dict:
             or "I couldn't generate a response. "
             "Please try rephrasing your question."
         }
+
+
+def _store_in_cache(
+    state: dict, response: str,
+) -> None:
+    """Store query-response in semantic cache."""
+    try:
+        from agents.nodes.query_cache import (
+            store_cache,
+        )
+
+        query = state.get("user_input", "")
+        intent = state.get("intent", "")
+        if query and response:
+            store_cache(query, response, intent)
+    except Exception:
+        pass  # cache store is best-effort

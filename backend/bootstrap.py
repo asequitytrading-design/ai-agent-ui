@@ -79,6 +79,7 @@ def setup_tools(registry):
             get_portfolio_holdings,
             get_portfolio_performance,
             get_portfolio_summary,
+            get_risk_metrics,
             get_sector_allocation,
             suggest_rebalancing,
         )
@@ -89,6 +90,7 @@ def setup_tools(registry):
         registry.register(get_dividend_projection)
         registry.register(suggest_rebalancing)
         registry.register(get_portfolio_summary)
+        registry.register(get_risk_metrics)
     except Exception:
         _logger.warning(
             "Portfolio tools registration failed",

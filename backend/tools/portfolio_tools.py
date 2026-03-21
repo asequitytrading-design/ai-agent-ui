@@ -462,6 +462,48 @@ def suggest_rebalancing() -> str:
             "geographic diversification"
         )
 
+    # 4. High correlation pairs (>0.85)
+    try:
+        start = date.today() - pd.Timedelta(days=365)
+        ret_map = {}
+        tickers_list = [r["ticker"] for r in rows]
+        for ticker in tickers_list:
+            ohlcv = repo.get_ohlcv(
+                ticker, start=start,
+            )
+            if not ohlcv.empty and len(ohlcv) > 20:
+                ohlcv = ohlcv.set_index("date")
+                ret_map[ticker] = (
+                    ohlcv["close"]
+                    .astype(float)
+                    .pct_change()
+                    .dropna()
+                )
+        if len(ret_map) >= 2:
+            df_ret = pd.DataFrame(ret_map)
+            df_ret = df_ret.dropna(how="all").ffill()
+            corr = df_ret.corr()
+            checked = set()
+            for i, t1 in enumerate(corr.columns):
+                for j, t2 in enumerate(corr.columns):
+                    if i >= j:
+                        continue
+                    pair = (t1, t2)
+                    if pair in checked:
+                        continue
+                    checked.add(pair)
+                    c = corr.loc[t1, t2]
+                    if c > 0.85:
+                        suggestions.append(
+                            f"**{t1}** and **{t2}** "
+                            f"have {c:.2f} "
+                            "correlation — consider "
+                            "replacing one with an "
+                            "uncorrelated asset"
+                        )
+    except Exception:
+        pass  # correlation check is best-effort
+
     if not suggestions:
         return (
             "[Source: iceberg]\n"
@@ -549,3 +591,182 @@ def get_portfolio_summary() -> str:
         f"{top_loser['ticker']} "
         f"({top_loser['pnl_pct']:+.1f}%)"
     )
+
+
+# ---------------------------------------------------------------
+# Tool 7: get_risk_metrics (S6-1)
+# ---------------------------------------------------------------
+
+
+@tool
+def get_risk_metrics() -> str:
+    """Compute portfolio risk metrics.
+
+    Returns beta (vs benchmark), Sharpe ratio,
+    Value-at-Risk (95%), max drawdown, annualized
+    volatility, and correlation matrix.
+
+    Source: Iceberg ohlcv (daily returns).
+    """
+    user_id = _get_user_or_error()
+    repo = _require_repo()
+    holdings = repo.get_portfolio_holdings(user_id)
+
+    if holdings.empty:
+        return "No portfolio holdings found."
+
+    # Build daily returns per ticker
+    start = date.today() - pd.Timedelta(days=365)
+    returns_map: dict[str, pd.Series] = {}
+    weights: dict[str, float] = {}
+    total_value = 0.0
+
+    for _, h in holdings.iterrows():
+        ticker = h["ticker"]
+        qty = float(h["quantity"])
+        ohlcv = repo.get_ohlcv(ticker, start=start)
+        if ohlcv.empty or len(ohlcv) < 20:
+            continue
+        ohlcv = ohlcv.set_index("date")
+        prices = ohlcv["close"].astype(float)
+        rets = prices.pct_change().dropna()
+        returns_map[ticker] = rets
+        val = qty * float(prices.iloc[-1])
+        weights[ticker] = val
+        total_value += val
+
+    if len(returns_map) < 2:
+        return (
+            "Need at least 2 holdings with "
+            "price data for risk metrics."
+        )
+
+    # Normalize weights
+    for t in weights:
+        weights[t] /= total_value
+
+    # Build returns DataFrame
+    df_ret = pd.DataFrame(returns_map)
+    df_ret = df_ret.dropna(how="all").ffill()
+
+    # Portfolio daily return (weighted)
+    w = pd.Series(weights)
+    common = df_ret.columns.intersection(w.index)
+    port_ret = (
+        df_ret[common] * w[common]
+    ).sum(axis=1)
+
+    # ── Beta vs benchmark ──────────────────────
+    # Determine benchmark by market composition
+    india_wt = sum(
+        weights[t] for t in weights
+        if t.endswith(".NS") or t.endswith(".BO")
+    )
+    benchmark_ticker = (
+        "^NSEI" if india_wt > 0.5 else "^GSPC"
+    )
+    beta = None
+    try:
+        bench_ohlcv = repo.get_ohlcv(
+            benchmark_ticker, start=start,
+        )
+        if not bench_ohlcv.empty:
+            bench_ohlcv = bench_ohlcv.set_index(
+                "date",
+            )
+            bench_ret = (
+                bench_ohlcv["close"]
+                .astype(float)
+                .pct_change()
+                .dropna()
+            )
+            # Align dates
+            aligned = pd.concat(
+                [port_ret, bench_ret],
+                axis=1, join="inner",
+            )
+            if len(aligned) > 20:
+                cov = np.cov(
+                    aligned.iloc[:, 0],
+                    aligned.iloc[:, 1],
+                )
+                var_bench = cov[1, 1]
+                if var_bench > 0:
+                    beta = cov[0, 1] / var_bench
+    except Exception:
+        pass
+
+    # ── Sharpe ratio ───────────────────────────
+    rf_daily = 0.05 / 252  # 5% annual
+    sharpe = 0.0
+    if port_ret.std() > 0:
+        sharpe = (
+            (port_ret.mean() - rf_daily)
+            / port_ret.std()
+            * np.sqrt(252)
+        )
+
+    # ── Value at Risk (95%) ────────────────────
+    var_95 = float(np.percentile(port_ret, 5))
+    var_95_amt = var_95 * total_value
+
+    # ── Max Drawdown ───────────────────────────
+    cum = (1 + port_ret).cumprod()
+    peak = cum.cummax()
+    dd = (cum - peak) / peak
+    max_dd = float(dd.min()) * 100
+
+    # ── Annualized Volatility ──────────────────
+    ann_vol = float(
+        port_ret.std() * np.sqrt(252) * 100
+    )
+
+    # ── Correlation Matrix ─────────────────────
+    corr = df_ret[common].corr()
+    # Find high-correlation pairs
+    high_corr = []
+    tickers_list = list(common)
+    for i in range(len(tickers_list)):
+        for j in range(i + 1, len(tickers_list)):
+            c = corr.iloc[i, j]
+            if abs(c) > 0.7:
+                high_corr.append((
+                    tickers_list[i],
+                    tickers_list[j],
+                    c,
+                ))
+
+    # Format output
+    lines = [
+        "[Source: iceberg]",
+        f"**Portfolio Risk Metrics** "
+        f"(1Y window, as of {date.today()})\n",
+        "| Metric | Value |",
+        "|--------|-------|",
+    ]
+    if beta is not None:
+        lines.append(
+            f"| Beta (vs {benchmark_ticker}) "
+            f"| {beta:.2f} |"
+        )
+    lines.extend([
+        f"| Sharpe Ratio | {sharpe:.2f} |",
+        f"| VaR (95%, daily) | "
+        f"{var_95:.4f} "
+        f"({var_95_amt:,.0f} value) |",
+        f"| Max Drawdown | {max_dd:.2f}% |",
+        f"| Ann. Volatility | {ann_vol:.2f}% |",
+    ])
+
+    if high_corr:
+        lines.append(
+            "\n**High Correlation Pairs** (>0.70):"
+        )
+        for t1, t2, c in sorted(
+            high_corr, key=lambda x: -abs(x[2]),
+        ):
+            lines.append(
+                f"- {t1} ↔ {t2}: {c:.2f}"
+            )
+
+    return "\n".join(lines)

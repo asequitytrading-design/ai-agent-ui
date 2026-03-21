@@ -51,5 +51,6 @@ PORTFOLIO_CONFIG = SubAgentConfig(
         "get_dividend_projection",
         "suggest_rebalancing",
         "get_portfolio_summary",
+        "get_risk_metrics",
     ],
 )

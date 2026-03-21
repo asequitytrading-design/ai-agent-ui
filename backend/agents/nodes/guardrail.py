@@ -88,6 +88,24 @@ def guardrail(state: dict) -> dict:
     # Record start time for latency tracking
     start_ns = time.monotonic_ns()
 
+    # ── Query cache check ─────────────────────────
+    try:
+        from agents.nodes.query_cache import (
+            check_cache,
+        )
+
+        cached = check_cache(user_input)
+        if cached:
+            return {
+                "final_response": cached,
+                "next_agent": "cache_hit",
+                "start_time_ns": start_ns,
+                "tool_events": [],
+                "current_agent": "cache",
+            }
+    except Exception:
+        pass  # cache check is best-effort
+
     # ── Content safety ──────────────────────────────
     if is_blocked(user_input):
         return {

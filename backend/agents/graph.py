@@ -158,13 +158,14 @@ def build_supervisor_graph(
     # Entry → guardrail
     g.add_edge(START, "guardrail")
 
-    # Guardrail → router | decline
+    # Guardrail → router | decline | cache_hit
     g.add_conditional_edges(
         "guardrail",
         _route_by_next_agent,
         {
             "router": "router",
             "decline": "decline",
+            "cache_hit": "log_query",
         },
     )
 
