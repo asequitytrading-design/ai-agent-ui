@@ -144,7 +144,10 @@ def create_app(
 
     async def _chat(req: ChatRequest):
         """Sync agent dispatch (POST /chat)."""
-        agent = agent_registry.get(req.agent_id)
+        from agents.router import route as _route
+
+        resolved = _route(req.message)
+        agent = agent_registry.get(resolved)
         if agent is None:
             raise HTTPException(
                 status_code=404,
@@ -190,7 +193,10 @@ def create_app(
 
     async def _chat_stream(req: ChatRequest):
         """NDJSON streaming (POST /chat/stream)."""
-        agent = agent_registry.get(req.agent_id)
+        from agents.router import route as _route
+
+        resolved = _route(req.message)
+        agent = agent_registry.get(resolved)
         if agent is None:
             raise HTTPException(
                 status_code=404,

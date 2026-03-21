@@ -33,7 +33,6 @@ interface ChatContextValue {
   closePanel: () => void;
   openPanel: () => void;
   agentId: string;
-  setAgentId: (id: string) => void;
   sessionId: string;
   ws: UseWebSocketReturn;
   flush: () => Promise<void>;
@@ -50,7 +49,7 @@ export function ChatProvider({
 }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isOpen, setIsOpen] = useState(false);
-  const [agentId, setAgentId] = useState("general");
+  const agentId = "general";
   // Generate sessionId only on client to avoid SSR
   // hydration mismatch (server vs client UUID).
   const sessionIdRef = useRef<string>("");
@@ -130,7 +129,6 @@ export function ChatProvider({
         closePanel,
         openPanel,
         agentId,
-        setAgentId,
         sessionId,
         ws,
         flush,

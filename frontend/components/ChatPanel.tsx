@@ -11,7 +11,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useChatContext } from "@/providers/ChatProvider";
 import { useSendMessage } from "@/hooks/useSendMessage";
 import { useResizePanel } from "@/hooks/useResizePanel";
-import { AGENTS } from "@/lib/constants";
+import { CHAT_HINT } from "@/lib/constants";
 import { StatusBadge } from "@/components/StatusBadge";
 import { MessageBubble } from "@/components/MessageBubble";
 import { ChatInput } from "@/components/ChatInput";
@@ -97,10 +97,7 @@ export function ChatPanel() {
     }
   }, [isOpen]);
 
-  const agentHint = useMemo(
-    () => AGENTS.find((a) => a.id === agentId)?.hint,
-    [agentId],
-  );
+  const agentHint = CHAT_HINT;
 
   // Internal link handler for markdown links
   const handleInternalLink = useCallback(

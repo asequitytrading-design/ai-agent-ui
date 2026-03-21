@@ -10,14 +10,12 @@ import { useState, useRef, useEffect, useMemo } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { clearTokens } from "@/lib/auth";
-import { AGENTS, type View } from "@/lib/constants";
+import { type View } from "@/lib/constants";
 import type { UserProfile } from "@/hooks/useEditProfile";
 import { BACKEND_URL } from "@/lib/config";
 
 interface ChatHeaderProps {
   view: View;
-  agentId: string;
-  setAgentId: (id: string) => void;
   messages: { role: string }[];
   onClearMessages: () => void;
   profile: UserProfile | null;
@@ -27,8 +25,6 @@ interface ChatHeaderProps {
 
 export function ChatHeader({
   view,
-  agentId,
-  setAgentId,
   messages,
   onClearMessages,
   profile,
@@ -101,27 +97,13 @@ export function ChatHeader({
           priority
         />
 
-        {view === "chat" ? (
-          <div className="flex items-center gap-1 ml-4 bg-gray-100 rounded-lg p-0.5" data-testid="agent-selector">
-            {AGENTS.map((a) => (
-              <button
-                key={a.id}
-                onClick={() => setAgentId(a.id)}
-                className={`text-xs px-3 py-1.5 rounded-md font-medium transition-colors ${
-                  agentId === a.id
-                    ? "bg-white text-indigo-700 shadow-sm"
-                    : "text-gray-500 hover:text-gray-700"
-                }`}
-              >
-                {a.label}
-              </button>
-            ))}
-          </div>
-        ) : (
-          <span className="ml-4 text-sm font-medium text-gray-500">
-            {view === "docs" ? "Documentation" : view === "admin" ? "Admin" : "Dashboard"}
-          </span>
-        )}
+        <span className="ml-4 text-sm font-medium text-gray-500">
+          {view === "docs"
+            ? "Documentation"
+            : view === "admin"
+              ? "Admin"
+              : "Dashboard"}
+        </span>
       </div>
 
       {/* ── Right: clear button + profile chip ──────────────────────────── */}

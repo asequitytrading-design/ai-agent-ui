@@ -243,7 +243,10 @@ async def _handle_chat(
         executor: Thread pool executor.
         settings: App settings.
     """
-    agent_id = msg.get("agent_id", "general")
+    from agents.router import route as _route
+
+    user_message = msg.get("message", "")
+    agent_id = _route(user_message)
     agent = agent_registry.get(agent_id)
     if agent is None:
         await ws.send_json(
