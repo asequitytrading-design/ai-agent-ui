@@ -25,6 +25,14 @@ def _make_graph():
         "get_ticker_news",
         "get_analyst_recommendations",
         "search_financial_news",
+        "get_portfolio_holdings",
+        "get_portfolio_performance",
+        "get_sector_allocation",
+        "get_dividend_projection",
+        "suggest_rebalancing",
+        "get_portfolio_summary",
+        "get_forecast_summary",
+        "get_portfolio_forecast",
     ]:
         t = MagicMock()
         t.name = name
@@ -96,27 +104,22 @@ class TestGraphFullPath:
         assert result["intent"] == "stock_analysis"
 
     def test_forecast_query(self):
-        """'Forecast TSLA' → forecaster stub."""
+        """'Forecast TSLA' → forecaster agent."""
         graph = _make_graph()
         result = graph.invoke(
             _make_input("Forecast TSLA"),
         )
-        # Forecaster is a stub in Sprint 4
         assert result["current_agent"] == "forecaster"
-        assert "coming soon" in (
-            result["final_response"].lower()
-        )
+        assert result["final_response"]
 
     def test_portfolio_query(self):
-        """'Show my portfolio' → portfolio stub."""
+        """'Show my portfolio' → portfolio agent."""
         graph = _make_graph()
         result = graph.invoke(
             _make_input("Show my portfolio allocation"),
         )
         assert result["current_agent"] == "portfolio"
-        assert "coming soon" in (
-            result["final_response"].lower()
-        )
+        assert result["final_response"]
 
     def test_news_query(self):
         """'AAPL news' → research agent."""

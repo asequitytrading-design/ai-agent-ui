@@ -72,6 +72,44 @@ def setup_tools(registry):
             exc_info=True,
         )
 
+    # Register portfolio tools for Portfolio Agent
+    try:
+        from tools.portfolio_tools import (
+            get_dividend_projection,
+            get_portfolio_holdings,
+            get_portfolio_performance,
+            get_portfolio_summary,
+            get_sector_allocation,
+            suggest_rebalancing,
+        )
+
+        registry.register(get_portfolio_holdings)
+        registry.register(get_portfolio_performance)
+        registry.register(get_sector_allocation)
+        registry.register(get_dividend_projection)
+        registry.register(suggest_rebalancing)
+        registry.register(get_portfolio_summary)
+    except Exception:
+        _logger.warning(
+            "Portfolio tools registration failed",
+            exc_info=True,
+        )
+
+    # Register forecast tools for Forecaster Agent
+    try:
+        from tools.forecast_tools import (
+            get_forecast_summary,
+            get_portfolio_forecast,
+        )
+
+        registry.register(get_forecast_summary)
+        registry.register(get_portfolio_forecast)
+    except Exception:
+        _logger.warning(
+            "Forecast tools registration failed",
+            exc_info=True,
+        )
+
     _logger.info(
         "Tools registered: %s",
         registry.list_names(),
@@ -181,4 +219,16 @@ def setup_graph(
         tool_registry, llm_factory, settings,
     )
     _logger.info("LangGraph supervisor graph built")
+
+    # Start daily gap filler background job
+    try:
+        from jobs.gap_filler import start_gap_filler
+
+        start_gap_filler()
+    except Exception:
+        _logger.warning(
+            "Gap filler start failed",
+            exc_info=True,
+        )
+
     return graph

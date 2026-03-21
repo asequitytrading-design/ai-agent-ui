@@ -20,6 +20,8 @@ from typing import Callable
 from langchain_core.messages import AIMessage
 from langgraph.graph import END, START, StateGraph
 
+from agents.configs.forecaster import FORECASTER_CONFIG
+from agents.configs.portfolio import PORTFOLIO_CONFIG
 from agents.configs.research import RESEARCH_CONFIG
 from agents.configs.stock_analyst import (
     STOCK_ANALYST_CONFIG,
@@ -114,8 +116,18 @@ def build_supervisor_graph(
         Compiled LangGraph graph.
     """
     # Create sub-agent nodes from configs
+    portfolio_node = _make_sub_agent_node(
+        PORTFOLIO_CONFIG,
+        tool_registry,
+        llm_factory,
+    )
     stock_node = _make_sub_agent_node(
         STOCK_ANALYST_CONFIG,
+        tool_registry,
+        llm_factory,
+    )
+    forecaster_node = _make_sub_agent_node(
+        FORECASTER_CONFIG,
         tool_registry,
         llm_factory,
     )
@@ -133,9 +145,9 @@ def build_supervisor_graph(
     g.add_node("router", router_node)
     g.add_node("llm_classifier", llm_classifier)
     g.add_node("supervisor", supervisor)
-    g.add_node("portfolio", _portfolio_stub)
+    g.add_node("portfolio", portfolio_node)
     g.add_node("stock_analyst", stock_node)
-    g.add_node("forecaster", _forecaster_stub)
+    g.add_node("forecaster", forecaster_node)
     g.add_node("research", research_node)
     g.add_node("synthesis", synthesis)
     g.add_node("log_query", log_query)

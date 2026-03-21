@@ -3502,3 +3502,215 @@ class StockRepository:
                 ),
             })
         return results
+
+    # ---------------------------------------------------------------
+    # Query log (question tracking)
+    # ---------------------------------------------------------------
+
+    _QUERY_LOG = "stocks.query_log"
+
+    def insert_query_log(self, entry: dict) -> None:
+        """Insert a query log entry.
+
+        Args:
+            entry: Dict with keys: timestamp, user_id,
+                query_text, classified_intent,
+                sub_agent_invoked, tools_used (JSON),
+                data_sources_used (JSON),
+                was_local_sufficient (bool),
+                response_time_ms (int),
+                gap_tickers (JSON).
+        """
+        import json
+        import uuid
+        from datetime import datetime, timezone
+
+        row = {
+            "id": str(uuid.uuid4()),
+            "timestamp": entry.get(
+                "timestamp",
+                datetime.now(timezone.utc),
+            ),
+            "user_id": entry.get("user_id", ""),
+            "query_text": entry.get(
+                "query_text", "",
+            ),
+            "classified_intent": entry.get(
+                "classified_intent", "",
+            ),
+            "sub_agent_invoked": entry.get(
+                "sub_agent_invoked", "",
+            ),
+            "tools_used": json.dumps(
+                entry.get("tools_used", []),
+            ),
+            "data_sources_used": json.dumps(
+                entry.get("data_sources_used", []),
+            ),
+            "was_local_sufficient": entry.get(
+                "was_local_sufficient", True,
+            ),
+            "response_time_ms": entry.get(
+                "response_time_ms", 0,
+            ),
+            "gap_tickers": json.dumps(
+                entry.get("gap_tickers", []),
+            ),
+        }
+
+        try:
+            tbl = self._load_table(self._QUERY_LOG)
+            schema = tbl.schema().as_arrow()
+            at = pa.Table.from_pydict(
+                {k: [v] for k, v in row.items()},
+                schema=schema,
+            )
+            self._append_rows(self._QUERY_LOG, at)
+        except Exception:
+            _logger.debug(
+                "query_log table not found — "
+                "skipping (create table first)",
+            )
+
+    def get_query_logs(
+        self,
+        user_id: str,
+        limit: int = 100,
+    ) -> list[dict]:
+        """Get recent query logs for a user."""
+        try:
+            df = self._scan_ticker(
+                self._QUERY_LOG,
+                user_id,
+            )
+            if df.empty:
+                return []
+            df = df.sort_values(
+                "timestamp", ascending=False,
+            ).head(limit)
+            return df.to_dict("records")
+        except Exception:
+            return []
+
+    # ---------------------------------------------------------------
+    # Data gaps (gap analysis)
+    # ---------------------------------------------------------------
+
+    _DATA_GAPS = "stocks.data_gaps"
+
+    def insert_data_gap(
+        self,
+        ticker: str,
+        data_type: str,
+    ) -> None:
+        """Insert or increment a data gap entry."""
+        import uuid
+        from datetime import datetime, timezone
+
+        # Check if gap already exists
+        try:
+            tbl = self._load_table(self._DATA_GAPS)
+            scan = tbl.scan()
+            df = scan.to_pandas()
+            existing = df[
+                (df["ticker"] == ticker)
+                & (df["data_type"] == data_type)
+                & (df["resolved_at"].isna())
+            ]
+            if not existing.empty:
+                # Increment count
+                self.increment_gap_count(
+                    ticker, data_type,
+                )
+                return
+        except Exception:
+            _logger.debug(
+                "data_gaps table not found — "
+                "skipping",
+            )
+            return
+
+        row = {
+            "id": str(uuid.uuid4()),
+            "detected_at": datetime.now(timezone.utc),
+            "ticker": ticker,
+            "data_type": data_type,
+            "query_count": 1,
+            "resolved_at": None,
+            "resolution": None,
+        }
+
+        schema = tbl.schema().as_arrow()
+        at = pa.Table.from_pydict(
+            {k: [v] for k, v in row.items()},
+            schema=schema,
+        )
+        self._append_rows(self._DATA_GAPS, at)
+
+    def increment_gap_count(
+        self,
+        ticker: str,
+        data_type: str,
+    ) -> None:
+        """Increment query_count for an existing gap."""
+        try:
+            tbl = self._load_table(self._DATA_GAPS)
+            scan = tbl.scan()
+            df = scan.to_pandas()
+            mask = (
+                (df["ticker"] == ticker)
+                & (df["data_type"] == data_type)
+                & (df["resolved_at"].isna())
+            )
+            if mask.any():
+                df.loc[mask, "query_count"] += 1
+                schema = tbl.schema().as_arrow()
+                at = pa.Table.from_pandas(
+                    df, schema=schema,
+                )
+                self._overwrite_table(
+                    self._DATA_GAPS, at,
+                )
+        except Exception:
+            pass
+
+    def get_unfilled_data_gaps(
+        self,
+    ) -> list[dict]:
+        """Get all unresolved data gaps."""
+        try:
+            tbl = self._load_table(self._DATA_GAPS)
+            scan = tbl.scan()
+            df = scan.to_pandas()
+            unresolved = df[df["resolved_at"].isna()]
+            return unresolved.to_dict("records")
+        except Exception:
+            return []
+
+    def resolve_data_gap(
+        self,
+        gap_id: str,
+        resolution: str,
+    ) -> None:
+        """Mark a data gap as resolved."""
+        from datetime import datetime, timezone
+
+        try:
+            tbl = self._load_table(self._DATA_GAPS)
+            scan = tbl.scan()
+            df = scan.to_pandas()
+            mask = df["id"] == gap_id
+            if mask.any():
+                df.loc[mask, "resolved_at"] = (
+                    datetime.now(timezone.utc)
+                )
+                df.loc[mask, "resolution"] = resolution
+                schema = tbl.schema().as_arrow()
+                at = pa.Table.from_pandas(
+                    df, schema=schema,
+                )
+                self._overwrite_table(
+                    self._DATA_GAPS, at,
+                )
+        except Exception:
+            pass

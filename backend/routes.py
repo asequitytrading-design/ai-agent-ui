@@ -507,6 +507,104 @@ def create_app(
         result["cascade_stats"] = cascade_stats
         return result
 
+    async def _admin_query_gaps(
+        current_user=None,
+    ):
+        """GET /admin/query-gaps — data gap analysis."""
+        try:
+            from tools._stock_shared import (
+                _require_repo,
+            )
+
+            repo = _require_repo()
+        except Exception:
+            return {
+                "top_gap_tickers": [],
+                "external_api_usage": {},
+                "intent_distribution": {},
+                "local_sufficiency_rate": 0,
+            }
+
+        # Top unresolved gaps
+        gaps = repo.get_unfilled_data_gaps()
+        top_gaps = sorted(
+            gaps,
+            key=lambda g: g.get(
+                "query_count", 0,
+            ),
+            reverse=True,
+        )[:10]
+
+        # Query log stats
+        logs = []
+        try:
+            from datetime import date, timedelta
+
+            # Read recent logs (all users)
+            tbl = repo._load_table(
+                repo._QUERY_LOG,
+            )
+            scan = tbl.scan()
+            df = scan.to_pandas()
+            if not df.empty:
+                logs = df.to_dict("records")
+        except Exception:
+            pass
+
+        # External API usage
+        yf_today = sum(
+            1 for l in logs
+            if "yfinance" in str(
+                l.get("data_sources_used", ""),
+            )
+        )
+        serp_today = sum(
+            1 for l in logs
+            if "serpapi" in str(
+                l.get("data_sources_used", ""),
+            )
+        )
+
+        # Intent distribution
+        intents: dict[str, int] = {}
+        for l in logs:
+            intent = l.get(
+                "classified_intent", "unknown",
+            )
+            intents[intent] = (
+                intents.get(intent, 0) + 1
+            )
+
+        # Local sufficiency
+        total = len(logs) or 1
+        local_ok = sum(
+            1 for l in logs
+            if l.get("was_local_sufficient", False)
+        )
+
+        return {
+            "top_gap_tickers": [
+                {
+                    "ticker": g.get("ticker", ""),
+                    "query_count": g.get(
+                        "query_count", 0,
+                    ),
+                    "data_type": g.get(
+                        "data_type", "",
+                    ),
+                }
+                for g in top_gaps
+            ],
+            "external_api_usage": {
+                "yfinance_calls": yf_today,
+                "serpapi_calls": serp_today,
+            },
+            "intent_distribution": intents,
+            "local_sufficiency_rate": round(
+                local_ok / total, 2,
+            ),
+        }
+
     # ---------------------------------------------------------------
     # All API endpoints under /v1 (ASETPLTFRM-20)
     # ---------------------------------------------------------------
@@ -659,6 +757,12 @@ def create_app(
         "/admin/retention",
         _admin_retention,
         methods=["POST"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/query-gaps",
+        _admin_query_gaps,
+        methods=["GET"],
         dependencies=[Depends(superuser_only)],
     )
     app.include_router(admin_router)
