@@ -37,6 +37,7 @@ def create_app(
     settings,
     token_budget=None,
     obs_collector=None,
+    graph=None,
 ):
     """Build and return the configured FastAPI application.
 
@@ -144,6 +145,11 @@ def create_app(
 
     async def _chat(req: ChatRequest):
         """Sync agent dispatch (POST /chat)."""
+        # ── LangGraph path ────────────────────────
+        if graph is not None and settings.use_langgraph:
+            return await _chat_langgraph(req)
+
+        # ── Legacy path ───────────────────────────
         from agents.router import route as _route
 
         resolved = _route(req.message)
@@ -151,7 +157,10 @@ def create_app(
         if agent is None:
             raise HTTPException(
                 status_code=404,
-                detail=f"Agent '{req.agent_id}' not found",
+                detail=(
+                    f"Agent '{req.agent_id}' "
+                    "not found"
+                ),
             )
         set_current_user(req.user_id)
         try:
@@ -164,7 +173,9 @@ def create_app(
             )
             result = await asyncio.wait_for(
                 future,
-                timeout=settings.agent_timeout_seconds,
+                timeout=(
+                    settings.agent_timeout_seconds
+                ),
             )
         except asyncio.TimeoutError:
             _logger.warning(
@@ -191,8 +202,58 @@ def create_app(
             agent_id=req.agent_id,
         )
 
+    async def _chat_langgraph(req: ChatRequest):
+        """Sync chat via LangGraph supervisor graph."""
+        from langchain_core.messages import (
+            HumanMessage,
+        )
+
+        input_state = _build_graph_input(req)
+        set_current_user(req.user_id)
+        try:
+            loop = asyncio.get_event_loop()
+            future = loop.run_in_executor(
+                executor,
+                graph.invoke,
+                input_state,
+            )
+            result = await asyncio.wait_for(
+                future,
+                timeout=(
+                    settings.agent_timeout_seconds
+                ),
+            )
+        except asyncio.TimeoutError:
+            raise HTTPException(
+                status_code=504,
+                detail="Agent timed out",
+            )
+        except Exception as e:
+            _logger.error(
+                "LangGraph error: %s",
+                e,
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="Agent execution failed",
+            )
+        return ChatResponse(
+            response=result.get(
+                "final_response", ""
+            ),
+            agent_id=result.get(
+                "current_agent", "graph"
+            ),
+        )
+
     async def _chat_stream(req: ChatRequest):
         """NDJSON streaming (POST /chat/stream)."""
+        # ── LangGraph path ────────────────────────
+        if graph is not None and settings.use_langgraph:
+            return _stream_langgraph(req)
+
+        # ── Legacy path ───────────────────────────
         from agents.router import route as _route
 
         resolved = _route(req.message)
@@ -200,7 +261,10 @@ def create_app(
         if agent is None:
             raise HTTPException(
                 status_code=404,
-                detail=f"Agent '{req.agent_id}' not found",
+                detail=(
+                    f"Agent '{req.agent_id}' "
+                    "not found"
+                ),
             )
 
         timeout = settings.agent_timeout_seconds
@@ -260,6 +324,126 @@ def create_app(
                             }
                         ) + "\n"
                         break
+
+            worker.join(timeout=2)
+
+        return StreamingResponse(
+            generate(),
+            media_type="application/x-ndjson",
+        )
+
+    # ---------------------------------------------------------------
+    # LangGraph helpers
+    # ---------------------------------------------------------------
+
+    def _build_graph_input(req: ChatRequest) -> dict:
+        """Build LangGraph AgentState input from req."""
+        from langchain_core.messages import (
+            AIMessage,
+            HumanMessage,
+        )
+
+        msgs = []
+        for h in (req.history or []):
+            role = h.get("role", "user")
+            content = h.get("content", "")
+            if role == "assistant":
+                msgs.append(AIMessage(content=content))
+            else:
+                msgs.append(
+                    HumanMessage(content=content),
+                )
+        msgs.append(
+            HumanMessage(content=req.message),
+        )
+
+        return {
+            "messages": msgs,
+            "user_input": req.message,
+            "user_id": req.user_id or "",
+            "history": req.history or [],
+            "intent": "",
+            "next_agent": "",
+            "current_agent": "",
+            "tickers": [],
+            "data_sources_used": [],
+            "was_local_sufficient": True,
+            "tool_events": [],
+            "final_response": "",
+            "error": None,
+            "start_time_ns": 0,
+        }
+
+    def _stream_langgraph(req: ChatRequest):
+        """NDJSON streaming via LangGraph graph."""
+        timeout = settings.agent_timeout_seconds
+        input_state = _build_graph_input(req)
+
+        def generate():
+            event_queue: queue.Queue = queue.Queue()
+
+            def run() -> None:
+                set_current_user(req.user_id)
+                try:
+                    result = graph.invoke(input_state)
+                    # Emit tool events
+                    for ev in result.get(
+                        "tool_events", []
+                    ):
+                        event_queue.put(
+                            json.dumps(ev) + "\n"
+                        )
+                    # Emit final
+                    event_queue.put(
+                        json.dumps({
+                            "type": "final",
+                            "response": result.get(
+                                "final_response", ""
+                            ),
+                            "agent": result.get(
+                                "current_agent", ""
+                            ),
+                        })
+                        + "\n"
+                    )
+                except Exception as exc:
+                    event_queue.put(
+                        json.dumps({
+                            "type": "error",
+                            "message": str(exc),
+                        })
+                        + "\n"
+                    )
+                finally:
+                    event_queue.put(None)
+
+            worker = threading.Thread(
+                target=run, daemon=True,
+            )
+            worker.start()
+
+            start = time.time()
+            while True:
+                elapsed = time.time() - start
+                if elapsed >= timeout:
+                    yield json.dumps({
+                        "type": "timeout",
+                        "message": (
+                            "Agent timed out"
+                            f" after {timeout}s"
+                        ),
+                    }) + "\n"
+                    break
+                remaining = timeout - elapsed
+                try:
+                    item = event_queue.get(
+                        timeout=min(remaining, 1.0),
+                    )
+                    if item is None:
+                        break
+                    yield item
+                except queue.Empty:
+                    continue
 
             worker.join(timeout=2)
 
@@ -508,7 +692,10 @@ def create_app(
     # WebSocket streaming endpoint.
     from ws import register_ws_routes
 
-    register_ws_routes(app, agent_registry, executor, settings)
+    register_ws_routes(
+        app, agent_registry, executor, settings,
+        graph=graph,
+    )
 
     # Serve uploaded avatars.
     from paths import AVATARS_DIR, ensure_dirs

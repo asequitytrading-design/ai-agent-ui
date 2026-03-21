@@ -48,6 +48,7 @@ def register_ws_routes(
     agent_registry,
     executor,
     settings,
+    graph=None,
 ) -> None:
     """Mount the ``/ws/chat`` WebSocket endpoint.
 
@@ -122,6 +123,7 @@ def register_ws_routes(
                             agent_registry,
                             executor,
                             settings,
+                            graph=graph,
                         )
                     finally:
                         streaming = False
@@ -229,34 +231,17 @@ async def _handle_chat(
     agent_registry,
     executor,
     settings,
+    graph=None,
 ) -> None:
     """Run the agent streaming loop over WebSocket.
 
-    Uses the same ``Thread`` + ``queue.Queue`` bridge as the
-    HTTP ``/chat/stream`` endpoint in ``routes.py``.
+    Uses the same ``Thread`` + ``queue.Queue`` bridge as
+    the HTTP ``/chat/stream`` endpoint in ``routes.py``.
 
-    Args:
-        ws: The WebSocket connection.
-        msg: The parsed chat message dict.
-        user_ctx: Authenticated user context.
-        agent_registry: The agent registry.
-        executor: Thread pool executor.
-        settings: App settings.
+    When ``graph`` is provided and ``use_langgraph`` is
+    enabled, uses the LangGraph supervisor graph instead
+    of the legacy agent dispatch.
     """
-    from agents.router import route as _route
-
-    user_message = msg.get("message", "")
-    agent_id = _route(user_message)
-    agent = agent_registry.get(agent_id)
-    if agent is None:
-        await ws.send_json(
-            {
-                "type": "error",
-                "message": f"Agent '{agent_id}' not found",
-            }
-        )
-        return
-
     message = msg.get("message", "")
     history = msg.get("history", [])
     user_id = msg.get(
@@ -267,39 +252,59 @@ async def _handle_chat(
 
     event_queue: queue.Queue = queue.Queue()
 
+    # ── Choose execution path ─────────────────────
+    use_graph = (
+        graph is not None
+        and getattr(settings, "use_langgraph", False)
+    )
+
     def run() -> None:
-        """Execute agent.stream() in a worker thread."""
+        """Execute in a worker thread."""
         set_current_user(user_id)
         try:
-            for event in agent.stream(message, history):
-                event_queue.put(event)
+            if use_graph:
+                _run_graph(
+                    graph, message, history,
+                    user_id, event_queue,
+                )
+            else:
+                _run_legacy(
+                    message, history,
+                    agent_registry, event_queue,
+                )
         except Exception:
             pass
         finally:
             event_queue.put(None)
 
-    worker = threading.Thread(target=run, daemon=True)
+    worker = threading.Thread(
+        target=run, daemon=True,
+    )
     worker.start()
 
     start = time.time()
     while True:
         elapsed = time.time() - start
         if elapsed >= timeout:
-            await ws.send_json(
-                {
-                    "type": "timeout",
-                    "message": (f"Agent timed out after {timeout}s"),
-                }
-            )
+            await ws.send_json({
+                "type": "timeout",
+                "message": (
+                    "Agent timed out"
+                    f" after {timeout}s"
+                ),
+            })
             break
 
         remaining = timeout - elapsed
         try:
-            item = await asyncio.get_event_loop().run_in_executor(
-                executor,
-                lambda: event_queue.get(
-                    timeout=min(remaining, 0.5),
-                ),
+            item = (
+                await asyncio.get_event_loop()
+                .run_in_executor(
+                    executor,
+                    lambda: event_queue.get(
+                        timeout=min(remaining, 0.5),
+                    ),
+                )
             )
         except queue.Empty:
             continue
@@ -307,18 +312,90 @@ async def _handle_chat(
         if item is None:
             break
 
-        # item is an NDJSON string ending with \n — parse
-        # and send as JSON over WS.
-        line = item.strip()
-        if not line:
-            continue
-        try:
-            event = json.loads(line)
-            await ws.send_json(event)
-        except (json.JSONDecodeError, TypeError):
-            await ws.send_text(line)
+        # Parse NDJSON or dict → send as JSON
+        if isinstance(item, dict):
+            await ws.send_json(item)
+        else:
+            line = item.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+                await ws.send_json(event)
+            except (json.JSONDecodeError, TypeError):
+                await ws.send_text(line)
 
     worker.join(timeout=2)
+
+
+def _run_graph(
+    graph, message, history, user_id, event_queue,
+):
+    """Run LangGraph supervisor in worker thread."""
+    from langchain_core.messages import (
+        AIMessage,
+        HumanMessage,
+    )
+
+    msgs = []
+    for h in (history or []):
+        role = h.get("role", "user")
+        content = h.get("content", "")
+        if role == "assistant":
+            msgs.append(AIMessage(content=content))
+        else:
+            msgs.append(
+                HumanMessage(content=content),
+            )
+    msgs.append(HumanMessage(content=message))
+
+    input_state = {
+        "messages": msgs,
+        "user_input": message,
+        "user_id": user_id or "",
+        "history": history or [],
+        "intent": "",
+        "next_agent": "",
+        "current_agent": "",
+        "tickers": [],
+        "data_sources_used": [],
+        "was_local_sufficient": True,
+        "tool_events": [],
+        "final_response": "",
+        "error": None,
+        "start_time_ns": 0,
+    }
+
+    result = graph.invoke(input_state)
+
+    # Emit tool events
+    for ev in result.get("tool_events", []):
+        event_queue.put(ev)
+
+    # Emit final
+    event_queue.put({
+        "type": "final",
+        "response": result.get(
+            "final_response", ""
+        ),
+        "agent": result.get(
+            "current_agent", ""
+        ),
+    })
+
+
+def _run_legacy(
+    message, history, agent_registry, event_queue,
+):
+    """Run legacy agent in worker thread."""
+    from agents.router import route as _route
+
+    agent_id = _route(message)
+    agent = agent_registry.get(agent_id)
+    if agent is None:
+        return
+    for event in agent.stream(message, history):
+        event_queue.put(event)
 
 
 async def _close(ws, code: int, reason: str) -> None:
