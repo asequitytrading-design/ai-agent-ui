@@ -125,7 +125,7 @@ export function EditProfileModal({
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div
-        className={`bg-white dark:bg-gray-800 rounded-2xl shadow-xl w-full mx-4 p-6 transition-colors ${activeTab === "audit" ? "max-w-2xl" : "max-w-sm"}`}
+        className={`bg-white dark:bg-gray-800 rounded-2xl shadow-xl w-full mx-4 p-6 transition-colors max-h-[85vh] flex flex-col ${activeTab === "audit" ? "max-w-2xl" : "max-w-sm"}`}
         data-testid="edit-profile-modal"
       >
         {/* Tab bar */}
@@ -217,7 +217,7 @@ export function EditProfileModal({
             </div>
           </>
         ) : (
-          <div className="min-h-[300px]">
+          <div className="min-h-[300px] flex-1 overflow-y-auto">
             <PastSessionsTab showKeywordSearch />
           </div>
         )}

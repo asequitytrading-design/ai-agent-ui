@@ -170,10 +170,10 @@ export function PastSessionsTab({
       {/* Session list */}
       {!loading && sessions.length > 0 && (
         <div className="flex-1 overflow-y-auto space-y-2">
-          {sessions.map((s) => {
+          {sessions.map((s, idx) => {
             const isExpanded = expandedId === s.session_id;
             return (
-              <div key={s.session_id}>
+              <div key={`${s.session_id}-${idx}`}>
                 <button
                   onClick={() => toggleExpand(s.session_id)}
                   className={`w-full text-left px-3 py-3 rounded-xl border transition-colors ${
