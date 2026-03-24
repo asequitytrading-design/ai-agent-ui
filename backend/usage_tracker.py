@@ -12,6 +12,7 @@ Functions
 - :func:`reset_user_usage` — reset specific users
 - :func:`reset_monthly_usage` — reset all users
 - :func:`get_usage_history` — month-on-month history
+- :func:`is_quota_exceeded` — check if user hit limit
 """
 
 from __future__ import annotations
@@ -30,6 +31,47 @@ def _current_month() -> str:
 def _now_naive() -> datetime:
     """Return naive UTC datetime for Iceberg storage."""
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def is_quota_exceeded(user_id: str) -> bool:
+    """Check if the user's monthly quota is exhausted.
+
+    Performs a lazy reset if the month has changed.
+    Returns True if the user should be blocked.
+    Premium users (quota=0) always return False.
+
+    Args:
+        user_id: UUID string.
+
+    Returns:
+        True if quota exceeded, False if allowed.
+    """
+    if not user_id:
+        return False
+    try:
+        from auth.endpoints.helpers import _get_repo
+        from subscription_config import USAGE_QUOTAS
+
+        repo = _get_repo()
+        user = repo.get_by_id(user_id)
+        if user is None:
+            return False
+
+        user = _maybe_reset(
+            repo, user, _current_month(),
+        )
+        tier = user.get("subscription_tier") or "free"
+        quota = USAGE_QUOTAS.get(tier, 3)
+        if quota == 0:
+            return False  # unlimited
+        count = user.get("monthly_usage_count") or 0
+        return count >= quota
+    except Exception:
+        _logger.exception(
+            "Quota check failed for user=%s",
+            user_id,
+        )
+        return False  # fail open
 
 
 def _archive_usage(

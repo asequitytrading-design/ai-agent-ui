@@ -10,6 +10,7 @@ calls ``format_response()`` for post-processing.
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -21,6 +22,26 @@ from langchain_core.messages import (
 
 from agents.config import MAX_ITERATIONS
 from tools.registry import ToolRegistry
+
+# Thread-local event sink — set by WS/HTTP handler
+# before running the graph, read by sub-agent nodes.
+_tls = threading.local()
+
+
+def set_event_sink(callback: Callable | None) -> None:
+    """Set a callback for real-time tool events."""
+    _tls.event_sink = callback
+
+
+def _emit(event: dict) -> None:
+    """Push an event to the current thread's sink."""
+    sink = getattr(_tls, "event_sink", None)
+    if sink is not None:
+        try:
+            sink(event)
+        except Exception:
+            pass
+
 
 _logger = logging.getLogger(__name__)
 
@@ -212,12 +233,14 @@ def _make_sub_agent_node(
                 name = tc["name"]
                 args = tc.get("args", {})
 
-                events.append({
+                start_ev = {
                     "type": "tool_start",
                     "tool": name,
                     "args": args,
                     "agent": config.agent_id,
-                })
+                }
+                events.append(start_ev)
+                _emit(start_ev)
 
                 try:
                     result = tool_registry.invoke(
@@ -239,12 +262,14 @@ def _make_sub_agent_node(
                 data_sources.append(source)
 
                 preview = result[:200]
-                events.append({
+                done_ev = {
                     "type": "tool_done",
                     "tool": name,
                     "preview": preview,
                     "agent": config.agent_id,
-                })
+                }
+                events.append(done_ev)
+                _emit(done_ev)
 
                 messages.append(
                     ToolMessage(

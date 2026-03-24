@@ -9,7 +9,7 @@
 
 import { useState, useRef, useEffect, useMemo } from "react";
 import Image from "next/image";
-import { useRouter, usePathname } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { clearTokens } from "@/lib/auth";
 import { useChatContext } from "@/providers/ChatProvider";
 import { useLayoutContext } from "@/providers/LayoutProvider";
@@ -33,7 +33,6 @@ export function AppHeader({
   onBilling,
   onActivityLog,
 }: AppHeaderProps) {
-  const router = useRouter();
   const pathname = usePathname();
   const chatContext = useChatContext();
   const layoutContext = useLayoutContext();
@@ -92,7 +91,7 @@ export function AppHeader({
   const handleSignOut = async () => {
     await chatContext.flush();
     clearTokens();
-    router.replace("/login");
+    window.location.href = "/login";
   };
 
   // Avatar: real image if available, else initials circle

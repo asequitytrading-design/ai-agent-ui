@@ -10,6 +10,7 @@ import { useState, useEffect, useCallback } from "react";
 import { apiFetch } from "@/lib/apiFetch";
 import { refreshAccessToken } from "@/lib/auth";
 import { API_URL } from "@/lib/config";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 
 /* ------------------------------------------------------------------ */
 /* Types                                                               */
@@ -88,6 +89,7 @@ export function BillingTab() {
   const [cancelling, setCancelling] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
 
   /* Fetch current subscription */
   const fetchSubscription = useCallback(async () => {
@@ -174,7 +176,6 @@ export function BillingTab() {
 
   /* Cancel handler */
   const handleCancel = async () => {
-    if (!confirm("Are you sure you want to cancel your subscription?")) return;
     setCancelling(true);
     setError("");
     try {
@@ -218,6 +219,20 @@ export function BillingTab() {
 
   return (
     <div className="space-y-5">
+      <ConfirmDialog
+        open={showCancelConfirm}
+        title="Cancel Subscription"
+        message="Are you sure you want to cancel your subscription? Your plan will revert to Free immediately."
+        confirmLabel="Cancel Subscription"
+        cancelLabel="Keep Plan"
+        variant="danger"
+        onConfirm={() => {
+          setShowCancelConfirm(false);
+          handleCancel();
+        }}
+        onCancel={() => setShowCancelConfirm(false)}
+      />
+
       {/* Status bar */}
       {error && (
         <div className="rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 px-3 py-2 text-sm text-red-700 dark:text-red-300">
@@ -253,7 +268,7 @@ export function BillingTab() {
           </div>
           {currentTier !== "free" && sub?.status !== "cancelled" && (
             <button
-              onClick={handleCancel}
+              onClick={() => setShowCancelConfirm(true)}
               disabled={cancelling}
               className="text-xs text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 disabled:opacity-50"
             >

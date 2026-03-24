@@ -8,7 +8,6 @@
 
 import { useState, useRef, useEffect, useMemo } from "react";
 import Image from "next/image";
-import { useRouter } from "next/navigation";
 import {
   clearTokens,
   getSubscriptionTierFromToken,
@@ -72,7 +71,6 @@ export function ChatHeader({
   onEditProfile,
   onChangePassword,
 }: ChatHeaderProps) {
-  const router = useRouter();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [avatarErrSrc, setAvatarErrSrc] = useState<string | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -93,7 +91,7 @@ export function ChatHeader({
   const handleSignOut = async () => {
     await chatContext.flush();
     clearTokens();
-    router.replace("/login");
+    window.location.href = "/login";
   };
 
   // Build the avatar element: real image if available, else initials circle.

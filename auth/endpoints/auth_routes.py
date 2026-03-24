@@ -36,7 +36,7 @@ _logger = logging.getLogger(__name__)
 
 # Cookie config for the HttpOnly refresh token.
 _COOKIE_KEY = "refresh_token"
-_COOKIE_PATH = "/auth"
+_COOKIE_PATH = "/v1/auth"
 _COOKIE_MAX_AGE = 7 * 24 * 3600  # 7 days
 
 

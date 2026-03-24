@@ -143,6 +143,23 @@ def create_app(
     # Usage tracking helper
     # ---------------------------------------------------------------
 
+    def _enforce_quota(user_id: str) -> None:
+        """Raise 429 if user's monthly quota is used."""
+        try:
+            from usage_tracker import is_quota_exceeded
+            if is_quota_exceeded(user_id):
+                raise HTTPException(
+                    status_code=429,
+                    detail=(
+                        "Monthly analysis quota exceeded."
+                        " Upgrade your plan for more."
+                    ),
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            pass  # fail open
+
     def _track_usage(user_id: str) -> None:
         """Increment monthly usage count (fire-and-forget)."""
         try:
@@ -160,6 +177,8 @@ def create_app(
 
     async def _chat(req: ChatRequest):
         """Sync agent dispatch (POST /chat)."""
+        _enforce_quota(req.user_id)
+
         # ── LangGraph path ────────────────────────
         if graph is not None and settings.use_langgraph:
             return await _chat_langgraph(req)
@@ -266,6 +285,8 @@ def create_app(
 
     async def _chat_stream(req: ChatRequest):
         """NDJSON streaming (POST /chat/stream)."""
+        _enforce_quota(req.user_id)
+
         # ── LangGraph path ────────────────────────
         if graph is not None and settings.use_langgraph:
             return _stream_langgraph(req)
@@ -448,14 +469,22 @@ def create_app(
             def run() -> None:
                 set_current_user(req.user_id)
                 try:
-                    result = graph.invoke(input_state)
-                    # Emit tool events
-                    for ev in result.get(
-                        "tool_events", []
-                    ):
+                    from agents.sub_agents import (
+                        set_event_sink,
+                    )
+
+                    def _sink(ev):
                         event_queue.put(
                             json.dumps(ev) + "\n"
                         )
+
+                    set_event_sink(_sink)
+                    try:
+                        result = graph.invoke(
+                            input_state,
+                        )
+                    finally:
+                        set_event_sink(None)
                     # Emit final
                     event_queue.put(
                         json.dumps({

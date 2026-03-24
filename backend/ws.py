@@ -258,6 +258,22 @@ async def _handle_chat(
         and getattr(settings, "use_langgraph", False)
     )
 
+    # Check quota before dispatching
+    try:
+        from usage_tracker import is_quota_exceeded
+        if is_quota_exceeded(user_id):
+            event_queue.put({
+                "type": "error",
+                "message": (
+                    "Monthly analysis quota exceeded."
+                    " Upgrade your plan for more."
+                ),
+            })
+            event_queue.put(None)
+            return event_queue
+    except Exception:
+        pass
+
     def run() -> None:
         """Execute in a worker thread."""
         set_current_user(user_id)
@@ -271,6 +287,7 @@ async def _handle_chat(
                 _run_legacy(
                     message, history,
                     agent_registry, event_queue,
+                    user_id,
                 )
         except Exception:
             pass
@@ -397,13 +414,17 @@ def _run_graph(
         "start_time_ns": 0,
     }
 
-    result = graph.invoke(input_state)
+    # Wire real-time event sink so sub-agent tool
+    # events push to the WS event queue immediately.
+    from agents.sub_agents import set_event_sink
+    set_event_sink(event_queue.put)
 
-    # Emit tool events
-    for ev in result.get("tool_events", []):
-        event_queue.put(ev)
+    try:
+        result = graph.invoke(input_state)
+    finally:
+        set_event_sink(None)
 
-    # Emit final
+    # Emit final (tool events already sent in real-time)
     event_queue.put({
         "type": "final",
         "response": result.get(
@@ -414,9 +435,18 @@ def _run_graph(
         ),
     })
 
+    # Track usage
+    if user_id:
+        try:
+            from usage_tracker import increment_usage
+            increment_usage(user_id)
+        except Exception:
+            pass
+
 
 def _run_legacy(
     message, history, agent_registry, event_queue,
+    user_id=None,
 ):
     """Run legacy agent in worker thread."""
     from agents.router import route as _route
@@ -427,6 +457,13 @@ def _run_legacy(
         return
     for event in agent.stream(message, history):
         event_queue.put(event)
+
+    if user_id:
+        try:
+            from usage_tracker import increment_usage
+            increment_usage(user_id)
+        except Exception:
+            pass
 
 
 async def _close(ws, code: int, reason: str) -> None:

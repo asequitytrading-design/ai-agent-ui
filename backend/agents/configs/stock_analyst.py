@@ -31,13 +31,23 @@ _STOCK_SYSTEM_PROMPT = (
     "STEP 2 (analysis): Only AFTER step 1 results "
     "are returned, call analyse_stock_price and "
     "forecast_stock.\n"
-    "STEP 3 (verdict): The data tables are rendered "
+    "STEP 3 (news): After analysis, call "
+    "get_ticker_news and get_analyst_recommendations "
+    "to gather market sentiment and institutional "
+    "activity.\n"
+    "STEP 4 (verdict): The data tables are rendered "
     "automatically by the system. You ONLY need to "
     "provide:\n"
     "  (a) A Buy/Hold/Sell recommendation with "
     "confidence percentage\n"
-    "  (b) 2-3 key risks as bullet points\n"
-    "  (c) A 3-4 sentence investment thesis\n"
+    "  (b) ## News & Sentiment section with:\n"
+    "      - Key recent headlines (with dates)\n"
+    "      - Analyst consensus: X Buy, Y Hold, Z Sell\n"
+    "      - Notable upgrades/downgrades by "
+    "institutions\n"
+    "  (c) 2-3 key risks as bullet points\n"
+    "  (d) A 3-4 sentence investment thesis that "
+    "factors in both technicals and news sentiment\n"
     "Do NOT repeat prices, indicators, or forecast "
     "numbers — they are already in the report.\n\n"
     "CRITICAL: Never call analyse_stock_price or "
@@ -132,6 +142,8 @@ STOCK_ANALYST_CONFIG = SubAgentConfig(
         "load_stock_data",
         "analyse_stock_price",
         "forecast_stock",
+        "get_ticker_news",
+        "get_analyst_recommendations",
         "fetch_multiple_stocks",
         "list_available_stocks",
     ],
