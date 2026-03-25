@@ -3,7 +3,31 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { apiFetch } from "@/lib/apiFetch";
 import { API_URL } from "@/lib/config";
-import { CompareChart, COMPARE_COLORS } from "@/components/charts/CompareChart";
+import dynamic from "next/dynamic";
+
+const CompareChart = dynamic(
+  () =>
+    import("@/components/charts/CompareChart").then(
+      (m) => m.CompareChart,
+    ),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex items-center justify-center h-64 bg-gray-100 dark:bg-gray-800 rounded-lg animate-pulse">
+        <span className="text-sm text-gray-400">
+          Loading chart...
+        </span>
+      </div>
+    ),
+  },
+);
+
+// Inline color constants to avoid pulling in
+// lightweight-charts via CompareChart module.
+const COMPARE_COLORS = [
+  "#6366f1", "#8b5cf6", "#ec4899", "#f59e0b",
+  "#10b981", "#3b82f6", "#ef4444", "#06b6d4",
+];
 import { useTheme } from "@/hooks/useTheme";
 import type {
   CompareResponse,

@@ -14,11 +14,38 @@ import { CompareContent } from "../compare/page";
 import { apiFetch } from "@/lib/apiFetch";
 import { useTheme } from "@/hooks/useTheme";
 import { API_URL } from "@/lib/config";
-import { ForecastChart } from "@/components/charts/ForecastChart";
-import { StockChart } from "@/components/charts/StockChart";
+import dynamic from "next/dynamic";
 import { usePreferences } from "@/hooks/usePreferences";
-import { PortfolioChart } from "@/components/charts/PortfolioChart";
-import { PortfolioForecastChart } from "@/components/charts/PortfolioForecastChart";
+
+// Dynamic imports — lightweight-charts requires window/document
+const StockChart = dynamic(
+  () =>
+    import("@/components/charts/StockChart").then(
+      (m) => m.StockChart,
+    ),
+  { ssr: false, loading: () => <ChartSkeleton /> },
+);
+const ForecastChart = dynamic(
+  () =>
+    import("@/components/charts/ForecastChart").then(
+      (m) => m.ForecastChart,
+    ),
+  { ssr: false, loading: () => <ChartSkeleton /> },
+);
+const PortfolioChart = dynamic(
+  () =>
+    import("@/components/charts/PortfolioChart").then(
+      (m) => m.PortfolioChart,
+    ),
+  { ssr: false, loading: () => <ChartSkeleton /> },
+);
+const PortfolioForecastChart = dynamic(
+  () =>
+    import(
+      "@/components/charts/PortfolioForecastChart"
+    ).then((m) => m.PortfolioForecastChart),
+  { ssr: false, loading: () => <ChartSkeleton /> },
+);
 import type {
   OHLCVResponse,
   IndicatorsResponse,

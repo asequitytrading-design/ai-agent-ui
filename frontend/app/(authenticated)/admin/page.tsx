@@ -1452,7 +1452,7 @@ function TransactionsTab() {
                       >
                         {isExpanded ? "Hide" : "View"}
                       </button>
-                      {isExpanded && t.raw_payload && (
+                      {isExpanded && !!t.raw_payload && (
                         <pre className="mt-1 text-[10px] bg-gray-50 dark:bg-gray-900 rounded p-2 max-h-40 overflow-auto whitespace-pre-wrap break-all">
                           {(() => { try { return JSON.stringify(JSON.parse(String(t.raw_payload)), null, 2); } catch { return String(t.raw_payload); } })()}
                         </pre>

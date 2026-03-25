@@ -149,7 +149,7 @@ export function ChatHeader({
 
       {/* ── Right: clear button + profile chip ──────────────────────────── */}
       <div className="flex items-center gap-2">
-        {view === "chat" && messages.length > 0 && (
+        {(view as string) === "chat" && messages.length > 0 && (
           <button
             onClick={onClearMessages}
             title="Clear chat"
