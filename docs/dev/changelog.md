@@ -4,6 +4,48 @@ Session-by-session record of what was built, changed, and fixed.
 
 ---
 
+## Mar 25, 2026 — Security Hardening, Code Quality, E2E Coverage
+
+### Added
+- **46 E2E Playwright tests** — portfolio CRUD, payment flows (mocked), WebSocket lifecycle, chat tool invocations, admin CRUD, subscription lifecycle, insights filters, Lighthouse performance
+- **27 `data-testid` attributes** on AddStockModal, EditStockModal, ConfirmDialog, UserModal, ResetPasswordModal, BillingTab
+- **`backend/user_context.py`** — shared `build_user_context()` extracted from routes.py + ws.py
+- **`e2e/fixtures/subscription.fixture.ts`** — subscription test fixture
+- **`e2e/pages/frontend/portfolio-crud.page.ts`** — portfolio CRUD page object
+- **`e2e/tests/performance/lighthouse.spec.ts`** — Core Web Vitals assertions
+- **CSP header** on all backend responses via SecurityHeadersMiddleware
+- **22-rule deny list** in `.claude/settings.local.json` (AgentShield Grade B→A)
+
+### Changed
+- **Webhook signatures mandatory** — Razorpay + Stripe handlers reject 503 if secret not configured (was silent fallthrough)
+- **Chat endpoints require JWT** — `Depends(get_current_user)` on `/v1/chat` + `/v1/chat/stream`, `user_id` from token only
+- **Cookie security** — `secure` flag env-gated, `samesite=strict` (was `lax`)
+- **Rate limits** added to `/auth/login/form` + `/auth/password-reset/confirm`
+- **Quota enforcement fails closed** (503) instead of silently passing
+- **TokenBudget** — atomic `reserve()`/`release()` pattern replaces TOCTOU-vulnerable `can_afford()`/`record()`
+- **Repository singleton** — 3 direct `StockRepository()` calls replaced with `_require_repo()`
+- **`asyncio.get_running_loop()`** — replaced deprecated `get_event_loop()` at 3 sites
+- **PEP 604 typing** — 8 files migrated from `Dict/List/Optional` to `dict/list/X|None`
+- **`CheckoutRequest`** — uses `Literal["pro","premium"]` + `Literal["razorpay","stripe"]`
+- **`AddPortfolioRequest`** — Pydantic Field constraints (gt=0, max_length)
+- **`ChatRequest.history`** — capped at max_length=100
+- **Password reset token** — only in response when `settings.debug` is True
+- **Refresh log** — reduced from INFO to DEBUG, removed cookie name list
+
+### Fixed
+- **12+ silent `except: pass`** → proper logging in ws.py, routes.py, repository.py
+- **WS worker errors** — now emit error events to client (was invisible)
+- **Stripe/Razorpay tier validation** — unknown plan returns None, not default "pro"
+- **Mutable default** — `BaseAgent.run(history=[])` → `history=None`
+- **Test flake** — `test_admin_reset_password_success` rate limiter disabled in fixture
+- **Test assertion** — `test_chat_unknown_agent` accepts LangGraph `final` response
+- **LLM fallback mocks** — updated for `reserve()`/`release()` API
+- **Avatar URL** — restricted to `^https?://` pattern
+- **Demo passwords** — removed from `seed_demo_data.py` log output
+- **Script JWT placeholders** — padded to 32+ chars
+
+---
+
 ## Mar 24–25, 2026 — Full Billing System, Razorpay + Stripe, Session Stability
 
 ### Added (late Mar 24)

@@ -2,6 +2,82 @@
 
 ---
 
+# Session: Mar 25, 2026 — Security Hardening, Code Quality, E2E Coverage
+
+## Security Hardening (ASETPLTFRM-178, 9 stories — ALL DONE)
+
+### 3 CRITICAL fixes
+- Webhook signatures now mandatory — 503 if secret missing (`subscription_routes.py`)
+- Chat endpoints require JWT — `user_id` derived from token only (`routes.py`, `ws.py`)
+- Password reset token gated behind `settings.debug` (`auth_routes.py`)
+
+### 7 HIGH fixes
+- Cookie `secure` env-gated + `samesite=strict`
+- Rate limits on `/auth/login/form` + `password_reset_confirm`
+- CSP header added to SecurityHeadersMiddleware
+- Quota enforcement fails closed (503) not open
+- Stripe/Razorpay tier/plan validated before DB write
+- Rate limiter IP spoofing documented
+
+### 10 MEDIUM + 4 LOW fixes
+- `CheckoutRequest` uses `Literal` types, `AddPortfolioRequest` has Field constraints
+- `ChatRequest.history` capped at 100
+- Refresh log reduced to DEBUG, avatar_url pattern validated
+- JWT startup check, demo log cleanup, script placeholder padding
+
+## Code Quality (ASETPLTFRM-188, 4 stories — ALL DONE)
+- **TokenBudget TOCTOU race** fixed — atomic `reserve()`/`release()` pattern
+- **Repository singleton bypass** — 3 call sites → `_require_repo()`
+- **`asyncio.get_running_loop()`** — replaced deprecated `get_event_loop()` at 3 sites
+- **Extracted `backend/user_context.py`** — eliminated duplication between routes.py and ws.py
+- **12+ silent `except: pass`** → proper logging, WS errors emit events to client
+- **8 files migrated** from legacy `typing` to PEP 604 builtins
+- **Mutable default fixed** in BaseAgent (`history: list[dict] | None = None`)
+
+## E2E Test Coverage (ASETPLTFRM-193 — IN PROGRESS)
+46 new Playwright tests across 8 files:
+- `portfolio-crud.spec.ts` (8) — add/edit/delete holdings
+- `payment-flows.spec.ts` (7) — mocked Razorpay/Stripe checkout
+- `websocket.spec.ts` (6) — WS connect/stream/reconnect/fallback
+- `chat-tools.spec.ts` (4) — LLM tool invocations
+- `admin-crud.spec.ts` (8) — user CRUD + audit log
+- `subscription-lifecycle.spec.ts` (5) — paywall/quota/upgrade/cancel
+- `insights-filters.spec.ts` (4) — chained filters, quarterly switch
+- `lighthouse.spec.ts` (4) — Core Web Vitals assertions (LCP/FCP/TBT/CLS)
+
+Supporting: 27 `data-testid` attrs on 6 components, 1 new POM, 1 fixture, selectors.ts + config updated.
+
+## Code Simplification
+- `Dict` → `dict` (PEP 604) in auth_routes, subscription_routes
+- `_drain_queue()` helper eliminated duplicate timeout logic in routes.py
+- `next()` patterns in `_find_user_by_razorpay/stripe`
+- Removed unused imports, fixed E741 variable names
+
+## AgentShield Security Scan
+- Grade: B (87) → **A (97)**
+- Permissions score: 36 → 85/100
+- settings.local.json: cleaned ~90 stale allow rules → ~50 reusable, added 22-rule deny list
+- Skill metadata (version, rollback, observe, feedback) added to 2 custom commands
+
+## Test Results
+- **Python**: 548 passed, 0 failures (fixed 2 pre-existing flaky tests)
+- **E2E**: 96 passed, 22 did not run (fixture path + screenshot baselines need update)
+
+## Jira
+- **ASETPLTFRM-178** (Epic) — Security Hardening: 9 stories, all Done
+- **ASETPLTFRM-188** (Epic) — Code Quality: 4 stories, all Done
+- **ASETPLTFRM-193** (Story) — E2E Coverage: In Progress
+
+## Shared Memories Promoted (6 new)
+- `shared/debugging/chat-session-recording`
+- `shared/architecture/currency-aware-agent`
+- `shared/debugging/iceberg-epoch-dates`
+- `shared/conventions/security-hardening`
+- `shared/architecture/token-budget-concurrency`
+- `shared/conventions/e2e-test-patterns`
+
+---
+
 # Session: Mar 24–25, 2026 — Subscription & Paywall System, Razorpay + Stripe, Admin Maintenance
 
 ## Sprint 3 — 100% Complete (all 11 stories + 15 bugs)
