@@ -18,7 +18,7 @@ import hashlib
 import hmac
 import json
 import logging
-from typing import Any, Dict
+from typing import Any, Literal
 
 from fastapi import (
     APIRouter,
@@ -29,7 +29,10 @@ from fastapi import (
 from pydantic import BaseModel
 
 import auth.endpoints.helpers as _helpers
-from auth.dependencies import get_current_user, superuser_only
+from auth.dependencies import (
+    get_current_user,
+    superuser_only,
+)
 from auth.models import UserContext
 
 _logger = logging.getLogger(__name__)
@@ -47,11 +50,12 @@ class CheckoutRequest(BaseModel):
 
     Attributes:
         tier: Target tier (``"pro"`` or ``"premium"``).
-        gateway: Payment gateway (``"razorpay"``).
+        gateway: Payment gateway
+            (``"razorpay"`` or ``"stripe"``).
     """
 
-    tier: str  # "pro" or "premium"
-    gateway: str = "razorpay"
+    tier: Literal["pro", "premium"]
+    gateway: Literal["razorpay", "stripe"] = "razorpay"
 
 
 class CheckoutResponse(BaseModel):
@@ -143,16 +147,14 @@ def _get_razorpay_plan_id(tier: str) -> str:
     if not plan_id:
         raise HTTPException(
             status_code=400,
-            detail=(
-                f"Plan not configured for tier:"
-                f" {tier}"
-            ),
+            detail=(f"Plan not configured for tier:" f" {tier}"),
         )
     return plan_id
 
 
 def _fetch_rz_sub_status(
-    client: Any, sub_id: str,
+    client: Any,
+    sub_id: str,
 ) -> str | None:
     """Fetch Razorpay subscription status.
 
@@ -199,10 +201,7 @@ def _get_stripe_price_id(tier: str) -> str:
     if not price_id:
         raise HTTPException(
             status_code=400,
-            detail=(
-                f"Stripe price not configured"
-                f" for tier: {tier}"
-            ),
+            detail=(f"Stripe price not configured" f" for tier: {tier}"),
         )
     return price_id
 
@@ -260,10 +259,7 @@ def _log_transaction(
             _PAYMENT_TXN_TABLE,
         )
 
-        now = (
-            datetime.now(timezone.utc)
-            .replace(tzinfo=None)
-        )
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         repo = _helpers._get_repo()
         cat = repo._get_catalog()
         tbl = cat.load_table(_PAYMENT_TXN_TABLE)
@@ -273,9 +269,7 @@ def _log_transaction(
                 "user_id": [user_id],
                 "gateway": [gateway],
                 "event_type": [event_type],
-                "gateway_event_id": [
-                    gateway_event_id
-                ],
+                "gateway_event_id": [gateway_event_id],
                 "subscription_id": [subscription_id],
                 "customer_id": [customer_id],
                 "amount": [amount],
@@ -290,8 +284,7 @@ def _log_transaction(
         )
         tbl.append(row)
         _logger.info(
-            "Transaction logged: user=%s gw=%s"
-            " event=%s status=%s",
+            "Transaction logged: user=%s gw=%s" " event=%s status=%s",
             user_id,
             gateway,
             event_type,
@@ -318,20 +311,14 @@ def _checkout_razorpay(
     """Razorpay checkout — modal-based."""
     client = _get_razorpay_client()
 
-    rz_cust_id = (
-        db_user.get("razorpay_customer_id")
-        if db_user
-        else None
-    )
+    rz_cust_id = db_user.get("razorpay_customer_id") if db_user else None
     if not rz_cust_id:
-        cust = client.customer.create({
-            "name": (
-                db_user.get("full_name", "")
-                if db_user
-                else ""
-            ),
-            "email": user.email,
-        })
+        cust = client.customer.create(
+            {
+                "name": (db_user.get("full_name", "") if db_user else ""),
+                "email": user.email,
+            }
+        )
         rz_cust_id = cust["id"]
         repo.update(
             user.user_id,
@@ -340,16 +327,13 @@ def _checkout_razorpay(
 
     plan_id = _get_razorpay_plan_id(tier)
 
-    rz_sub_id = (
-        db_user.get("razorpay_subscription_id")
-        if db_user
-        else None
-    )
+    rz_sub_id = db_user.get("razorpay_subscription_id") if db_user else None
     upgraded = False
 
     if rz_sub_id:
         rz_status = _fetch_rz_sub_status(
-            client, rz_sub_id,
+            client,
+            rz_sub_id,
         )
         if rz_status in _ACTIVE_STATUSES:
             try:
@@ -363,9 +347,7 @@ def _checkout_razorpay(
                 )
                 upgraded = True
                 old_tier = (
-                    db_user.get("subscription_tier")
-                    if db_user
-                    else None
+                    db_user.get("subscription_tier") if db_user else None
                 ) or "free"
                 _safe_update(
                     repo,
@@ -384,9 +366,7 @@ def _checkout_razorpay(
                     gateway="razorpay",
                     event_type="upgrade",
                     subscription_id=rz_sub_id,
-                    amount=float(
-                        TIER_PRICE_INR.get(tier, 0)
-                    ),
+                    amount=float(TIER_PRICE_INR.get(tier, 0)),
                     tier_before=old_tier,
                     tier_after=tier,
                     currency="INR",
@@ -400,12 +380,14 @@ def _checkout_razorpay(
                 client.subscription.cancel(rz_sub_id)
             except Exception:
                 pass
-        sub = client.subscription.create({
-            "plan_id": plan_id,
-            "customer_id": rz_cust_id,
-            "total_count": 12,
-            "quantity": 1,
-        })
+        sub = client.subscription.create(
+            {
+                "plan_id": plan_id,
+                "customer_id": rz_cust_id,
+                "total_count": 12,
+                "quantity": 1,
+            }
+        )
         rz_sub_id = sub["id"]
         repo.update(
             user.user_id,
@@ -413,11 +395,11 @@ def _checkout_razorpay(
         )
 
     from config import get_settings
+
     settings = get_settings()
 
     _logger.info(
-        "Razorpay checkout: user=%s tier=%s"
-        " sub=%s upgraded=%s",
+        "Razorpay checkout: user=%s tier=%s" " sub=%s upgraded=%s",
         user.user_id,
         tier,
         rz_sub_id,
@@ -445,19 +427,11 @@ def _checkout_stripe(
     settings = get_settings()
 
     # Create or reuse Stripe customer
-    st_cust_id = (
-        db_user.get("stripe_customer_id")
-        if db_user
-        else None
-    )
+    st_cust_id = db_user.get("stripe_customer_id") if db_user else None
     if not st_cust_id:
         cust = stripe.Customer.create(
             email=user.email,
-            name=(
-                db_user.get("full_name", "")
-                if db_user
-                else ""
-            ),
+            name=(db_user.get("full_name", "") if db_user else ""),
         )
         st_cust_id = cust.id
         repo.update(
@@ -468,11 +442,7 @@ def _checkout_stripe(
     price_id = _get_stripe_price_id(tier)
 
     # Try to upgrade existing Stripe subscription
-    st_sub_id = (
-        db_user.get("stripe_subscription_id")
-        if db_user
-        else None
-    )
+    st_sub_id = db_user.get("stripe_subscription_id") if db_user else None
     if st_sub_id:
         try:
             existing = stripe.Subscription.retrieve(
@@ -483,12 +453,12 @@ def _checkout_stripe(
                 # pro-rata automatically
                 stripe.Subscription.modify(
                     st_sub_id,
-                    items=[{
-                        "id": existing["items"]["data"][
-                            0
-                        ]["id"],
-                        "price": price_id,
-                    }],
+                    items=[
+                        {
+                            "id": existing["items"]["data"][0]["id"],
+                            "price": price_id,
+                        }
+                    ],
                     proration_behavior="create_prorations",
                 )
                 _safe_update(
@@ -500,9 +470,7 @@ def _checkout_stripe(
                     },
                 )
                 old_tier = (
-                    db_user.get("subscription_tier")
-                    if db_user
-                    else None
+                    db_user.get("subscription_tier") if db_user else None
                 ) or "free"
                 from subscription_config import (
                     TIER_PRICE_USD,
@@ -522,8 +490,7 @@ def _checkout_stripe(
                     currency="USD",
                 )
                 _logger.info(
-                    "Stripe upgrade: user=%s"
-                    " tier=%s sub=%s",
+                    "Stripe upgrade: user=%s" " tier=%s sub=%s",
                     user.user_id,
                     tier,
                     st_sub_id,
@@ -534,8 +501,7 @@ def _checkout_stripe(
                 )
         except Exception:
             _logger.warning(
-                "Stripe modify failed, creating"
-                " new session: sub=%s",
+                "Stripe modify failed, creating" " new session: sub=%s",
                 st_sub_id,
             )
 
@@ -547,12 +513,10 @@ def _checkout_stripe(
             {"price": price_id, "quantity": 1},
         ],
         success_url=(
-            f"{settings.oauth_redirect_uri}"
-            "/../dashboard?billing=success"
+            f"{settings.oauth_redirect_uri}" "/../dashboard?billing=success"
         ).replace("/auth/oauth/callback/../", "/"),
         cancel_url=(
-            f"{settings.oauth_redirect_uri}"
-            "/../dashboard?billing=cancelled"
+            f"{settings.oauth_redirect_uri}" "/../dashboard?billing=cancelled"
         ).replace("/auth/oauth/callback/../", "/"),
         metadata={
             "user_id": user.user_id,
@@ -561,8 +525,7 @@ def _checkout_stripe(
     )
 
     _logger.info(
-        "Stripe checkout: user=%s tier=%s"
-        " session=%s",
+        "Stripe checkout: user=%s tier=%s" " session=%s",
         user.user_id,
         tier,
         session.id,
@@ -607,34 +570,20 @@ def register(router: APIRouter) -> None:
         """
         from subscription_config import TIER_ORDER
 
-        if body.tier not in ("pro", "premium"):
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid tier. Use 'pro' or"
-                " 'premium'.",
-            )
-
         repo = _helpers._get_repo()
         db_user = repo.get_by_id(user.user_id)
 
         db_tier = (
-            db_user.get("subscription_tier")
-            if db_user
-            else None
+            db_user.get("subscription_tier") if db_user else None
         ) or "free"
         db_status = (
-            db_user.get("subscription_status")
-            if db_user
-            else None
+            db_user.get("subscription_status") if db_user else None
         ) or "active"
         current_level = TIER_ORDER.get(db_tier, 0)
         target_level = TIER_ORDER.get(body.tier, 0)
 
         # Block same-or-lower tier only if active
-        if (
-            current_level >= target_level
-            and db_status in _ACTIVE_STATUSES
-        ):
+        if current_level >= target_level and db_status in _ACTIVE_STATUSES:
             raise HTTPException(
                 status_code=400,
                 detail="Already on this tier or higher",
@@ -643,12 +592,18 @@ def register(router: APIRouter) -> None:
         # ── Stripe path ──────────────────────
         if body.gateway == "stripe":
             return _checkout_stripe(
-                repo, db_user, user, body.tier,
+                repo,
+                db_user,
+                user,
+                body.tier,
             )
 
         # ── Razorpay path (default) ─────────
         return _checkout_razorpay(
-            repo, db_user, user, body.tier,
+            repo,
+            db_user,
+            user,
+            body.tier,
         )
 
     # -----------------------------------------------------------
@@ -674,28 +629,21 @@ def register(router: APIRouter) -> None:
         db_user = repo.get_by_id(user.user_id)
 
         tier = (
-            db_user.get("subscription_tier")
-            or DEFAULT_TIER
-        ) if db_user else DEFAULT_TIER
-        status = (
-            db_user.get("subscription_status")
-            or DEFAULT_STATUS
-        ) if db_user else DEFAULT_STATUS
-        count = (
-            db_user.get("monthly_usage_count", 0)
+            (db_user.get("subscription_tier") or DEFAULT_TIER)
             if db_user
-            else 0
-        ) or 0
+            else DEFAULT_TIER
+        )
+        status = (
+            (db_user.get("subscription_status") or DEFAULT_STATUS)
+            if db_user
+            else DEFAULT_STATUS
+        )
+        count = (db_user.get("monthly_usage_count", 0) if db_user else 0) or 0
 
         # Cancelled = effectively free
-        effective_tier = (
-            "free" if status == "cancelled" else tier
-        )
+        effective_tier = "free" if status == "cancelled" else tier
         quota = USAGE_QUOTAS.get(effective_tier, 3)
-        remaining = (
-            None if quota == 0
-            else max(0, quota - count)
-        )
+        remaining = None if quota == 0 else max(0, quota - count)
 
         # Detect which gateway is active
         active_gw = None
@@ -726,19 +674,15 @@ def register(router: APIRouter) -> None:
     )
     def cancel_subscription(
         user: UserContext = Depends(get_current_user),
-    ) -> Dict[str, str]:
+    ) -> dict[str, str]:
         """Cancel the user's active subscription."""
         repo = _helpers._get_repo()
         db_user = repo.get_by_id(user.user_id)
         db_tier = (
-            db_user.get("subscription_tier")
-            if db_user
-            else None
+            db_user.get("subscription_tier") if db_user else None
         ) or "free"
         db_status = (
-            db_user.get("subscription_status")
-            if db_user
-            else None
+            db_user.get("subscription_status") if db_user else None
         ) or "active"
 
         if db_tier == "free" or db_status == "cancelled":
@@ -749,9 +693,7 @@ def register(router: APIRouter) -> None:
 
         # Cancel in Razorpay if active
         rz_sub_id = (
-            db_user.get("razorpay_subscription_id")
-            if db_user
-            else None
+            db_user.get("razorpay_subscription_id") if db_user else None
         )
         if rz_sub_id:
             try:
@@ -764,11 +706,7 @@ def register(router: APIRouter) -> None:
                 )
 
         # Cancel in Stripe if active
-        st_sub_id = (
-            db_user.get("stripe_subscription_id")
-            if db_user
-            else None
-        )
+        st_sub_id = db_user.get("stripe_subscription_id") if db_user else None
         if st_sub_id:
             try:
                 stripe = _get_stripe_client()
@@ -791,11 +729,7 @@ def register(router: APIRouter) -> None:
             },
         )
 
-        gw = (
-            "stripe" if st_sub_id
-            else "razorpay" if rz_sub_id
-            else "unknown"
-        )
+        gw = "stripe" if st_sub_id else "razorpay" if rz_sub_id else "unknown"
         _log_transaction(
             user_id=user.user_id,
             gateway=gw,
@@ -821,7 +755,7 @@ def register(router: APIRouter) -> None:
     def cleanup_subscriptions(
         dry_run: bool = True,
         user: UserContext = Depends(superuser_only),
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Triage and clean orphaned Razorpay subs.
 
         Classifications:
@@ -836,8 +770,8 @@ def register(router: APIRouter) -> None:
         client = _get_razorpay_client()
 
         # Build lookup maps
-        sub_to_user: Dict[str, str] = {}
-        cust_to_user: Dict[str, str] = {}
+        sub_to_user: dict[str, str] = {}
+        cust_to_user: dict[str, str] = {}
         for u in all_users:
             sid = u.get("razorpay_subscription_id")
             cid = u.get("razorpay_customer_id")
@@ -848,7 +782,7 @@ def register(router: APIRouter) -> None:
                 cust_to_user[cid] = uid
 
         # Fetch all Razorpay subscriptions
-        triage: list[Dict[str, str]] = []
+        triage: list[dict[str, str]] = []
         cleaned = 0
         try:
             subs = client.subscription.all(
@@ -874,25 +808,25 @@ def register(router: APIRouter) -> None:
                 continue
 
             if sid in sub_to_user:
-                triage.append({
-                    "sub_id": sid,
-                    "customer_id": cid,
-                    "status": status,
-                    "classification": "matched",
-                    "action": "keep",
-                })
+                triage.append(
+                    {
+                        "sub_id": sid,
+                        "customer_id": cid,
+                        "status": status,
+                        "classification": "matched",
+                        "action": "keep",
+                    }
+                )
             elif cid in cust_to_user:
-                triage.append({
-                    "sub_id": sid,
-                    "customer_id": cid,
-                    "status": status,
-                    "classification": "orphaned",
-                    "action": (
-                        "will_cancel"
-                        if dry_run
-                        else "cancelled"
-                    ),
-                })
+                triage.append(
+                    {
+                        "sub_id": sid,
+                        "customer_id": cid,
+                        "status": status,
+                        "classification": "orphaned",
+                        "action": ("will_cancel" if dry_run else "cancelled"),
+                    }
+                )
                 if not dry_run:
                     try:
                         client.subscription.cancel(
@@ -900,22 +834,21 @@ def register(router: APIRouter) -> None:
                         )
                         cleaned += 1
                         _logger.info(
-                            "Cancelled orphan"
-                            " sub=%s",
+                            "Cancelled orphan" " sub=%s",
                             sid,
                         )
                     except Exception:
-                        triage[-1]["action"] = (
-                            "cancel_failed"
-                        )
+                        triage[-1]["action"] = "cancel_failed"
             else:
-                triage.append({
-                    "sub_id": sid,
-                    "customer_id": cid,
-                    "status": status,
-                    "classification": "unlinked",
-                    "action": "manual_review",
-                })
+                triage.append(
+                    {
+                        "sub_id": sid,
+                        "customer_id": cid,
+                        "status": status,
+                        "classification": "unlinked",
+                        "action": "manual_review",
+                    }
+                )
 
         return {
             "triage": triage,
@@ -938,35 +871,40 @@ def register(router: APIRouter) -> None:
     )
     async def razorpay_webhook(
         request: Request,
-    ) -> Dict[str, str]:
+    ) -> dict[str, str]:
         """Handle Razorpay webhook events."""
         from config import get_settings
 
         settings = get_settings()
         body = await request.body()
         signature = request.headers.get(
-            "X-Razorpay-Signature", "",
+            "X-Razorpay-Signature",
+            "",
         )
 
         secret = settings.razorpay_webhook_secret
-        if secret:
-            if not verify_razorpay_signature(
-                body, signature, secret,
-            ):
-                _logger.warning(
-                    "Invalid Razorpay signature",
-                )
-                raise HTTPException(
-                    status_code=400,
-                    detail="Invalid webhook signature",
-                )
-        else:
+        if not secret:
+            _logger.error(
+                "RAZORPAY_WEBHOOK_SECRET not set" " — rejecting webhook",
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Webhook not configured",
+            )
+        if not verify_razorpay_signature(
+            body,
+            signature,
+            secret,
+        ):
             _logger.warning(
-                "Webhook secret not configured"
-                " — skipping signature check",
+                "Invalid Razorpay signature",
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid webhook signature",
             )
 
-        payload: Dict[str, Any] = json.loads(body)
+        payload: dict[str, Any] = json.loads(body)
         event = payload.get("event", "")
         entity = (
             payload.get("payload", {})
@@ -974,13 +912,12 @@ def register(router: APIRouter) -> None:
             .get("entity", {})
         )
         payment_entity = (
-            payload.get("payload", {})
-            .get("payment", {})
-            .get("entity", {})
+            payload.get("payload", {}).get("payment", {}).get("entity", {})
         )
 
         _logger.info(
-            "Razorpay webhook: event=%s", event,
+            "Razorpay webhook: event=%s",
+            event,
         )
 
         if event == "subscription.charged":
@@ -989,7 +926,8 @@ def register(router: APIRouter) -> None:
             _handle_cancelled(entity)
         elif event == "payment.failed":
             _handle_payment_failed(
-                payment_entity, entity,
+                payment_entity,
+                entity,
             )
 
         return {"status": "ok"}
@@ -1004,7 +942,7 @@ def register(router: APIRouter) -> None:
     )
     async def stripe_webhook(
         request: Request,
-    ) -> Dict[str, str]:
+    ) -> dict[str, str]:
         """Handle Stripe webhook events."""
         stripe = _get_stripe_client()
         from config import get_settings
@@ -1012,39 +950,45 @@ def register(router: APIRouter) -> None:
         settings = get_settings()
         body = await request.body()
         sig = request.headers.get(
-            "Stripe-Signature", "",
+            "Stripe-Signature",
+            "",
         )
 
         # Verify signature
         secret = settings.stripe_webhook_secret
-        if secret:
-            try:
-                event = stripe.Webhook.construct_event(
-                    body, sig, secret,
-                )
-            except Exception as exc:
-                _logger.warning(
-                    "Stripe signature failed: %s",
-                    exc,
-                )
-                raise HTTPException(
-                    status_code=400,
-                    detail="Invalid Stripe signature",
-                )
-        else:
-            event = json.loads(body)
+        if not secret:
+            _logger.error(
+                "STRIPE_WEBHOOK_SECRET not set" " — rejecting webhook",
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Webhook not configured",
+            )
+        try:
+            event = stripe.Webhook.construct_event(
+                body,
+                sig,
+                secret,
+            )
+        except Exception as exc:
             _logger.warning(
-                "Stripe webhook secret not set"
-                " — skipping verification",
+                "Stripe signature failed: %s",
+                exc,
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid Stripe signature",
             )
 
         event_type = event.get(
-            "type", event.get("event", ""),
+            "type",
+            event.get("event", ""),
         )
         data = event.get("data", {}).get("object", {})
 
         _logger.info(
-            "Stripe webhook: type=%s", event_type,
+            "Stripe webhook: type=%s",
+            event_type,
         )
 
         if event_type == "checkout.session.completed":
@@ -1061,14 +1005,14 @@ def register(router: APIRouter) -> None:
 
 
 def _handle_stripe_checkout(
-    session: Dict[str, Any],
+    session: dict[str, Any],
 ) -> None:
     """Process checkout.session.completed."""
     cust_id = session.get("customer", "")
     sub_id = session.get("subscription", "")
     meta = session.get("metadata", {})
     user_id = meta.get("user_id", "")
-    tier = meta.get("tier", "pro")
+    tier = meta.get("tier", "")
 
     if not user_id:
         _logger.warning(
@@ -1076,12 +1020,17 @@ def _handle_stripe_checkout(
         )
         return
 
+    if tier not in ("pro", "premium"):
+        _logger.error(
+            "Stripe: invalid tier in metadata: %s",
+            tier,
+        )
+        return
+
     repo = _helpers._get_repo()
     old_user = repo.get_by_id(user_id)
     old_tier = (
-        old_user.get("subscription_tier")
-        if old_user
-        else None
+        old_user.get("subscription_tier") if old_user else None
     ) or "free"
     _safe_update(
         repo,
@@ -1106,9 +1055,7 @@ def _handle_stripe_checkout(
         amount=amt,
         tier_before=old_tier,
         tier_after=tier,
-        currency=(
-            session.get("currency", "usd").upper()
-        ),
+        currency=(session.get("currency", "usd").upper()),
         raw_payload=json.dumps(session),
     )
     _logger.info(
@@ -1119,7 +1066,7 @@ def _handle_stripe_checkout(
 
 
 def _handle_stripe_sub_change(
-    sub: Dict[str, Any],
+    sub: dict[str, Any],
 ) -> None:
     """Process subscription.deleted/updated."""
     status = sub.get("status", "")
@@ -1147,10 +1094,7 @@ def _handle_stripe_sub_change(
             event_type="cancelled",
             subscription_id=sub.get("id"),
             customer_id=cust_id,
-            tier_before=(
-                user.get("subscription_tier")
-                or "free"
-            ),
+            tier_before=(user.get("subscription_tier") or "free"),
             tier_after="free",
             raw_payload=json.dumps(sub),
         )
@@ -1161,7 +1105,7 @@ def _handle_stripe_sub_change(
 
 
 def _handle_stripe_payment_failed(
-    invoice: Dict[str, Any],
+    invoice: dict[str, Any],
 ) -> None:
     """Process invoice.payment_failed."""
     cust_id = invoice.get("customer", "")
@@ -1199,19 +1143,17 @@ def _find_user_by_stripe(
     """Find user by Stripe IDs (sub_id first)."""
     users = repo.list_all()
     if sub_id:
-        for u in users:
-            if (
-                u.get("stripe_subscription_id")
-                == sub_id
-            ):
-                return u
+        match = next(
+            (u for u in users if u.get("stripe_subscription_id") == sub_id),
+            None,
+        )
+        if match:
+            return match
     if cust_id:
-        for u in users:
-            if (
-                u.get("stripe_customer_id")
-                == cust_id
-            ):
-                return u
+        return next(
+            (u for u in users if u.get("stripe_customer_id") == cust_id),
+            None,
+        )
     return None
 
 
@@ -1223,7 +1165,7 @@ def _find_user_by_stripe(
 def _safe_update(
     repo: Any,
     user_id: str,
-    updates: Dict[str, Any],
+    updates: dict[str, Any],
 ) -> None:
     """Update with retry on Iceberg commit conflict."""
     for attempt in range(3):
@@ -1231,13 +1173,9 @@ def _safe_update(
             repo.update(user_id, updates)
             return
         except Exception as exc:
-            if (
-                "CommitFailed" in type(exc).__name__
-                and attempt < 2
-            ):
+            if "CommitFailed" in type(exc).__name__ and attempt < 2:
                 _logger.warning(
-                    "Iceberg conflict, retry %d/3"
-                    " user=%s",
+                    "Iceberg conflict, retry %d/3" " user=%s",
                     attempt + 1,
                     user_id,
                 )
@@ -1250,7 +1188,7 @@ def _safe_update(
 # ---------------------------------------------------------------
 
 
-def _handle_charged(entity: Dict[str, Any]) -> None:
+def _handle_charged(entity: dict[str, Any]) -> None:
     """Process subscription.charged — activate tier.
 
     Only updates if the webhook sub_id matches the
@@ -1276,14 +1214,15 @@ def _handle_charged(entity: Dict[str, Any]) -> None:
     stored_sub = user.get("razorpay_subscription_id")
     if stored_sub and stored_sub != sub_id:
         _logger.info(
-            "Ignoring charged for old sub=%s"
-            " (current=%s)",
+            "Ignoring charged for old sub=%s" " (current=%s)",
             sub_id,
             stored_sub,
         )
         return
 
     tier = _plan_id_to_tier(plan_id)
+    if tier is None:
+        return
     _safe_update(
         repo,
         user["user_id"],
@@ -1302,9 +1241,7 @@ def _handle_charged(entity: Dict[str, Any]) -> None:
         subscription_id=sub_id,
         customer_id=cust_id,
         amount=float(TIER_PRICE_INR.get(tier, 0)),
-        tier_before=(
-            user.get("subscription_tier") or "free"
-        ),
+        tier_before=(user.get("subscription_tier") or "free"),
         tier_after=tier,
         currency="INR",
         raw_payload=json.dumps(entity),
@@ -1316,7 +1253,7 @@ def _handle_charged(entity: Dict[str, Any]) -> None:
     )
 
 
-def _handle_cancelled(entity: Dict[str, Any]) -> None:
+def _handle_cancelled(entity: dict[str, Any]) -> None:
     """Process subscription.cancelled — reset to free."""
     sub_id = entity.get("id", "")
     cust_id = entity.get("customer_id", "")
@@ -1353,22 +1290,19 @@ def _handle_cancelled(entity: Dict[str, Any]) -> None:
         event_type="cancelled",
         subscription_id=sub_id,
         customer_id=cust_id,
-        tier_before=(
-            user.get("subscription_tier") or "free"
-        ),
+        tier_before=(user.get("subscription_tier") or "free"),
         tier_after="free",
         raw_payload=json.dumps(entity),
     )
     _logger.info(
-        "Subscription cancelled via webhook:"
-        " user_id=%s",
+        "Subscription cancelled via webhook:" " user_id=%s",
         user["user_id"],
     )
 
 
 def _handle_payment_failed(
-    payment: Dict[str, Any],
-    sub_entity: Dict[str, Any],
+    payment: dict[str, Any],
+    sub_entity: dict[str, Any],
 ) -> None:
     """Process payment.failed — mark past_due."""
     sub_id = sub_entity.get("id", "")
@@ -1376,7 +1310,9 @@ def _handle_payment_failed(
 
     repo = _helpers._get_repo()
     user = _find_user_by_razorpay(
-        repo, sub_id, cust_id,
+        repo,
+        sub_id,
+        cust_id,
     )
     if user is None:
         return
@@ -1416,34 +1352,39 @@ def _find_user_by_razorpay(
     to avoid confusion with orphaned subscriptions.
     """
     users = repo.list_all()
-
-    # Pass 1: exact subscription_id match
     if sub_id:
-        for u in users:
-            if (
-                u.get("razorpay_subscription_id")
-                == sub_id
-            ):
-                return u
-
-    # Pass 2: fallback to customer_id
+        match = next(
+            (u for u in users if u.get("razorpay_subscription_id") == sub_id),
+            None,
+        )
+        if match:
+            return match
     if cust_id:
-        for u in users:
-            if (
-                u.get("razorpay_customer_id")
-                == cust_id
-            ):
-                return u
-
+        return next(
+            (u for u in users if u.get("razorpay_customer_id") == cust_id),
+            None,
+        )
     return None
 
 
-def _plan_id_to_tier(plan_id: str) -> str:
-    """Map Razorpay plan ID to tier name."""
+def _plan_id_to_tier(plan_id: str) -> str | None:
+    """Map Razorpay plan ID to tier name.
+
+    Returns:
+        ``"pro"``, ``"premium"``, or ``None`` if unknown.
+    """
     import os
 
     if plan_id == os.environ.get(
         "RAZORPAY_PLAN_PREMIUM",
     ):
         return "premium"
-    return "pro"
+    if plan_id == os.environ.get(
+        "RAZORPAY_PLAN_PRO",
+    ):
+        return "pro"
+    _logger.error(
+        "Unknown Razorpay plan_id: %s",
+        plan_id,
+    )
+    return None

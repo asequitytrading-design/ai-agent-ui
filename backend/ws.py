@@ -244,35 +244,35 @@ async def _handle_chat(
     """
     message = msg.get("message", "")
     history = msg.get("history", [])
-    user_id = msg.get(
-        "user_id",
-        user_ctx.get("user_id"),
-    )
+    user_id = user_ctx["user_id"]
     timeout = settings.agent_timeout_seconds
 
     event_queue: queue.Queue = queue.Queue()
 
     # ── Choose execution path ─────────────────────
-    use_graph = (
-        graph is not None
-        and getattr(settings, "use_langgraph", False)
-    )
+    use_graph = graph is not None and getattr(settings, "use_langgraph", False)
 
     # Check quota before dispatching
     try:
         from usage_tracker import is_quota_exceeded
+
         if is_quota_exceeded(user_id):
-            event_queue.put({
-                "type": "error",
-                "message": (
-                    "Monthly analysis quota exceeded."
-                    " Upgrade your plan for more."
-                ),
-            })
+            event_queue.put(
+                {
+                    "type": "error",
+                    "message": (
+                        "Monthly analysis quota exceeded."
+                        " Upgrade your plan for more."
+                    ),
+                }
+            )
             event_queue.put(None)
             return event_queue
     except Exception:
-        pass
+        _logger.debug(
+            "Quota check failed for WS user",
+            exc_info=True,
+        )
 
     def run() -> None:
         """Execute in a worker thread."""
@@ -280,22 +280,38 @@ async def _handle_chat(
         try:
             if use_graph:
                 _run_graph(
-                    graph, message, history,
-                    user_id, event_queue,
+                    graph,
+                    message,
+                    history,
+                    user_id,
+                    event_queue,
                 )
             else:
                 _run_legacy(
-                    message, history,
-                    agent_registry, event_queue,
+                    message,
+                    history,
+                    agent_registry,
+                    event_queue,
                     user_id,
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            _logger.warning(
+                "WS worker error: %s",
+                exc,
+                exc_info=True,
+            )
+            event_queue.put(
+                {
+                    "type": "error",
+                    "message": str(exc),
+                }
+            )
         finally:
             event_queue.put(None)
 
     worker = threading.Thread(
-        target=run, daemon=True,
+        target=run,
+        daemon=True,
     )
     worker.start()
 
@@ -303,25 +319,21 @@ async def _handle_chat(
     while True:
         elapsed = time.time() - start
         if elapsed >= timeout:
-            await ws.send_json({
-                "type": "timeout",
-                "message": (
-                    "Agent timed out"
-                    f" after {timeout}s"
-                ),
-            })
+            await ws.send_json(
+                {
+                    "type": "timeout",
+                    "message": ("Agent timed out" f" after {timeout}s"),
+                }
+            )
             break
 
         remaining = timeout - elapsed
         try:
-            item = (
-                await asyncio.get_event_loop()
-                .run_in_executor(
-                    executor,
-                    lambda: event_queue.get(
-                        timeout=min(remaining, 0.5),
-                    ),
-                )
+            item = await asyncio.get_running_loop().run_in_executor(
+                executor,
+                lambda: event_queue.get(
+                    timeout=min(remaining, 0.5),
+                ),
             )
         except queue.Empty:
             continue
@@ -346,7 +358,11 @@ async def _handle_chat(
 
 
 def _run_graph(
-    graph, message, history, user_id, event_queue,
+    graph,
+    message,
+    history,
+    user_id,
+    event_queue,
 ):
     """Run LangGraph supervisor in worker thread."""
     from langchain_core.messages import (
@@ -355,7 +371,7 @@ def _run_graph(
     )
 
     msgs = []
-    for h in (history or []):
+    for h in history or []:
         role = h.get("role", "user")
         content = h.get("content", "")
         if role == "assistant":
@@ -367,34 +383,9 @@ def _run_graph(
     msgs.append(HumanMessage(content=message))
 
     # Build user context (currency/market mix)
-    user_ctx = {}
-    try:
-        from stocks.repository import (
-            StockRepository,
-        )
-        repo = StockRepository()
-        holdings = repo.get_portfolio_holdings(
-            user_id or "",
-        )
-        if not holdings.empty:
-            currencies: dict[str, int] = {}
-            markets: dict[str, int] = {}
-            for _, h in holdings.iterrows():
-                ccy = h.get("currency", "USD")
-                mkt = h.get("market", "us")
-                currencies[ccy] = (
-                    currencies.get(ccy, 0) + 1
-                )
-                markets[mkt] = (
-                    markets.get(mkt, 0) + 1
-                )
-            user_ctx = {
-                "currencies": currencies,
-                "markets": markets,
-                "total_holdings": len(holdings),
-            }
-    except Exception:
-        pass
+    from user_context import build_user_context
+
+    user_ctx = build_user_context(user_id or "")
 
     input_state = {
         "messages": msgs,
@@ -417,6 +408,7 @@ def _run_graph(
     # Wire real-time event sink so sub-agent tool
     # events push to the WS event queue immediately.
     from agents.sub_agents import set_event_sink
+
     set_event_sink(event_queue.put)
 
     try:
@@ -425,27 +417,33 @@ def _run_graph(
         set_event_sink(None)
 
     # Emit final (tool events already sent in real-time)
-    event_queue.put({
-        "type": "final",
-        "response": result.get(
-            "final_response", ""
-        ),
-        "agent": result.get(
-            "current_agent", ""
-        ),
-    })
+    event_queue.put(
+        {
+            "type": "final",
+            "response": result.get("final_response", ""),
+            "agent": result.get("current_agent", ""),
+        }
+    )
 
     # Track usage
     if user_id:
         try:
             from usage_tracker import increment_usage
+
             increment_usage(user_id)
         except Exception:
-            pass
+            _logger.debug(
+                "Usage tracking failed for %s",
+                user_id,
+                exc_info=True,
+            )
 
 
 def _run_legacy(
-    message, history, agent_registry, event_queue,
+    message,
+    history,
+    agent_registry,
+    event_queue,
     user_id=None,
 ):
     """Run legacy agent in worker thread."""
@@ -461,9 +459,14 @@ def _run_legacy(
     if user_id:
         try:
             from usage_tracker import increment_usage
+
             increment_usage(user_id)
         except Exception:
-            pass
+            _logger.debug(
+                "Usage tracking failed for %s",
+                user_id,
+                exc_info=True,
+            )
 
 
 async def _close(ws, code: int, reason: str) -> None:

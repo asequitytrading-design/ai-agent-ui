@@ -10,7 +10,6 @@ from __future__ import annotations
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -50,12 +49,20 @@ def _set_refresh_cookie(
         response: The outgoing response.
         refresh_token: JWT refresh token string.
     """
+    try:
+        from config import get_settings as _get_settings
+
+        _secure = not getattr(
+            _get_settings(), "debug", True,
+        )
+    except Exception:
+        _secure = False
     response.set_cookie(
         key=_COOKIE_KEY,
         value=refresh_token,
         httponly=True,
-        secure=False,  # True in production (HTTPS)
-        samesite="lax",
+        secure=_secure,
+        samesite="strict",
         path=_COOKIE_PATH,
         max_age=_COOKIE_MAX_AGE,
     )
@@ -138,12 +145,8 @@ def register(router: APIRouter) -> None:
         service.register_session(
             user_id=user["user_id"],
             refresh_token=refresh,
-            ip_address=(
-                request.client.host if request.client else ""
-            ),
-            user_agent=request.headers.get(
-                "user-agent", ""
-            ),
+            ip_address=(request.client.host if request.client else ""),
+            user_agent=request.headers.get("user-agent", ""),
         )
         _logger.info(
             "User logged in: user_id=%s tier=%s",
@@ -164,7 +167,9 @@ def register(router: APIRouter) -> None:
         response_model=TokenResponse,
         tags=["auth"],
     )
+    @limiter.limit(login_limit)
     def login_form(
+        request: Request,
         form: OAuth2PasswordRequestForm = Depends(),
         service: AuthService = Depends(get_auth_service),
     ) -> TokenResponse:
@@ -189,7 +194,9 @@ def register(router: APIRouter) -> None:
             user["user_id"], {"last_login_at": datetime.now(timezone.utc)}
         )
         repo.append_audit_event(
-            "LOGIN", user["user_id"], user["user_id"],
+            "LOGIN",
+            user["user_id"],
+            user["user_id"],
         )
         sub_claims = _helpers._subscription_claims(user)
         access = service.create_access_token(
@@ -202,7 +209,8 @@ def register(router: APIRouter) -> None:
             user_id=user["user_id"],
         )
         return TokenResponse(
-            access_token=access, refresh_token=refresh,
+            access_token=access,
+            refresh_token=refresh,
         )
 
     @router.post(
@@ -236,12 +244,10 @@ def register(router: APIRouter) -> None:
         """
         # Prefer cookie, fall back to body.
         token = request.cookies.get(_COOKIE_KEY)
-        _logger.info(
-            "Refresh: cookie_key=%s found=%s"
-            " all_cookies=%s origin=%s",
+        _logger.debug(
+            "Refresh: cookie_key=%s found=%s" " origin=%s",
             _COOKIE_KEY,
             bool(token),
-            list(request.cookies.keys()),
             request.headers.get("origin", "?"),
         )
         if not token and body:
@@ -332,7 +338,7 @@ def register(router: APIRouter) -> None:
         request: Request,
         body: PasswordResetRequestBody,
         current_user: UserContext = Depends(get_current_user),
-    ) -> Dict[str, str]:
+    ) -> dict[str, str]:
         """Generate a single-use password reset token for the requesting user.
 
         Args:
@@ -370,23 +376,31 @@ def register(router: APIRouter) -> None:
             metadata={"stage": "request"},
         )
         _logger.info(
-            "Password reset requested by user_id=%s", current_user.user_id
+            "Password reset requested by user_id=%s",
+            current_user.user_id,
         )
-        return {
-            "detail": (
-                "Password reset token generated"
-                " (development: token included"
-                " in response)."
-            ),
-            "reset_token": reset_token,
-        }
+        from config import get_settings as _get_settings
 
-    @router.post("/auth/password-reset/confirm", tags=["auth"])
+        result: dict[str, str] = {
+            "detail": "Password reset token generated.",
+        }
+        if _get_settings().debug:
+            result["reset_token"] = reset_token
+        return result
+
+    @router.post(
+        "/auth/password-reset/confirm",
+        tags=["auth"],
+    )
+    @limiter.limit(register_limit)
     def password_reset_confirm(
+        request: Request,
         body: PasswordResetConfirmBody,
-        current_user: UserContext = Depends(get_current_user),
+        current_user: UserContext = Depends(
+            get_current_user,
+        ),
         service: AuthService = Depends(get_auth_service),
-    ) -> Dict[str, str]:
+    ) -> dict[str, str]:
         """Apply a new password using a previously issued reset token.
 
         Args:
@@ -442,7 +456,7 @@ def register(router: APIRouter) -> None:
     @router.get("/auth/health", tags=["auth"])
     def auth_health(
         service: AuthService = Depends(get_auth_service),
-    ) -> Dict[str, object]:
+    ) -> dict[str, object]:
         """Return token-store health status.
 
         Returns:

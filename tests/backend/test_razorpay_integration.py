@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import os
 from unittest.mock import MagicMock, patch
 
 from auth.endpoints.subscription_routes import (
@@ -74,10 +75,21 @@ class TestPlanIdToTier:
         "os.environ",
         {"RAZORPAY_PLAN_PREMIUM": "plan_premium_123"},
     )
-    def test_other_plan_maps_to_pro(self):
+    def test_unknown_plan_returns_none(self):
         assert _plan_id_to_tier(
-            "plan_pro_456",
-        ) == "pro"
+            "plan_unknown_456",
+        ) is None
+
+    def test_pro_plan_maps_correctly(self):
+        import os
+
+        with patch.dict(
+            os.environ,
+            {"RAZORPAY_PLAN_PRO": "plan_pro_456"},
+        ):
+            assert _plan_id_to_tier(
+                "plan_pro_456",
+            ) == "pro"
 
 
 # -----------------------------------------------------------
@@ -146,6 +158,10 @@ class TestFindUserByRazorpay:
 # -----------------------------------------------------------
 # Webhook event handlers
 # -----------------------------------------------------------
+@patch.dict(
+    os.environ,
+    {"RAZORPAY_PLAN_PRO": "plan_pro"},
+)
 class TestWebhookHandlers:
     """Verify webhook event processing."""
 

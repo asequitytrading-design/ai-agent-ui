@@ -27,7 +27,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any
 
 import auth.password as _pw
 import auth.tokens as _tk
@@ -92,7 +92,7 @@ class AuthService:
     # Store health
     # ----------------------------------------------------------
 
-    def store_health(self) -> Dict[str, object]:
+    def store_health(self) -> dict[str, object]:
         """Return token-store backend type and ping status.
 
         Returns:
@@ -204,7 +204,7 @@ class AuthService:
         self,
         token: str,
         expected_type: str | None = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Decode and validate a JWT.
 
         Args:
@@ -317,7 +317,7 @@ class AuthService:
             jti,
         )
 
-    def list_sessions(self, user_id: str) -> List[Dict[str, Any]]:
+    def list_sessions(self, user_id: str) -> list[dict[str, Any]]:
         """Return all active sessions for a user.
 
         Args:
@@ -328,7 +328,7 @@ class AuthService:
         """
         prefix = f"session:{user_id}:"
         keys = self._store.keys_by_prefix(prefix)
-        sessions: List[Dict[str, Any]] = []
+        sessions: list[dict[str, Any]] = []
         for k in keys:
             raw = self._store.get_json(k)
             if raw:

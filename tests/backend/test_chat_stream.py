@@ -41,6 +41,16 @@ def app():
 
 @pytest.fixture(scope="module")
 def client(app):
+    from auth.dependencies import get_current_user
+    from auth.models import UserContext
+
+    app.dependency_overrides[get_current_user] = (
+        lambda: UserContext(
+            user_id="test-user",
+            email="test@test.com",
+            role="user",
+        )
+    )
     return TestClient(app, raise_server_exceptions=False)
 
 
