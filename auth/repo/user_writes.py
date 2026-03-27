@@ -76,6 +76,34 @@ def create(cat, user_data: Dict[str, Any]) -> Dict[str, Any]:
             if isinstance(user_data.get("page_permissions"), dict)
             else user_data.get("page_permissions")
         ),
+        "subscription_tier": user_data.get(
+            "subscription_tier", "free"
+        ),
+        "subscription_status": user_data.get(
+            "subscription_status", "active"
+        ),
+        "razorpay_customer_id": user_data.get(
+            "razorpay_customer_id"
+        ),
+        "razorpay_subscription_id": user_data.get(
+            "razorpay_subscription_id"
+        ),
+        "stripe_customer_id": user_data.get(
+            "stripe_customer_id"
+        ),
+        "stripe_subscription_id": user_data.get(
+            "stripe_subscription_id"
+        ),
+        "monthly_usage_count": user_data.get(
+            "monthly_usage_count", 0
+        ),
+        "usage_month": user_data.get("usage_month"),
+        "subscription_start_at": _to_ts(
+            user_data.get("subscription_start_at")
+        ),
+        "subscription_end_at": _to_ts(
+            user_data.get("subscription_end_at")
+        ),
     }
 
     arrow_table = pa.table(
