@@ -725,6 +725,12 @@ def create_insights_router() -> APIRouter:
             "all",
             description="'all', 'india', or 'us'",
         ),
+        source: str = Query(
+            "portfolio",
+            description=(
+                "'portfolio' or 'watchlist'"
+            ),
+        ),
         user: UserContext = Depends(get_current_user),
     ):
         """Pairwise daily-returns correlation matrix."""
@@ -732,6 +738,7 @@ def create_insights_router() -> APIRouter:
         ck = (
             f"cache:insights:correlation:"
             f"{user.user_id}:{period}:{market}"
+            f":{source}"
         )
         hit = cache.get(ck)
         if hit is not None:
@@ -741,7 +748,25 @@ def create_insights_router() -> APIRouter:
             )
 
         stock_repo = _get_stock_repo()
-        tickers = _get_user_tickers(user)
+
+        # Source: portfolio or watchlist
+        if source == "portfolio":
+            holdings_df = (
+                stock_repo.get_portfolio_holdings(
+                    user.user_id,
+                )
+            )
+            if holdings_df.empty:
+                tickers = []
+            else:
+                tickers = list(
+                    holdings_df["ticker"]
+                    .astype(str)
+                    .unique(),
+                )
+        else:
+            tickers = _get_user_tickers(user)
+
         if not tickers:
             return CorrelationResponse(period=period)
 

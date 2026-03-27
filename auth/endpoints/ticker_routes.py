@@ -11,6 +11,7 @@ Endpoints
 """
 
 import logging
+import threading
 import uuid
 from datetime import date
 from typing import Any, Dict, List
@@ -31,6 +32,30 @@ router = APIRouter(
     prefix="/users/me",
     tags=["tickers"],
 )
+
+
+def _fetch_company_info_bg(ticker: str) -> None:
+    """Background: fetch yfinance info and store in Iceberg."""
+    try:
+        import yfinance as yf
+        from tools._stock_shared import _get_repo
+
+        repo = _get_repo()
+        if repo is None:
+            return
+        info = yf.Ticker(ticker).info
+        if info:
+            repo.insert_company_info(ticker, info)
+            _logger.info(
+                "Company info fetched for %s (bg)",
+                ticker,
+            )
+    except Exception:
+        _logger.debug(
+            "BG company info fetch failed: %s",
+            ticker,
+            exc_info=True,
+        )
 
 
 class LinkTickerRequest(BaseModel):
@@ -130,6 +155,12 @@ def link_ticker(
             ticker,
             body.source,
         )
+        # Populate company_info in background.
+        threading.Thread(
+            target=_fetch_company_info_bg,
+            args=(ticker,),
+            daemon=True,
+        ).start()
         return {"linked": True, "ticker": ticker}
 
     return {
@@ -173,9 +204,13 @@ def unlink_ticker(
         ) from exc
 
     if not removed:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Ticker '{normalised}' not linked",
+        # Ticker may exist only in portfolio_transactions
+        # (added before auto-link was in place).  Still
+        # return success so the UI can proceed.
+        _logger.debug(
+            "Ticker %s not in user_tickers for %s " "(may be portfolio-only)",
+            normalised,
+            user.user_id,
         )
 
     _logger.info(
@@ -429,6 +464,21 @@ def add_portfolio_holding(
         "notes": body.notes,
     }
     stock_repo.add_portfolio_transaction(txn)
+
+    # Auto-link to watchlist so the ticker appears
+    # in both Portfolio and Watchlist views.
+    repo = _helpers._get_repo()
+    try:
+        repo.link_ticker(
+            user.user_id,
+            ticker,
+            "portfolio",
+        )
+    except Exception:
+        _logger.debug(
+            "Auto-link failed for %s (may already exist)",
+            ticker,
+        )
 
     # Invalidate portfolio caches
     try:

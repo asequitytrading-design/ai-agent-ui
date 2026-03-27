@@ -28,6 +28,7 @@ import type { UserFormData } from "@/components/admin/UserModal";
 import { UserModal } from "@/components/admin/UserModal";
 import { ResetPasswordModal } from "@/components/admin/ResetPasswordModal";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { SchedulerTab } from "@/components/admin/SchedulerTab";
 import {
   InsightsTable,
   type Column,
@@ -1478,7 +1479,8 @@ type AdminTab =
   | "audit"
   | "observability"
   | "maintenance"
-  | "transactions";
+  | "transactions"
+  | "scheduler";
 
 export default function AdminPage() {
   const [tab, setTab] =
@@ -1503,6 +1505,10 @@ export default function AdminPage() {
             {
               id: "transactions",
               label: "Transactions",
+            },
+            {
+              id: "scheduler",
+              label: "Scheduler",
             },
           ] as const
         ).map((t) => (
@@ -1538,6 +1544,7 @@ export default function AdminPage() {
         {tab === "transactions" && (
           <TransactionsTab />
         )}
+        {tab === "scheduler" && <SchedulerTab />}
       </div>
     </div>
   );

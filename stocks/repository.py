@@ -3809,3 +3809,284 @@ class StockRepository:
                 gap_id,
                 exc_info=True,
             )
+
+    # ------------------------------------------------------------------
+    # Scheduler: scheduled_jobs
+    # ------------------------------------------------------------------
+
+    _SCHEDULED_JOBS = "stocks.scheduled_jobs"
+
+    def get_scheduled_jobs(self) -> list[dict]:
+        """Return all scheduled job definitions."""
+        try:
+            df = self._table_to_df(self._SCHEDULED_JOBS)
+            if df.empty:
+                return []
+            return df.to_dict(orient="records")
+        except Exception:
+            _logger.warning(
+                "get_scheduled_jobs failed",
+                exc_info=True,
+            )
+            return []
+
+    def upsert_scheduled_job(self, job: dict) -> None:
+        """Insert or update a scheduled job."""
+        try:
+            tbl = self._load_table(self._SCHEDULED_JOBS)
+            df = tbl.scan().to_pandas()
+            mask = df["job_id"] == job["job_id"]
+            if mask.any():
+                for k, v in job.items():
+                    df.loc[mask, k] = v
+            else:
+                new = pd.DataFrame([job])
+                df = pd.concat(
+                    [df, new],
+                    ignore_index=True,
+                )
+            schema = tbl.schema().as_arrow()
+            at = pa.Table.from_pandas(df, schema=schema)
+            self._overwrite_table(
+                self._SCHEDULED_JOBS,
+                at,
+            )
+        except Exception:
+            _logger.warning(
+                "upsert_scheduled_job failed",
+                exc_info=True,
+            )
+
+    def delete_scheduled_job(self, job_id: str) -> None:
+        """Delete a scheduled job by ID."""
+        try:
+            tbl = self._load_table(self._SCHEDULED_JOBS)
+            df = tbl.scan().to_pandas()
+            df = df[df["job_id"] != job_id]
+            schema = tbl.schema().as_arrow()
+            at = pa.Table.from_pandas(df, schema=schema)
+            self._overwrite_table(
+                self._SCHEDULED_JOBS,
+                at,
+            )
+        except Exception:
+            _logger.warning(
+                "delete_scheduled_job %s failed",
+                job_id,
+                exc_info=True,
+            )
+
+    # ------------------------------------------------------------------
+    # Scheduler: scheduler_runs
+    # ------------------------------------------------------------------
+
+    _SCHEDULER_RUNS = "stocks.scheduler_runs"
+
+    def append_scheduler_run(self, run: dict) -> None:
+        """Append a single scheduler run record."""
+        try:
+            # Strip tz from datetimes — Iceberg uses
+            # tz-naive TimestampType
+            clean = {}
+            for k, v in run.items():
+                if hasattr(v, "tzinfo") and v.tzinfo:
+                    v = v.replace(tzinfo=None)
+                clean[k] = v
+            tbl = self._load_table(self._SCHEDULER_RUNS)
+            schema = tbl.schema().as_arrow()
+            df = pd.DataFrame([clean])
+            at = pa.Table.from_pandas(
+                df,
+                schema=schema,
+            )
+            self._append_rows(self._SCHEDULER_RUNS, at)
+        except Exception:
+            _logger.error(
+                "append_scheduler_run failed",
+                exc_info=True,
+            )
+
+    def update_scheduler_run(
+        self,
+        run_id: str,
+        updates: dict,
+    ) -> None:
+        """Update fields on an existing run record."""
+        try:
+            tbl = self._load_table(self._SCHEDULER_RUNS)
+            df = tbl.scan().to_pandas()
+            mask = df["run_id"] == run_id
+            if not mask.any():
+                _logger.warning(
+                    "update_scheduler_run: run_id" " %s not found",
+                    run_id,
+                )
+                return
+            # Strip tz from datetime values to match
+            # Iceberg's tz-naive timestamp columns
+            clean = {}
+            for k, v in updates.items():
+                if hasattr(v, "tzinfo") and v.tzinfo:
+                    v = v.replace(tzinfo=None)
+                clean[k] = v
+            for k, v in clean.items():
+                df.loc[mask, k] = v
+            schema = tbl.schema().as_arrow()
+            at = pa.Table.from_pandas(
+                df,
+                schema=schema,
+            )
+            self._overwrite_table(
+                self._SCHEDULER_RUNS,
+                at,
+            )
+        except Exception:
+            _logger.error(
+                "update_scheduler_run %s failed",
+                run_id,
+                exc_info=True,
+            )
+
+    def get_scheduler_runs(
+        self,
+        days: int = 7,
+    ) -> list[dict]:
+        """Return scheduler runs from the last N days."""
+        try:
+            df = self._table_to_df(self._SCHEDULER_RUNS)
+            if df.empty:
+                return []
+            if "started_at" in df.columns:
+                df["started_at"] = pd.to_datetime(
+                    df["started_at"],
+                    utc=True,
+                    errors="coerce",
+                )
+                cutoff = pd.Timestamp.now(
+                    tz="UTC",
+                ) - pd.Timedelta(days=days)
+                df = df[
+                    df["started_at"].notna() & (df["started_at"] >= cutoff)
+                ]
+                df = df.sort_values(
+                    "started_at",
+                    ascending=False,
+                )
+            if "completed_at" in df.columns:
+                df["completed_at"] = pd.to_datetime(
+                    df["completed_at"],
+                    utc=True,
+                    errors="coerce",
+                )
+            # Replace NaN/NaT with None for JSON
+            df = df.where(df.notna(), None)
+            records = df.to_dict(orient="records")
+            for r in records:
+                for k, v in list(r.items()):
+                    if hasattr(v, "isoformat"):
+                        r[k] = v.isoformat()
+                    elif isinstance(v, float) and (v != v):  # NaN check
+                        r[k] = None
+            return records
+        except Exception:
+            _logger.error(
+                "get_scheduler_runs failed",
+                exc_info=True,
+            )
+            return []
+
+    def get_scheduler_run_stats(self) -> dict:
+        """Return aggregate stats for the scheduler
+        dashboard cards."""
+        try:
+            runs = self.get_scheduler_runs(days=1)
+            total = len(runs)
+            success = sum(1 for r in runs if r.get("status") == "success")
+            failed = sum(1 for r in runs if r.get("status") == "failed")
+            running = sum(1 for r in runs if r.get("status") == "running")
+            return {
+                "runs_today": total,
+                "runs_today_success": success,
+                "runs_today_failed": failed,
+                "runs_today_running": running,
+            }
+        except Exception:
+            _logger.warning(
+                "get_scheduler_run_stats failed",
+                exc_info=True,
+            )
+            return {
+                "runs_today": 0,
+                "runs_today_success": 0,
+                "runs_today_failed": 0,
+                "runs_today_running": 0,
+            }
+
+    # ── Sentiment Scores ───────────────────────────────
+
+    def insert_sentiment_score(
+        self,
+        ticker: str,
+        score_date: date,
+        avg_score: float,
+        headline_count: int = 0,
+        source: str = "llm",
+    ) -> None:
+        """Append a daily sentiment score row."""
+        row = pa.table(
+            {
+                "ticker": pa.array(
+                    [ticker.upper()],
+                    pa.string(),
+                ),
+                "score_date": pa.array(
+                    [score_date],
+                    pa.date32(),
+                ),
+                "avg_score": pa.array(
+                    [avg_score],
+                    pa.float64(),
+                ),
+                "headline_count": pa.array(
+                    [headline_count],
+                    pa.int32(),
+                ),
+                "source": pa.array(
+                    [source],
+                    pa.string(),
+                ),
+                "scored_at": pa.array(
+                    [_now_utc()],
+                    pa.timestamp("us"),
+                ),
+            }
+        )
+        self._append_rows(
+            "stocks.sentiment_scores",
+            row,
+        )
+
+    def get_sentiment_series(
+        self,
+        ticker: str,
+        start_date: date | None = None,
+    ) -> pd.DataFrame:
+        """Return sentiment score series for *ticker*."""
+        df = self._scan_ticker(
+            "stocks.sentiment_scores",
+            ticker.upper(),
+        )
+        if df.empty:
+            return df
+        if start_date is not None:
+            df = df[df["score_date"] >= start_date]
+        return (
+            df.sort_values(
+                "score_date",
+            )
+            .drop_duplicates(
+                subset=["score_date"],
+                keep="last",
+            )
+            .reset_index(drop=True)
+        )

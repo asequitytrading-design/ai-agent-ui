@@ -450,7 +450,6 @@ class TestAnalyseStockPrice:
         monkeypatch.setattr(_ash, "_get_repo", lambda: repo)
         monkeypatch.setattr(_ash, "_require_repo", lambda: repo)
         monkeypatch.setattr(_ash, "_CACHE_DIR", tmp_path / "cache")
-        monkeypatch.setattr(_ash, "_CHARTS_ANALYSIS", tmp_path / "charts")
 
         result = price_analysis_tool.analyse_stock_price.invoke(
             {"ticker": "AAPL"}
@@ -477,7 +476,6 @@ class TestAnalyseStockPrice:
         monkeypatch.setattr(_ash, "_get_repo", lambda: repo)
         monkeypatch.setattr(_ash, "_require_repo", lambda: repo)
         monkeypatch.setattr(_ash, "_CACHE_DIR", tmp_path / "cache")
-        monkeypatch.setattr(_ash, "_CHARTS_ANALYSIS", tmp_path / "charts")
 
         result = price_analysis_tool.analyse_stock_price.invoke(
             {"ticker": "AAPL"}
@@ -564,9 +562,7 @@ class TestForecastStock:
 
         monkeypatch.setattr(_fsh, "_get_repo", lambda: repo)
         monkeypatch.setattr(_fsh, "_require_repo", lambda: repo)
-        monkeypatch.setattr(_fsh, "_DATA_FORECASTS", tmp_path / "forecasts")
         monkeypatch.setattr(_fsh, "_CACHE_DIR", tmp_path / "cache")
-        monkeypatch.setattr(_fsh, "_CHARTS_FORECASTS", tmp_path / "charts")
 
         result = forecasting_tool.forecast_stock.invoke(
             {"ticker": "AAPL", "months": 3}
@@ -589,9 +585,7 @@ class TestForecastStock:
 
         monkeypatch.setattr(_fsh, "_get_repo", lambda: repo)
         monkeypatch.setattr(_fsh, "_require_repo", lambda: repo)
-        monkeypatch.setattr(_fsh, "_DATA_FORECASTS", tmp_path / "forecasts")
         monkeypatch.setattr(_fsh, "_CACHE_DIR", tmp_path / "cache")
-        monkeypatch.setattr(_fsh, "_CHARTS_FORECASTS", tmp_path / "charts")
 
         result = forecasting_tool.forecast_stock.invoke(
             {"ticker": "AAPL", "months": 3}
@@ -600,7 +594,7 @@ class TestForecastStock:
         assert "Error" in result
 
     def test_forecast_7day_cooldown(self, tmp_path, monkeypatch):
-        """If forecast was run within 7 days, tool returns early."""
+        """If forecast was run within 7 days, return cached report."""
         from datetime import timedelta
 
         import tools._forecast_shared as _fsh
@@ -609,6 +603,23 @@ class TestForecastStock:
         repo = _mock_repo()
         repo.get_latest_forecast_run.return_value = {
             "run_date": date.today() - timedelta(days=3),
+            "current_price_at_run": 180.50,
+            "sentiment": "Bullish",
+            "target_3m_price": 195.0,
+            "target_3m_pct_change": 8.0,
+            "target_3m_lower": 175.0,
+            "target_3m_upper": 215.0,
+            "target_6m_price": 210.0,
+            "target_6m_pct_change": 16.3,
+            "target_6m_lower": 180.0,
+            "target_6m_upper": 240.0,
+            "target_9m_price": 220.0,
+            "target_9m_pct_change": 21.9,
+            "target_9m_lower": 185.0,
+            "target_9m_upper": 255.0,
+            "mae": 5.2,
+            "rmse": 7.1,
+            "mape": 3.4,
         }
 
         monkeypatch.setattr(_fsh, "_get_repo", lambda: repo)
@@ -618,7 +629,10 @@ class TestForecastStock:
         result = forecasting_tool.forecast_stock.invoke(
             {"ticker": "AAPL", "months": 9}
         )
-        assert "within 7 days" in result
+        assert "PRICE FORECAST" in result
+        assert "cached from" in result
+        assert "3M Target" in result
+        assert "BULLISH" in result
         repo.insert_forecast_run.assert_not_called()
 
     def test_forecast_cooldown_expired(self, tmp_path, monkeypatch):
@@ -637,11 +651,9 @@ class TestForecastStock:
         monkeypatch.setattr(_fsh, "_get_repo", lambda: repo)
         monkeypatch.setattr(_fsh, "_require_repo", lambda: repo)
         monkeypatch.setattr(_fsh, "_CACHE_DIR", tmp_path / "cache")
-        monkeypatch.setattr(_fsh, "_DATA_FORECASTS", tmp_path / "forecasts")
-        monkeypatch.setattr(_fsh, "_CHARTS_FORECASTS", tmp_path / "charts")
 
         result = forecasting_tool.forecast_stock.invoke(
             {"ticker": "AAPL", "months": 3}
         )
         # Should proceed to run (not blocked by cooldown)
-        assert "within 7 days" not in result
+        assert "cached from" not in result

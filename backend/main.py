@@ -76,6 +76,11 @@ class ChatServer:
             repo=_obs_repo,
         )
 
+        # PII anonymizer for LangSmith + LangFuse.
+        from tracing import setup_anonymizer
+
+        setup_anonymizer()
+
         setup_tools(self.tool_registry)
         setup_agents(
             self.tool_registry,
@@ -97,8 +102,7 @@ class ChatServer:
                 )
             except Exception:
                 logger.warning(
-                    "LangGraph setup failed, "
-                    "using legacy agents",
+                    "LangGraph setup failed, " "using legacy agents",
                     exc_info=True,
                 )
 

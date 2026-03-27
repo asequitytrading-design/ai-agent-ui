@@ -313,13 +313,44 @@ def _checkout_razorpay(
 
     rz_cust_id = db_user.get("razorpay_customer_id") if db_user else None
     if not rz_cust_id:
-        cust = client.customer.create(
-            {
-                "name": (db_user.get("full_name", "") if db_user else ""),
-                "email": user.email,
-            }
-        )
-        rz_cust_id = cust["id"]
+        try:
+            cust = client.customer.create(
+                {
+                    "name": (db_user.get("full_name", "") if db_user else ""),
+                    "email": user.email,
+                }
+            )
+            rz_cust_id = cust["id"]
+        except Exception as exc:
+            # Customer may already exist in Razorpay
+            # (e.g. after DB rebuild).  Fetch by email.
+            if "already exists" not in str(exc).lower():
+                raise
+            _logger.info(
+                "Razorpay customer exists for %s" " — searching",
+                user.email,
+            )
+            # Razorpay has no email filter — paginate
+            # through recent customers to find ours.
+            skip = 0
+            while not rz_cust_id and skip < 200:
+                page = client.customer.all(
+                    {"count": 50, "skip": skip},
+                )
+                items = page.get("items", [])
+                if not items:
+                    break
+                for c in items:
+                    if c.get("email") == user.email:
+                        rz_cust_id = c["id"]
+                        break
+                skip += 50
+            if not rz_cust_id:
+                raise RuntimeError(
+                    "Razorpay customer exists but "
+                    "could not be found by email: "
+                    f"{user.email}"
+                ) from exc
         repo.update(
             user.user_id,
             {"razorpay_customer_id": rz_cust_id},

@@ -96,6 +96,34 @@ def create_app(
             _logger.error(
                 "JWT_SECRET_KEY not set" " — auth will fail",
             )
+
+        # Start scheduler service
+        if getattr(settings, "scheduler_enabled", True):
+            try:
+                from tools._stock_shared import (
+                    _require_repo,
+                )
+                from jobs.scheduler_service import (
+                    SchedulerService,
+                )
+
+                _sched_repo = _require_repo()
+                max_w = getattr(
+                    settings,
+                    "scheduler_max_workers",
+                    3,
+                )
+                svc = SchedulerService(
+                    _sched_repo, max_workers=max_w,
+                )
+                svc.start()
+                a.state.scheduler = svc
+            except Exception:
+                _logger.warning(
+                    "Scheduler startup skipped",
+                    exc_info=True,
+                )
+
         yield
 
     app = FastAPI(
@@ -1015,6 +1043,203 @@ def create_app(
         methods=["GET"],
         dependencies=[Depends(superuser_only)],
     )
+
+    # ── Scheduler endpoints ─────────────────────────
+
+    async def _scheduler_list_jobs(request: Request):
+        """GET /admin/scheduler/jobs."""
+        svc = getattr(
+            request.app.state, "scheduler", None,
+        )
+        if not svc:
+            return {"jobs": []}
+        return {"jobs": svc.list_jobs()}
+
+    async def _scheduler_create_job(
+        request: Request,
+    ):
+        """POST /admin/scheduler/jobs."""
+        body = await request.json()
+        svc = getattr(
+            request.app.state, "scheduler", None,
+        )
+        if not svc:
+            raise HTTPException(
+                503, "Scheduler not available",
+            )
+        cron_days = body.get("cron_days", [])
+        if isinstance(cron_days, list):
+            cron_days = ",".join(cron_days)
+        job = {
+            "name": body.get("name", "Untitled"),
+            "job_type": body.get(
+                "job_type", "data_refresh",
+            ),
+            "cron_days": cron_days,
+            "cron_time": body.get("cron_time", "18:00"),
+            "scope": body.get("scope", "all"),
+        }
+        job_id = svc.add_job(job)
+        return {"job_id": job_id, "detail": "created"}
+
+    async def _scheduler_update_job(
+        request: Request, job_id: str,
+    ):
+        """PATCH /admin/scheduler/jobs/{job_id}."""
+        body = await request.json()
+        svc = getattr(
+            request.app.state, "scheduler", None,
+        )
+        if not svc:
+            raise HTTPException(
+                503, "Scheduler not available",
+            )
+        if "enabled" in body:
+            svc.toggle_job(job_id, body["enabled"])
+        else:
+            updates = {}
+            for k in (
+                "name", "cron_days", "cron_time",
+                "scope",
+            ):
+                if k in body:
+                    v = body[k]
+                    if k == "cron_days" and isinstance(
+                        v, list,
+                    ):
+                        v = ",".join(v)
+                    updates[k] = v
+            if updates:
+                svc.update_job(job_id, updates)
+        return {"detail": "updated"}
+
+    async def _scheduler_delete_job(
+        request: Request, job_id: str,
+    ):
+        """DELETE /admin/scheduler/jobs/{job_id}."""
+        svc = getattr(
+            request.app.state, "scheduler", None,
+        )
+        if not svc:
+            raise HTTPException(
+                503, "Scheduler not available",
+            )
+        svc.remove_job(job_id)
+        return {"detail": "deleted"}
+
+    async def _scheduler_trigger_job(
+        request: Request, job_id: str,
+    ):
+        """POST /admin/scheduler/jobs/{job_id}/trigger."""
+        svc = getattr(
+            request.app.state, "scheduler", None,
+        )
+        if not svc:
+            raise HTTPException(
+                503, "Scheduler not available",
+            )
+        run_id = svc.trigger_now(job_id)
+        if not run_id:
+            raise HTTPException(
+                404, "Job not found or no executor",
+            )
+        return {"run_id": run_id, "detail": "triggered"}
+
+    async def _scheduler_list_runs(request: Request):
+        """GET /admin/scheduler/runs."""
+        svc = getattr(
+            request.app.state, "scheduler", None,
+        )
+        if not svc:
+            return {"runs": []}
+        runs = svc._repo.get_scheduler_runs(days=7)
+        # Sanitise for JSON (NaN, NaT, datetimes)
+        import math as _math
+
+        for r in runs:
+            for k, v in list(r.items()):
+                if hasattr(v, "isoformat"):
+                    r[k] = v.isoformat()
+                elif isinstance(v, float) and (
+                    _math.isnan(v) or _math.isinf(v)
+                ):
+                    r[k] = None
+        return {"runs": runs}
+
+    async def _scheduler_stats(request: Request):
+        """GET /admin/scheduler/stats."""
+        svc = getattr(
+            request.app.state, "scheduler", None,
+        )
+        if not svc:
+            return {
+                "active_jobs": 0,
+                "next_run_label": None,
+                "next_run_seconds": None,
+                "last_run_status": None,
+                "last_run_ago": None,
+                "last_run_tickers": None,
+                "runs_today": 0,
+                "runs_today_success": 0,
+                "runs_today_failed": 0,
+                "runs_today_running": 0,
+            }
+        stats = svc.get_stats()
+        # Sanitise NaN for JSON
+        import math as _math
+
+        for k, v in list(stats.items()):
+            if isinstance(v, float) and (
+                _math.isnan(v) or _math.isinf(v)
+            ):
+                stats[k] = None
+            elif hasattr(v, "isoformat"):
+                stats[k] = v.isoformat()
+        return stats
+
+    admin_router.add_api_route(
+        "/admin/scheduler/jobs",
+        _scheduler_list_jobs,
+        methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/scheduler/jobs",
+        _scheduler_create_job,
+        methods=["POST"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/scheduler/jobs/{job_id}",
+        _scheduler_update_job,
+        methods=["PATCH"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/scheduler/jobs/{job_id}",
+        _scheduler_delete_job,
+        methods=["DELETE"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/scheduler/jobs/{job_id}/trigger",
+        _scheduler_trigger_job,
+        methods=["POST"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/scheduler/runs",
+        _scheduler_list_runs,
+        methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/scheduler/stats",
+        _scheduler_stats,
+        methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
+
     app.include_router(admin_router)
 
     # Dashboard + audit + insights endpoints.

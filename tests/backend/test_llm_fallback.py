@@ -365,3 +365,36 @@ class TestNoGroqKey:
 
         assert result == "anthropic_direct"
         assert len(llm._groq_tiers) == 0
+
+
+# ------------------------------------------------------------------
+# Tests — Tracing callbacks
+# ------------------------------------------------------------------
+
+
+class TestTracingCallbacksForwarded:
+    """LangFuse callbacks are forwarded to inner LLMs."""
+
+    def test_callbacks_reach_groq_invoke(self):
+        """When get_callbacks returns handlers, they appear
+        in the config dict passed to bound_llm.invoke()."""
+        t1 = MagicMock()
+        anth = MagicMock()
+        t1.invoke.return_value = "tier1_ok"
+
+        mock_handler = MagicMock()
+        llm = _make_fallback([t1], anth)
+
+        with patch(
+            "tracing.get_callbacks",
+            return_value=[mock_handler],
+        ):
+            result = llm.invoke("hello")
+
+        assert result == "tier1_ok"
+        call_kwargs = t1.invoke.call_args
+        config = call_kwargs.kwargs.get(
+            "config",
+            call_kwargs[1].get("config", {}),
+        )
+        assert config.get("callbacks") == [mock_handler]

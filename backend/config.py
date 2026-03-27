@@ -88,8 +88,7 @@ class Settings(BaseSettings):
     # Synthesis tiers — used for final response (no tool calls).
     # Reserves gpt-oss-120b for quality output.
     synthesis_model_tiers: str = (
-        "openai/gpt-oss-120b,"
-        "moonshotai/kimi-k2-instruct"
+        "openai/gpt-oss-120b," "moonshotai/kimi-k2-instruct"
     )
 
     # Test tiers — free models only, zero paid exposure.
@@ -157,6 +156,10 @@ class Settings(BaseSettings):
     retention_enabled: bool = False
     retention_dry_run: bool = True
 
+    # Job scheduler
+    scheduler_enabled: bool = True
+    scheduler_max_workers: int = 3
+
     # Smart cache warming: pre-warm Redis for the top
     # N most active users at startup.
     cache_warm_top_users: int = 5
@@ -170,7 +173,14 @@ class Settings(BaseSettings):
     # when LANGCHAIN_TRACING_V2=true is set in env.
     langsmith_enabled: bool = True
     langfuse_enabled: bool = False
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_host: str = "https://cloud.langfuse.com"
     trace_sample_rate: float = 1.0  # 1.0 = 100% (dev)
+    hide_trace_io: bool = False  # True in prod only
+
+    # ── Forecast: Phase 3 ──────────────────────────
+    ensemble_enabled: bool = False  # XGBoost ensemble
 
     # Read from .env in the working directory; silently skip if absent.
     # Real environment variables always take precedence over .env values.

@@ -77,6 +77,9 @@ _FORECASTS_TABLE = f"{_NAMESPACE}.forecasts"
 _QUARTERLY_RESULTS_TABLE = f"{_NAMESPACE}.quarterly_results"
 _LLM_PRICING_TABLE = f"{_NAMESPACE}.llm_pricing"
 _LLM_USAGE_TABLE = f"{_NAMESPACE}.llm_usage"
+_SCHEDULED_JOBS_TABLE = f"{_NAMESPACE}.scheduled_jobs"
+_SCHEDULER_RUNS_TABLE = f"{_NAMESPACE}.scheduler_runs"
+_SENTIMENT_SCORES_TABLE = f"{_NAMESPACE}.sentiment_scores"
 
 
 def _get_catalog() -> SqlCatalog:
@@ -1334,6 +1337,190 @@ def _portfolio_transactions_schema() -> Schema:
     )
 
 
+def _scheduled_jobs_schema() -> Schema:
+    """Return the schema for ``stocks.scheduled_jobs``."""
+    return Schema(
+        NestedField(
+            field_id=1,
+            name="job_id",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=2,
+            name="name",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=3,
+            name="job_type",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=4,
+            name="cron_days",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=5,
+            name="cron_time",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=6,
+            name="scope",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=7,
+            name="enabled",
+            field_type=BooleanType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=8,
+            name="created_at",
+            field_type=TimestampType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=9,
+            name="updated_at",
+            field_type=TimestampType(),
+            required=False,
+        ),
+    )
+
+
+def _scheduler_runs_schema() -> Schema:
+    """Return the schema for ``stocks.scheduler_runs``."""
+    return Schema(
+        NestedField(
+            field_id=1,
+            name="run_id",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=2,
+            name="job_id",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=3,
+            name="job_name",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=4,
+            name="job_type",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=5,
+            name="scope",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=6,
+            name="status",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=7,
+            name="started_at",
+            field_type=TimestampType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=8,
+            name="completed_at",
+            field_type=TimestampType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=9,
+            name="duration_secs",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=10,
+            name="tickers_total",
+            field_type=IntegerType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=11,
+            name="tickers_done",
+            field_type=IntegerType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=12,
+            name="error_message",
+            field_type=StringType(),
+            required=False,
+        ),
+    )
+
+
+def _sentiment_scores_schema() -> Schema:
+    """Schema for ``stocks.sentiment_scores``.
+
+    Daily sentiment per stock ticker, scored by LLM
+    or FinBERT.  Range: -1.0 (bearish) to +1.0 (bullish).
+    """
+    return Schema(
+        NestedField(
+            field_id=1,
+            name="ticker",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=2,
+            name="score_date",
+            field_type=DateType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=3,
+            name="avg_score",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=4,
+            name="headline_count",
+            field_type=IntegerType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=5,
+            name="source",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=6,
+            name="scored_at",
+            field_type=TimestampType(),
+            required=False,
+        ),
+    )
+
+
 def _create_table(
     catalog: SqlCatalog,
     identifier: str,
@@ -1459,6 +1646,28 @@ def create_tables() -> None:
         f"{_NAMESPACE}.portfolio_transactions",
         _portfolio_transactions_schema(),
         empty_spec,
+    )
+
+    # Scheduler tables (no partition — small tables)
+    _create_table(
+        catalog,
+        _SCHEDULED_JOBS_TABLE,
+        _scheduled_jobs_schema(),
+        empty_spec,
+    )
+    _create_table(
+        catalog,
+        _SCHEDULER_RUNS_TABLE,
+        _scheduler_runs_schema(),
+        empty_spec,
+    )
+
+    ss_schema = _sentiment_scores_schema()
+    _create_table(
+        catalog,
+        _SENTIMENT_SCORES_TABLE,
+        ss_schema,
+        _ticker_partition_spec(ss_schema),
     )
 
     _logger.info("Stocks Iceberg table initialisation complete.")

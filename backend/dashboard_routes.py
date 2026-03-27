@@ -12,13 +12,9 @@ invalidated by :mod:`stocks.repository` on Iceberg writes.
 
 import logging
 import os
+import threading
 
-from fastapi import APIRouter, Depends, Query, Response
-
-import auth.endpoints.helpers as _helpers
-from auth.dependencies import get_current_user
-from auth.models import UserContext
-from cache import get_cache, TTL_VOLATILE, TTL_STABLE
+from cache import TTL_STABLE, TTL_VOLATILE, get_cache
 from dashboard_models import (
     AnalysisResponse,
     CompareMetric,
@@ -48,6 +44,11 @@ from dashboard_models import (
     TickerPrice,
     WatchlistResponse,
 )
+from fastapi import APIRouter, Depends, Query, Response
+
+import auth.endpoints.helpers as _helpers
+from auth.dependencies import get_current_user
+from auth.models import UserContext
 
 _logger = logging.getLogger(__name__)
 
@@ -59,12 +60,38 @@ def _get_stock_repo():
     return _require_repo()
 
 
+def _backfill_company_info(tickers, repo) -> None:
+    """Background: fetch company info for tickers missing
+    from the ``company_info`` Iceberg table."""
+    try:
+        import yfinance as yf
+
+        for ticker in tickers:
+            try:
+                info = yf.Ticker(ticker).info
+                if info:
+                    repo.insert_company_info(ticker, info)
+                    _logger.info(
+                        "Backfilled company info: %s",
+                        ticker,
+                    )
+            except Exception:
+                _logger.debug(
+                    "Backfill failed: %s",
+                    ticker,
+                    exc_info=True,
+                )
+    except Exception:
+        _logger.debug(
+            "Backfill batch failed",
+            exc_info=True,
+        )
+
+
 def _set_cache_header(response: Response):
     """Router dependency: set Cache-Control on all."""
     yield
-    response.headers["Cache-Control"] = (
-        "private, max-age=60"
-    )
+    response.headers["Cache-Control"] = "private, max-age=60"
 
 
 def create_dashboard_router() -> APIRouter:
@@ -84,9 +111,7 @@ def create_dashboard_router() -> APIRouter:
     ):
         """User's linked tickers + latest prices."""
         cache = get_cache()
-        cache_key = (
-            f"cache:dash:watchlist:{user.user_id}"
-        )
+        cache_key = f"cache:dash:watchlist:{user.user_id}"
         hit = cache.get(cache_key)
         if hit is not None:
             return Response(
@@ -111,18 +136,18 @@ def create_dashboard_router() -> APIRouter:
         info_map: dict = {}
         if not info_df.empty:
             for _, row in info_df.iterrows():
-                info_map[row["ticker"]] = (
-                    row.to_dict()
-                )
+                info_map[row["ticker"]] = row.to_dict()
 
         items: list[TickerPrice] = []
         total_value = 0.0
         total_prev = 0.0
 
         for t in tickers:
-            t_ohlcv = ohlcv_df[
-                ohlcv_df["ticker"] == t
-            ] if not ohlcv_df.empty else ohlcv_df
+            t_ohlcv = (
+                ohlcv_df[ohlcv_df["ticker"] == t]
+                if not ohlcv_df.empty
+                else ohlcv_df
+            )
 
             if t_ohlcv.empty:
                 continue
@@ -135,57 +160,35 @@ def create_dashboard_router() -> APIRouter:
             latest = t_valid.iloc[-1]
             cur = float(latest.get("close", 0))
             prev = float(
-                t_ohlcv.iloc[-2]["close"]
-                if len(t_ohlcv) > 1
-                else cur
+                t_ohlcv.iloc[-2]["close"] if len(t_ohlcv) > 1 else cur
             )
             chg = cur - prev
             pct = (chg / prev * 100) if prev else 0.0
 
-            sparkline = t_ohlcv[
-                "close"
-            ].tolist()[-30:]
+            sparkline = t_ohlcv["close"].tolist()[-30:]
 
             info = info_map.get(t)
-            ccy = (
-                info.get("currency", "USD")
-                if info
-                else "USD"
-            )
-            mkt = "india" if (
-                t.endswith(".NS")
-                or t.endswith(".BO")
-            ) else "us"
+            ccy = info.get("currency", "USD") if info else "USD"
+            mkt = "india" if (t.endswith(".NS") or t.endswith(".BO")) else "us"
 
             items.append(
                 TickerPrice(
                     ticker=t,
-                    company_name=(
-                        info.get("company_name")
-                        if info
-                        else None
-                    ),
+                    company_name=(info.get("company_name") if info else None),
                     current_price=round(cur, 2),
                     previous_close=round(prev, 2),
                     change=round(chg, 2),
                     change_pct=round(pct, 2),
                     currency=str(ccy or "USD"),
                     market=mkt,
-                    sparkline=[
-                        round(float(v), 2)
-                        for v in sparkline
-                    ],
+                    sparkline=[round(float(v), 2) for v in sparkline],
                 )
             )
             total_value += cur
             total_prev += prev
 
         daily_chg = total_value - total_prev
-        daily_pct = (
-            (daily_chg / total_prev * 100)
-            if total_prev
-            else 0.0
-        )
+        daily_pct = (daily_chg / total_prev * 100) if total_prev else 0.0
 
         result = WatchlistResponse(
             tickers=items,
@@ -209,9 +212,7 @@ def create_dashboard_router() -> APIRouter:
     ):
         """Latest forecast runs per linked ticker."""
         cache = get_cache()
-        cache_key = (
-            f"cache:dash:forecasts:{user.user_id}"
-        )
+        cache_key = f"cache:dash:forecasts:{user.user_id}"
         hit = cache.get(cache_key)
         if hit is not None:
             return Response(
@@ -242,12 +243,8 @@ def create_dashboard_router() -> APIRouter:
                     targets.append(
                         ForecastTarget(
                             horizon_months=h,
-                            target_date=str(
-                                row[date_col]
-                            ),
-                            target_price=float(
-                                row.get(price_col, 0)
-                            ),
+                            target_date=str(row[date_col]),
+                            target_price=float(row.get(price_col, 0)),
                             pct_change=float(
                                 row.get(
                                     f"target_{h}m_pct_change",
@@ -273,12 +270,8 @@ def create_dashboard_router() -> APIRouter:
                 TickerForecast(
                     ticker=str(row["ticker"]),
                     run_date=str(row.get("run_date", "")),
-                    current_price=float(
-                        row.get("current_price_at_run", 0)
-                    ),
-                    sentiment=str(
-                        row.get("sentiment", "")
-                    ) or None,
+                    current_price=float(row.get("current_price_at_run", 0)),
+                    sentiment=str(row.get("sentiment", "")) or None,
                     targets=targets,
                     mae=_safe(row.get("mae")),
                     rmse=_safe(row.get("rmse")),
@@ -303,9 +296,7 @@ def create_dashboard_router() -> APIRouter:
     ):
         """Latest analysis summaries + signals."""
         cache = get_cache()
-        cache_key = (
-            f"cache:dash:analysis:{user.user_id}"
-        )
+        cache_key = f"cache:dash:analysis:{user.user_id}"
         hit = cache.get(cache_key)
         if hit is not None:
             return Response(
@@ -325,16 +316,11 @@ def create_dashboard_router() -> APIRouter:
             return AnalysisResponse()
 
         # Batch fetch indicators: 1 query instead of N
-        ti_df = (
-            stock_repo
-            .get_technical_indicators_batch(tickers)
-        )
+        ti_df = stock_repo.get_technical_indicators_batch(tickers)
         # Build map: ticker -> latest indicator vals
         ti_map: dict = {}
         if not ti_df.empty:
-            for ticker_val, grp in ti_df.groupby(
-                "ticker"
-            ):
+            for ticker_val, grp in ti_df.groupby("ticker"):
                 latest = grp.iloc[-1]
                 ti_map[ticker_val] = {
                     "rsi_14": latest.get("rsi_14"),
@@ -350,47 +336,51 @@ def create_dashboard_router() -> APIRouter:
 
             signals: list[SignalInfo] = []
             _add_signal(
-                signals, row, "rsi_signal",
-                "RSI 14", "rsi_14",
+                signals,
+                row,
+                "rsi_signal",
+                "RSI 14",
+                "rsi_14",
                 ti_vals,
             )
             _add_signal(
-                signals, row, "macd_signal_text",
-                "MACD", "macd",
+                signals,
+                row,
+                "macd_signal_text",
+                "MACD",
+                "macd",
                 ti_vals,
             )
             _add_signal(
-                signals, row, "sma_50_signal",
-                "SMA 50", "sma_50",
+                signals,
+                row,
+                "sma_50_signal",
+                "SMA 50",
+                "sma_50",
                 ti_vals,
             )
             _add_signal(
-                signals, row, "sma_200_signal",
-                "SMA 200", "sma_200",
+                signals,
+                row,
+                "sma_200_signal",
+                "SMA 200",
+                "sma_200",
                 ti_vals,
             )
 
             analyses.append(
                 TickerAnalysis(
                     ticker=str(row["ticker"]),
-                    analysis_date=str(
-                        row.get("analysis_date", "")
-                    ),
+                    analysis_date=str(row.get("analysis_date", "")),
                     signals=signals,
-                    sharpe_ratio=_safe(
-                        row.get("sharpe_ratio")
-                    ),
+                    sharpe_ratio=_safe(row.get("sharpe_ratio")),
                     annualized_return_pct=_safe(
                         row.get("annualized_return_pct")
                     ),
                     annualized_volatility_pct=_safe(
-                        row.get(
-                            "annualized_volatility_pct"
-                        )
+                        row.get("annualized_volatility_pct")
                     ),
-                    max_drawdown_pct=_safe(
-                        row.get("max_drawdown_pct")
-                    ),
+                    max_drawdown_pct=_safe(row.get("max_drawdown_pct")),
                 )
             )
 
@@ -411,14 +401,8 @@ def create_dashboard_router() -> APIRouter:
     ):
         """LLM usage stats — own usage or all (superuser)."""
         cache = get_cache()
-        cache_uid = (
-            "all"
-            if user.role == "superuser"
-            else user.user_id
-        )
-        cache_key = (
-            f"cache:dash:llm-usage:{cache_uid}"
-        )
+        cache_uid = "all" if user.role == "superuser" else user.user_id
+        cache_key = f"cache:dash:llm-usage:{cache_uid}"
         hit = cache.get(cache_key)
         if hit is not None:
             return Response(
@@ -427,43 +411,30 @@ def create_dashboard_router() -> APIRouter:
             )
 
         stock_repo = _get_stock_repo()
-        uid = (
-            None
-            if user.role == "superuser"
-            else user.user_id
-        )
+        uid = None if user.role == "superuser" else user.user_id
         data = stock_repo.get_dashboard_llm_usage(
-            user_id=uid, days=30,
+            user_id=uid,
+            days=30,
         )
 
         # per_model is a dict: {model_name: {requests, cost}}
         per_model = data.get("per_model", {})
-        total_req = int(
-            data.get("total_requests", 0)
-        )
+        total_req = int(data.get("total_requests", 0))
         models = [
             ModelUsage(
                 model=name,
                 provider="groq",
-                request_count=int(
-                    info.get("requests", 0)
-                ),
+                request_count=int(info.get("requests", 0)),
                 total_tokens=0,
-                estimated_cost_usd=float(
-                    info.get("cost", 0) or 0
-                ),
+                estimated_cost_usd=float(info.get("cost", 0) or 0),
             )
             for name, info in per_model.items()
         ]
 
         result = LLMUsageResponse(
             total_requests=total_req,
-            total_cost_usd=float(
-                data.get("total_cost", 0) or 0
-            ),
-            avg_latency_ms=_safe(
-                data.get("avg_latency_ms")
-            ),
+            total_cost_usd=float(data.get("total_cost", 0) or 0),
+            avg_latency_ms=_safe(data.get("avg_latency_ms")),
             models=models,
             daily_trend=data.get("daily_trend", []),
         )
@@ -497,32 +468,42 @@ def create_dashboard_router() -> APIRouter:
         # Batch fetch company info: 1 query instead
         # of M (one per registered ticker)
         reg_tickers = list(registry.keys())
-        info_df = stock_repo.get_company_info_batch(
-            reg_tickers,
-        ) if reg_tickers else None
+        info_df = (
+            stock_repo.get_company_info_batch(
+                reg_tickers,
+            )
+            if reg_tickers
+            else None
+        )
         info_map: dict = {}
         if info_df is not None and not info_df.empty:
             for _, row in info_df.iterrows():
-                info_map[row["ticker"]] = (
-                    row.to_dict()
-                )
+                info_map[row["ticker"]] = row.to_dict()
+
+        # Backfill missing company info (fire-and-forget).
+        _missing = [t for t in reg_tickers if t not in info_map]
+        if _missing:
+            threading.Thread(
+                target=_backfill_company_info,
+                args=(_missing, stock_repo),
+                daemon=True,
+            ).start()
 
         items: list[RegistryTicker] = []
         for ticker, meta in registry.items():
             info = info_map.get(ticker)
-            mkt = "india" if (
-                ticker.endswith(".NS")
-                or ticker.endswith(".BO")
-            ) else "us"
+            mkt = (
+                "india"
+                if (ticker.endswith(".NS") or ticker.endswith(".BO"))
+                else "us"
+            )
             ccy = "INR" if mkt == "india" else "USD"
             company = None
             price = None
 
             if info:
                 company = info.get("company_name")
-                ccy = str(
-                    info.get("currency", ccy) or ccy
-                )
+                ccy = str(info.get("currency", ccy) or ccy)
                 raw = info.get("current_price")
                 if raw is not None:
                     try:
@@ -537,9 +518,7 @@ def create_dashboard_router() -> APIRouter:
                     market=mkt,
                     currency=ccy,
                     current_price=price,
-                    last_fetch_date=meta.get(
-                        "last_fetch_date", ""
-                    ) or None,
+                    last_fetch_date=meta.get("last_fetch_date", "") or None,
                 )
             )
 
@@ -565,15 +544,12 @@ def create_dashboard_router() -> APIRouter:
     ):
         """Normalized price comparison + correlation."""
         import hashlib
+
         import numpy as np
         import pandas as pd
 
         stock_repo = _get_stock_repo()
-        symbols = [
-            t.strip().upper()
-            for t in tickers.split(",")
-            if t.strip()
-        ]
+        symbols = [t.strip().upper() for t in tickers.split(",") if t.strip()]
         if len(symbols) < 2:
             return CompareResponse(tickers=symbols)
 
@@ -581,9 +557,7 @@ def create_dashboard_router() -> APIRouter:
         tickers_hash = hashlib.md5(
             ",".join(sorted(symbols)).encode(),
         ).hexdigest()[:12]
-        cache_key = (
-            f"cache:dash:compare:{tickers_hash}"
-        )
+        cache_key = f"cache:dash:compare:{tickers_hash}"
         hit = cache.get(cache_key)
         if hit is not None:
             return Response(
@@ -593,36 +567,24 @@ def create_dashboard_router() -> APIRouter:
 
         # Batch fetch: 4 queries instead of 4N
         ohlcv_df = stock_repo.get_ohlcv_batch(symbols)
-        summary_df = (
-            stock_repo
-            .get_analysis_summary_batch(symbols)
-        )
+        summary_df = stock_repo.get_analysis_summary_batch(symbols)
         info_df = stock_repo.get_company_info_batch(
             symbols,
         )
-        ti_df = (
-            stock_repo
-            .get_technical_indicators_batch(symbols)
-        )
+        ti_df = stock_repo.get_technical_indicators_batch(symbols)
 
         # Index batch results by ticker
         summary_map: dict = {}
         if not summary_df.empty:
             for _, row in summary_df.iterrows():
-                summary_map[row["ticker"]] = (
-                    row.to_dict()
-                )
+                summary_map[row["ticker"]] = row.to_dict()
         info_map: dict = {}
         if not info_df.empty:
             for _, row in info_df.iterrows():
-                info_map[row["ticker"]] = (
-                    row.to_dict()
-                )
+                info_map[row["ticker"]] = row.to_dict()
         ti_map: dict = {}
         if not ti_df.empty:
-            for t_val, grp in ti_df.groupby(
-                "ticker"
-            ):
+            for t_val, grp in ti_df.groupby("ticker"):
                 latest = grp.iloc[-1]
                 ti_map[t_val] = latest.to_dict()
 
@@ -631,9 +593,11 @@ def create_dashboard_router() -> APIRouter:
         returns_map: dict[str, pd.Series] = {}
 
         for sym in symbols:
-            ohlcv = ohlcv_df[
-                ohlcv_df["ticker"] == sym
-            ] if not ohlcv_df.empty else ohlcv_df
+            ohlcv = (
+                ohlcv_df[ohlcv_df["ticker"] == sym]
+                if not ohlcv_df.empty
+                else ohlcv_df
+            )
             if ohlcv.empty or len(ohlcv) < 2:
                 continue
 
@@ -643,17 +607,13 @@ def create_dashboard_router() -> APIRouter:
                 continue
 
             norm = (close / first * 100).tolist()
-            dates = [
-                str(d) for d in ohlcv["date"].tolist()
-            ]
+            dates = [str(d) for d in ohlcv["date"].tolist()]
 
             series.append(
                 CompareSeriesItem(
                     ticker=sym,
                     dates=dates,
-                    normalized=[
-                        round(v, 4) for v in norm
-                    ],
+                    normalized=[round(v, 4) for v in norm],
                 )
             )
 
@@ -662,15 +622,13 @@ def create_dashboard_router() -> APIRouter:
 
             summary = summary_map.get(sym)
             cur_price = round(
-                float(close.iloc[-1]), 2,
+                float(close.iloc[-1]),
+                2,
             )
             ccy = "USD"
             info = info_map.get(sym)
             if info:
-                ccy = str(
-                    info.get("currency", "USD")
-                    or "USD"
-                )
+                ccy = str(info.get("currency", "USD") or "USD")
 
             # RSI + MACD from technical indicators
             ti = ti_map.get(sym, {})
@@ -678,14 +636,11 @@ def create_dashboard_router() -> APIRouter:
             macd_v = ti.get("macd")
             sig_v = ti.get("macd_signal")
             macd_lbl = None
-            if macd_v is not None and (
-                sig_v is not None
-            ):
+            if macd_v is not None and (sig_v is not None):
                 try:
                     macd_lbl = (
                         "Bullish"
-                        if float(macd_v)
-                        > float(sig_v)
+                        if float(macd_v) > float(sig_v)
                         else "Bearish"
                     )
                 except (ValueError, TypeError):
@@ -694,14 +649,8 @@ def create_dashboard_router() -> APIRouter:
             # Sentiment from summary
             sent = None
             if summary:
-                rsi_sig = str(
-                    summary.get("rsi_signal", "")
-                ).lower()
-                macd_sig = str(
-                    summary.get(
-                        "macd_signal_text", ""
-                    )
-                ).lower()
+                rsi_sig = str(summary.get("rsi_signal", "")).lower()
+                macd_sig = str(summary.get("macd_signal_text", "")).lower()
                 bull = sum(
                     1
                     for s in (rsi_sig, macd_sig)
@@ -731,50 +680,31 @@ def create_dashboard_router() -> APIRouter:
                 metrics.append(
                     CompareMetric(
                         annualized_return_pct=_safe(
-                            summary.get(
-                                "annualized_return_pct"
-                            )
+                            summary.get("annualized_return_pct")
                         ),
                         annualized_volatility_pct=_safe(
-                            summary.get(
-                                "annualized_volatility_pct"
-                            )
+                            summary.get("annualized_volatility_pct")
                         ),
-                        sharpe_ratio=_safe(
-                            summary.get(
-                                "sharpe_ratio"
-                            )
-                        ),
+                        sharpe_ratio=_safe(summary.get("sharpe_ratio")),
                         max_drawdown_pct=_safe(
-                            summary.get(
-                                "max_drawdown_pct"
-                            )
+                            summary.get("max_drawdown_pct")
                         ),
                         **common,
                     )
                 )
             else:
-                metrics.append(
-                    CompareMetric(**common)
-                )
+                metrics.append(CompareMetric(**common))
 
         # Build correlation matrix
         corr_matrix: list[list[float]] = []
-        valid = [
-            s for s in symbols if s in returns_map
-        ]
+        valid = [s for s in symbols if s in returns_map]
         if len(valid) >= 2:
             ret_df = pd.DataFrame(
                 {s: returns_map[s] for s in valid},
             )
             corr = ret_df.corr().values
             corr_matrix = [
-                [
-                    round(float(v), 4)
-                    if not np.isnan(v)
-                    else 0.0
-                    for v in row
-                ]
+                [round(float(v), 4) if not np.isnan(v) else 0.0 for v in row]
                 for row in corr
             ]
 
@@ -809,9 +739,7 @@ def create_dashboard_router() -> APIRouter:
         entire dashboard with a single network call.
         """
         cache = get_cache()
-        cache_key = (
-            f"cache:dash:home:{user.user_id}"
-        )
+        cache_key = f"cache:dash:home:{user.user_id}"
         hit = cache.get(cache_key)
         if hit is not None:
             return Response(
@@ -837,16 +765,20 @@ def create_dashboard_router() -> APIRouter:
 
         result = DashboardHomeResponse(
             watchlist=_ensure_model(
-                wl, WatchlistResponse,
+                wl,
+                WatchlistResponse,
             ),
             forecasts=_ensure_model(
-                fc, ForecastsResponse,
+                fc,
+                ForecastsResponse,
             ),
             analysis=_ensure_model(
-                an, AnalysisResponse,
+                an,
+                AnalysisResponse,
             ),
             llm_usage=_ensure_model(
-                lu, LLMUsageResponse,
+                lu,
+                LLMUsageResponse,
             ),
         )
         cache.set(
@@ -866,14 +798,16 @@ def create_dashboard_router() -> APIRouter:
     )
     async def get_chart_ohlcv(
         ticker: str = Query(
-            ..., description="Ticker symbol",
+            ...,
+            description="Ticker symbol",
         ),
         user: UserContext = Depends(get_current_user),
     ):
         """OHLCV time series for a single ticker."""
         _logger.info(
             "chart/ohlcv ticker=%s user=%s",
-            ticker, user.user_id,
+            ticker,
+            user.user_id,
         )
         cache = get_cache()
         t_upper = ticker.upper()
@@ -905,7 +839,8 @@ def create_dashboard_router() -> APIRouter:
             )
 
         result = OHLCVResponse(
-            ticker=t_upper, data=points,
+            ticker=t_upper,
+            data=points,
         )
         cache.set(
             cache_key,
@@ -920,20 +855,20 @@ def create_dashboard_router() -> APIRouter:
     )
     async def get_chart_indicators(
         ticker: str = Query(
-            ..., description="Ticker symbol",
+            ...,
+            description="Ticker symbol",
         ),
         user: UserContext = Depends(get_current_user),
     ):
         """Technical indicators time series."""
         _logger.info(
             "chart/indicators ticker=%s user=%s",
-            ticker, user.user_id,
+            ticker,
+            user.user_id,
         )
         cache = get_cache()
         t_upper = ticker.upper()
-        cache_key = (
-            f"cache:chart:indicators:{t_upper}"
-        )
+        cache_key = f"cache:chart:indicators:{t_upper}"
         hit = cache.get(cache_key)
         if hit is not None:
             return Response(
@@ -979,7 +914,8 @@ def create_dashboard_router() -> APIRouter:
             )
 
         result = IndicatorsResponse(
-            ticker=t_upper, data=points,
+            ticker=t_upper,
+            data=points,
         )
         cache.set(
             cache_key,
@@ -994,7 +930,8 @@ def create_dashboard_router() -> APIRouter:
     )
     async def get_chart_forecast_series(
         ticker: str = Query(
-            ..., description="Ticker symbol",
+            ...,
+            description="Ticker symbol",
         ),
         horizon: int = Query(
             9,
@@ -1004,16 +941,14 @@ def create_dashboard_router() -> APIRouter:
     ):
         """Forecast time series with confidence bands."""
         _logger.info(
-            "chart/forecast-series ticker=%s "
-            "horizon=%d user=%s",
-            ticker, horizon, user.user_id,
+            "chart/forecast-series ticker=%s " "horizon=%d user=%s",
+            ticker,
+            horizon,
+            user.user_id,
         )
         cache = get_cache()
         t_upper = ticker.upper()
-        cache_key = (
-            f"cache:chart:forecast:"
-            f"{t_upper}:{horizon}"
-        )
+        cache_key = f"cache:chart:forecast:" f"{t_upper}:{horizon}"
         hit = cache.get(cache_key)
         if hit is not None:
             return Response(
@@ -1023,7 +958,8 @@ def create_dashboard_router() -> APIRouter:
 
         stock_repo = _get_stock_repo()
         df = stock_repo.get_latest_forecast_series(
-            t_upper, horizon,
+            t_upper,
+            horizon,
         )
 
         if df.empty:
@@ -1036,18 +972,10 @@ def create_dashboard_router() -> APIRouter:
         for _, row in df.iterrows():
             points.append(
                 ForecastPoint(
-                    date=str(
-                        row.get("forecast_date", "")
-                    ),
-                    predicted=float(
-                        row.get("predicted_price", 0)
-                    ),
-                    lower=float(
-                        row.get("lower_bound", 0)
-                    ),
-                    upper=float(
-                        row.get("upper_bound", 0)
-                    ),
+                    date=str(row.get("forecast_date", "")),
+                    predicted=float(row.get("predicted_price", 0)),
+                    lower=float(row.get("lower_bound", 0)),
+                    upper=float(row.get("upper_bound", 0)),
                 )
             )
 
@@ -1070,13 +998,14 @@ def create_dashboard_router() -> APIRouter:
     # Process-wide RefreshManager shared across requests.
     import sys as _sys
 
-    _project_root = os.path.dirname(
-        os.path.dirname(os.path.abspath(__file__))
-    ) if "__file__" not in dir() else os.path.dirname(
-        os.path.dirname(__file__)
+    _project_root = (
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if "__file__" not in dir()
+        else os.path.dirname(os.path.dirname(__file__))
     )
     _dash_dir = os.path.join(
-        _project_root, "dashboard",
+        _project_root,
+        "dashboard",
     )
     if _dash_dir not in _sys.path:
         _sys.path.insert(0, _dash_dir)
@@ -1090,9 +1019,7 @@ def create_dashboard_router() -> APIRouter:
     @router.post("/refresh/{ticker}")
     async def start_refresh(
         ticker: str,
-        user: UserContext = Depends(
-            get_current_user
-        ),
+        user: UserContext = Depends(get_current_user),
     ):
         """Start a background refresh for *ticker*.
 
@@ -1106,29 +1033,28 @@ def create_dashboard_router() -> APIRouter:
         t = ticker.upper()
         _logger.info(
             "refresh requested ticker=%s user=%s",
-            t, user.user_id,
+            t,
+            user.user_id,
         )
         from dashboard.services.stock_refresh import (
             run_full_refresh,
         )
 
         submitted = _refresh_mgr.submit_if_idle(
-            t, run_full_refresh, t, 9,
+            t,
+            run_full_refresh,
+            t,
+            9,
         )
         return {
             "ticker": t,
-            "status": (
-                "started" if submitted
-                else "already_running"
-            ),
+            "status": ("started" if submitted else "already_running"),
         }
 
     @router.get("/refresh/{ticker}/status")
     async def refresh_status(
         ticker: str,
-        _user: UserContext = Depends(
-            get_current_user
-        ),
+        _user: UserContext = Depends(get_current_user),
     ):
         """Poll refresh status for *ticker*.
 
@@ -1163,15 +1089,9 @@ def create_dashboard_router() -> APIRouter:
             return {
                 "ticker": t,
                 "status": "success",
-                "steps": (
-                    result.steps
-                    if hasattr(result, "steps")
-                    else []
-                ),
+                "steps": (result.steps if hasattr(result, "steps") else []),
                 "accuracy": (
-                    result.accuracy
-                    if hasattr(result, "accuracy")
-                    else None
+                    result.accuracy if hasattr(result, "accuracy") else None
                 ),
             }
         except Exception as exc:
@@ -1192,12 +1112,11 @@ def create_dashboard_router() -> APIRouter:
     async def get_portfolio_performance(
         period: str = Query(
             "ALL",
-            description=(
-                "1D|1W|1M|3M|6M|1Y|ALL"
-            ),
+            description=("1D|1W|1M|3M|6M|1Y|ALL"),
         ),
         currency: str = Query(
-            "USD", description="USD|INR",
+            "USD",
+            description="USD|INR",
         ),
         user: UserContext = Depends(
             get_current_user,
@@ -1206,8 +1125,7 @@ def create_dashboard_router() -> APIRouter:
         """Daily portfolio value time series."""
         cache = get_cache()
         cache_key = (
-            f"cache:portfolio:perf:"
-            f"{user.user_id}:{currency}:{period}"
+            f"cache:portfolio:perf:" f"{user.user_id}:{currency}:{period}"
         )
         hit = cache.get(cache_key)
         if hit is not None:
@@ -1217,7 +1135,9 @@ def create_dashboard_router() -> APIRouter:
             )
 
         result = _build_portfolio_performance(
-            user.user_id, currency, period,
+            user.user_id,
+            currency,
+            period,
         )
         cache.set(
             cache_key,
@@ -1232,10 +1152,12 @@ def create_dashboard_router() -> APIRouter:
     )
     async def get_portfolio_forecast(
         horizon: int = Query(
-            9, description="3|6|9",
+            9,
+            description="3|6|9",
         ),
         currency: str = Query(
-            "USD", description="USD|INR",
+            "USD",
+            description="USD|INR",
         ),
         user: UserContext = Depends(
             get_current_user,
@@ -1244,8 +1166,7 @@ def create_dashboard_router() -> APIRouter:
         """Weighted portfolio forecast."""
         cache = get_cache()
         cache_key = (
-            f"cache:portfolio:forecast:"
-            f"{user.user_id}:{currency}:{horizon}"
+            f"cache:portfolio:forecast:" f"{user.user_id}:{currency}:{horizon}"
         )
         hit = cache.get(cache_key)
         if hit is not None:
@@ -1255,7 +1176,9 @@ def create_dashboard_router() -> APIRouter:
             )
 
         result = _build_portfolio_forecast(
-            user.user_id, currency, horizon,
+            user.user_id,
+            currency,
+            horizon,
         )
         cache.set(
             cache_key,
@@ -1272,22 +1195,24 @@ def create_dashboard_router() -> APIRouter:
 # ----------------------------------------------------------
 
 _PERIOD_DAYS = {
-    "1D": 1, "1W": 7, "1M": 30, "3M": 90,
-    "6M": 180, "1Y": 365,
+    "1D": 1,
+    "1W": 7,
+    "1M": 30,
+    "3M": 90,
+    "6M": 180,
+    "1Y": 365,
 }
 
 
 def _is_currency_match(
-    ticker: str, currency: str,
+    ticker: str,
+    currency: str,
 ) -> bool:
     """True if ticker belongs to *currency*."""
     india = ticker.endswith(
         (".NS", ".BO"),
     )
-    return (
-        (currency == "INR" and india)
-        or (currency == "USD" and not india)
-    )
+    return (currency == "INR" and india) or (currency == "USD" and not india)
 
 
 def _safe_float(val) -> float:
@@ -1296,6 +1221,7 @@ def _safe_float(val) -> float:
         return 0.0
     try:
         import math as _m
+
         f = float(val)
         return 0.0 if _m.isnan(f) else f
     except (ValueError, TypeError):
@@ -1303,16 +1229,17 @@ def _safe_float(val) -> float:
 
 
 def _build_portfolio_performance(
-    user_id: str, currency: str, period: str,
+    user_id: str,
+    currency: str,
+    period: str,
 ) -> PortfolioPerformanceResponse:
     """Compute daily portfolio value series."""
     import math
+
     stock_repo = _get_stock_repo()
 
-    txn_df = (
-        stock_repo.get_portfolio_transactions(
-            user_id,
-        )
+    txn_df = stock_repo.get_portfolio_transactions(
+        user_id,
     )
     if txn_df.empty:
         return PortfolioPerformanceResponse(
@@ -1324,7 +1251,8 @@ def _build_portfolio_performance(
     buys = buys[
         buys["ticker"].apply(
             lambda t: _is_currency_match(
-                t, currency,
+                t,
+                currency,
             )
         )
     ]
@@ -1347,16 +1275,13 @@ def _build_portfolio_performance(
         if t_df.empty:
             continue
         close_maps[t] = {
-            str(row["date"]): float(row["close"])
-            for _, row in t_df.iterrows()
+            str(row["date"]): float(row["close"]) for _, row in t_df.iterrows()
         }
 
     # Lots: (ticker, qty, trade_date, buy_price)
     # If price is 0/NULL, use OHLCV close on
     # trade_date as fallback.
-    lots: list[
-        tuple[str, float, str, float]
-    ] = []
+    lots: list[tuple[str, float, str, float]] = []
     for _, row in buys.iterrows():
         t = str(row["ticker"])
         if t not in close_maps:
@@ -1380,9 +1305,7 @@ def _build_portfolio_performance(
     sorted_dates = sorted(all_dates)
 
     # Compute daily portfolio value + invested
-    values: list[
-        tuple[str, float, float]
-    ] = []
+    values: list[tuple[str, float, float]] = []
     for d in sorted_dates:
         val = 0.0
         inv = 0.0
@@ -1394,10 +1317,13 @@ def _build_portfolio_performance(
                 val += qty * price
                 inv += qty * bp
         if val > 0:
-            values.append((
-                d, round(val, 2),
-                round(inv, 2),
-            ))
+            values.append(
+                (
+                    d,
+                    round(val, 2),
+                    round(inv, 2),
+                )
+            )
 
     if not values:
         return PortfolioPerformanceResponse(
@@ -1410,16 +1336,13 @@ def _build_portfolio_performance(
     )
     if cutoff_days is not None:
         from datetime import datetime, timedelta
+
         last = datetime.strptime(
-            values[-1][0], "%Y-%m-%d",
+            values[-1][0],
+            "%Y-%m-%d",
         )
-        cutoff = (
-            last - timedelta(days=cutoff_days)
-        ).strftime("%Y-%m-%d")
-        values = [
-            (d, v, iv) for d, v, iv in values
-            if d >= cutoff
-        ]
+        cutoff = (last - timedelta(days=cutoff_days)).strftime("%Y-%m-%d")
+        values = [(d, v, iv) for d, v, iv in values if d >= cutoff]
 
     if len(values) < 2:
         return PortfolioPerformanceResponse(
@@ -1432,12 +1355,15 @@ def _build_portfolio_performance(
     returns: list[float] = []
     for i, (d, v, iv) in enumerate(values):
         if i == 0:
-            points.append(PortfolioDailyPoint(
-                date=d, value=v,
-                invested_value=iv,
-                daily_pnl=0.0,
-                daily_return_pct=0.0,
-            ))
+            points.append(
+                PortfolioDailyPoint(
+                    date=d,
+                    value=v,
+                    invested_value=iv,
+                    daily_pnl=0.0,
+                    daily_return_pct=0.0,
+                )
+            )
             continue
         prev_v = values[i - 1][1]
         prev_iv = values[i - 1][2]
@@ -1446,31 +1372,29 @@ def _build_portfolio_performance(
         pnl = round(v - prev_v - cashflow, 2)
         ret = (
             round(
-                (v - prev_v - cashflow)
-                / prev_v * 100,
+                (v - prev_v - cashflow) / prev_v * 100,
                 4,
             )
-            if prev_v else 0.0
+            if prev_v
+            else 0.0
         )
         returns.append(ret)
-        points.append(PortfolioDailyPoint(
-            date=d, value=v,
-            invested_value=iv,
-            daily_pnl=pnl,
-            daily_return_pct=ret,
-        ))
+        points.append(
+            PortfolioDailyPoint(
+                date=d,
+                value=v,
+                invested_value=iv,
+                daily_pnl=pnl,
+                daily_return_pct=ret,
+            )
+        )
 
     # Metrics — all based on invested cost basis
     last_v = values[-1][1]
     last_iv = values[-1][2]
-    total_ret = (
-        (last_v - last_iv) / last_iv * 100
-        if last_iv else 0.0
-    )
+    total_ret = (last_v - last_iv) / last_iv * 100 if last_iv else 0.0
     n_days = len(values)
-    gain_ratio = (
-        last_v / last_iv if last_iv else 1.0
-    )
+    gain_ratio = last_v / last_iv if last_iv else 1.0
     ann_ret = (
         (gain_ratio ** (252 / n_days) - 1) * 100
         if last_iv and n_days > 1
@@ -1482,9 +1406,7 @@ def _build_portfolio_performance(
     max_dd = 0.0
     peak_g = None
     for _, v, iv in values:
-        g = (
-            (v - iv) / iv * 100 if iv else 0.0
-        )
+        g = (v - iv) / iv * 100 if iv else 0.0
         if peak_g is None or g > peak_g:
             peak_g = g
         dd = g - peak_g
@@ -1496,9 +1418,7 @@ def _build_portfolio_performance(
     if returns:
         avg_r = sum(returns) / len(returns)
         if len(returns) > 1:
-            var = sum(
-                (r - avg_r) ** 2 for r in returns
-            ) / (len(returns) - 1)
+            var = sum((r - avg_r) ** 2 for r in returns) / (len(returns) - 1)
             std = math.sqrt(var)
             if std > 0:
                 sharpe = round(
@@ -1522,11 +1442,13 @@ def _build_portfolio_performance(
         max_drawdown_pct=round(max_dd, 2),
         sharpe_ratio=sharpe,
         best_day_pct=round(
-            points[best_i].daily_return_pct, 2,
+            points[best_i].daily_return_pct,
+            2,
         ),
         best_day_date=points[best_i].date,
         worst_day_pct=round(
-            points[worst_i].daily_return_pct, 2,
+            points[worst_i].daily_return_pct,
+            2,
         ),
         worst_day_date=points[worst_i].date,
     )
@@ -1539,7 +1461,9 @@ def _build_portfolio_performance(
 
 
 def _build_portfolio_forecast(
-    user_id: str, currency: str, horizon: int,
+    user_id: str,
+    currency: str,
+    horizon: int,
 ) -> PortfolioForecastResponse:
     """Weighted aggregation of per-ticker forecasts."""
     stock_repo = _get_stock_repo()
@@ -1556,7 +1480,8 @@ def _build_portfolio_forecast(
     holdings_df = holdings_df[
         holdings_df["ticker"].apply(
             lambda t: _is_currency_match(
-                t, currency,
+                t,
+                currency,
             )
         )
     ]
@@ -1567,9 +1492,7 @@ def _build_portfolio_forecast(
         )
 
     # Gather per-ticker forecasts + current prices
-    forecasts: dict[
-        str, list[tuple[str, float, float, float]]
-    ] = {}
+    forecasts: dict[str, list[tuple[str, float, float, float]]] = {}
     weights: dict[str, float] = {}
     current_value = 0.0
     total_invested = 0.0
@@ -1597,7 +1520,8 @@ def _build_portfolio_forecast(
 
         # Always fetch 9M; client truncates
         fc_df = stock_repo.get_latest_forecast_series(
-            t, 9,
+            t,
+            9,
         )
         if fc_df.empty:
             continue
@@ -1617,7 +1541,8 @@ def _build_portfolio_forecast(
             horizon_months=horizon,
             current_value=round(current_value, 2),
             total_invested=round(
-                total_invested, 2,
+                total_invested,
+                2,
             ),
         )
 
@@ -1634,9 +1559,7 @@ def _build_portfolio_forecast(
         dict[str, tuple[float, float, float]],
     ] = {}
     for t, pts in forecasts.items():
-        m: dict[
-            str, tuple[float, float, float]
-        ] = {}
+        m: dict[str, tuple[float, float, float]] = {}
         for d, p, lo, hi in pts:
             m[d] = (p, lo, hi)
         fc_maps[t] = m
@@ -1644,9 +1567,7 @@ def _build_portfolio_forecast(
     # Aggregate
     points: list[PortfolioForecastPoint] = []
     # Track last known values for forward-fill
-    last_known: dict[
-        str, tuple[float, float, float]
-    ] = {}
+    last_known: dict[str, tuple[float, float, float]] = {}
     for d in sorted_dates:
         pred = 0.0
         lower = 0.0
@@ -1678,7 +1599,8 @@ def _build_portfolio_forecast(
         horizon_months=horizon,
         current_value=round(current_value, 2),
         total_invested=round(
-            total_invested, 2,
+            total_invested,
+            2,
         ),
         currency=currency,
     )
@@ -1688,12 +1610,14 @@ def _build_portfolio_forecast(
 # Helpers
 # ----------------------------------------------------------
 
+
 def _safe(val) -> float | None:
     """Convert to float or return None."""
     if val is None:
         return None
     try:
         import math
+
         f = float(val)
         return None if math.isnan(f) else round(f, 4)
     except (ValueError, TypeError):
@@ -1722,11 +1646,7 @@ def _add_signal(
     lower = sig_str.lower()
     if "bull" in lower or "above" in lower:
         signal = "Bullish"
-    elif (
-        "bear" in lower
-        or "below" in lower
-        or "oversold" in lower
-    ):
+    elif "bear" in lower or "below" in lower or "oversold" in lower:
         signal = "Bearish"
     elif "overbought" in lower:
         signal = "Bearish"
@@ -1735,10 +1655,7 @@ def _add_signal(
 
     # Numeric from technical_indicators first,
     # then analysis_summary, then signal text.
-    val = (
-        (ti_vals or {}).get(value_col)
-        or row.get(value_col)
-    )
+    val = (ti_vals or {}).get(value_col) or row.get(value_col)
     try:
         display_val = str(round(float(val), 2))
     except (ValueError, TypeError):

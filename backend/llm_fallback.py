@@ -223,6 +223,13 @@ class FallbackLLM:
         # Step 2: Estimate tokens.
         est = self._budget.estimate_tokens(compressed)
 
+        # Step 2b: Build tracing callbacks (LangFuse).
+        from tracing import get_callbacks as _get_cbs
+
+        _trace_cbs = _get_cbs(
+            f"cascade.{self._agent_id}",
+        )
+
         # Step 3: Try each Groq tier in order.
         from tools._ticker_linker import (
             get_current_user,
@@ -288,9 +295,13 @@ class FallbackLLM:
             # Budget is now reserved atomically — invoke LLM.
             _t0 = time.monotonic()
             try:
+                _kw = dict(kwargs)
+                if _trace_cbs:
+                    _kw.setdefault("config", {})
+                    _kw["config"]["callbacks"] = _trace_cbs
                 result = bound_llm.invoke(
                     cur_compressed,
-                    **kwargs,
+                    **_kw,
                 )
                 _ms = int(
                     (time.monotonic() - _t0) * 1000,
@@ -325,6 +336,12 @@ class FallbackLLM:
                 )
                 return result
             except Exception as exc:
+                # Ensure error is always traced.
+                if not _trace_cbs:
+                    _trace_cbs = _get_cbs(
+                        f"cascade.{self._agent_id}",
+                        is_error=True,
+                    )
                 # Roll back the reservation on failure.
                 self._budget.release(
                     model_name,
@@ -371,7 +388,14 @@ class FallbackLLM:
             )
 
         _t0 = time.monotonic()
-        result = self._anthropic_bound.invoke(compressed, **kwargs)
+        _akw = dict(kwargs)
+        if _trace_cbs:
+            _akw.setdefault("config", {})
+            _akw["config"]["callbacks"] = _trace_cbs
+        result = self._anthropic_bound.invoke(
+            compressed,
+            **_akw,
+        )
         _ms = int((time.monotonic() - _t0) * 1000)
         _pt = _ct = None
         _umeta = getattr(result, "usage_metadata", None)

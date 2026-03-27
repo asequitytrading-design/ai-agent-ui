@@ -8,26 +8,32 @@ import pytest
 class TestGetTickerNews:
     """Tests for tools.news_tools.get_ticker_news."""
 
-    @patch("tools.news_tools._cache_get")
-    def test_cache_hit(self, mock_cache):
+    @patch("tools.news_tools.yf")
+    def test_always_fetches_fresh(self, mock_yf):
+        """News should never use Redis cache."""
         from tools.news_tools import get_ticker_news
 
-        mock_cache.return_value = "Cached AAPL news"
+        mock_ticker = MagicMock()
+        mock_ticker.news = [
+            {
+                "title": "Fresh AAPL news",
+                "publisher": "Reuters",
+                "link": "https://example.com",
+                "providerPublishTime": "2026-03-26",
+            },
+        ]
+        mock_yf.Ticker.return_value = mock_ticker
+
         result = get_ticker_news.invoke(
             {"ticker": "AAPL"},
         )
-        assert "cache" in result.lower()
-        assert "Cached AAPL news" in result
+        assert "yfinance/rss" in result.lower()
+        assert "Fresh AAPL news" in result
 
-    @patch("tools.news_tools._cache_set")
-    @patch("tools.news_tools._cache_get")
     @patch("tools.news_tools.yf")
-    def test_yfinance_news(
-        self, mock_yf, mock_cache_get, mock_cache_set,
-    ):
+    def test_yfinance_news(self, mock_yf):
         from tools.news_tools import get_ticker_news
 
-        mock_cache_get.return_value = None
         mock_ticker = MagicMock()
         mock_ticker.news = [
             {
@@ -46,16 +52,14 @@ class TestGetTickerNews:
         assert "yfinance" in result.lower()
 
     @patch("tools.news_tools.feedparser")
-    @patch("tools.news_tools._cache_set")
-    @patch("tools.news_tools._cache_get")
     @patch("tools.news_tools.yf")
     def test_no_news_found(
-        self, mock_yf, mock_cache_get,
-        mock_cache_set, mock_fp,
+        self,
+        mock_yf,
+        mock_fp,
     ):
         from tools.news_tools import get_ticker_news
 
-        mock_cache_get.return_value = None
         mock_ticker = MagicMock()
         mock_ticker.news = []
         mock_yf.Ticker.return_value = mock_ticker
@@ -89,7 +93,10 @@ class TestGetAnalystRecommendations:
     @patch("tools.news_tools._cache_get")
     @patch("tools.news_tools.yf")
     def test_no_recommendations(
-        self, mock_yf, mock_cache_get, mock_cache_set,
+        self,
+        mock_yf,
+        mock_cache_get,
+        mock_cache_set,
     ):
         from tools.news_tools import (
             get_analyst_recommendations,
@@ -125,7 +132,10 @@ class TestSearchFinancialNews:
     @patch("tools.news_tools._cache_get")
     @patch("tools.news_tools.yf")
     def test_yfinance_sufficient(
-        self, mock_yf, mock_cache_get, mock_cache_set,
+        self,
+        mock_yf,
+        mock_cache_get,
+        mock_cache_set,
     ):
         """Free sources return enough results —
         SerpAPI NOT called."""
@@ -136,8 +146,11 @@ class TestSearchFinancialNews:
         mock_cache_get.return_value = None
         mock_ticker = MagicMock()
         mock_ticker.news = [
-            {"title": f"News {i}", "publisher": "X",
-             "providerPublishTime": "2026-03-21"}
+            {
+                "title": f"News {i}",
+                "publisher": "X",
+                "providerPublishTime": "2026-03-21",
+            }
             for i in range(5)
         ]
         mock_yf.Ticker.return_value = mock_ticker
