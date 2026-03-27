@@ -37,6 +37,7 @@ export interface SchedulerRun {
   tickers_total: number;
   tickers_done: number;
   error_message: string | null;
+  trigger_type: string | null;
 }
 
 export interface SchedulerStats {

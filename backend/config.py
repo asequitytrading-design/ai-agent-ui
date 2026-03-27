@@ -159,6 +159,7 @@ class Settings(BaseSettings):
     # Job scheduler
     scheduler_enabled: bool = True
     scheduler_max_workers: int = 3
+    scheduler_catchup_enabled: bool = True
 
     # Smart cache warming: pre-warm Redis for the top
     # N most active users at startup.

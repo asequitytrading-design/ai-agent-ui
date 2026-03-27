@@ -3893,6 +3893,19 @@ class StockRepository:
                     v = v.replace(tzinfo=None)
                 clean[k] = v
             tbl = self._load_table(self._SCHEDULER_RUNS)
+            # Auto-evolve schema for trigger_type
+            col_names = [
+                f.name for f in tbl.schema().fields
+            ]
+            if "trigger_type" not in col_names:
+                from pyiceberg.types import StringType
+                with tbl.update_schema() as upd:
+                    upd.add_column(
+                        "trigger_type", StringType(),
+                    )
+                tbl = self._load_table(
+                    self._SCHEDULER_RUNS,
+                )
             schema = tbl.schema().as_arrow()
             df = pd.DataFrame([clean])
             at = pa.Table.from_pandas(
@@ -4021,6 +4034,42 @@ class StockRepository:
                 "runs_today_failed": 0,
                 "runs_today_running": 0,
             }
+
+    def get_last_run_for_job(
+        self,
+        job_id: str,
+    ) -> dict | None:
+        """Return the most recent run for a job."""
+        try:
+            df = self._table_to_df(self._SCHEDULER_RUNS)
+            if df.empty:
+                return None
+            df = df[df["job_id"] == job_id]
+            if df.empty:
+                return None
+            if "started_at" in df.columns:
+                df["started_at"] = pd.to_datetime(
+                    df["started_at"],
+                    utc=True,
+                    errors="coerce",
+                )
+                df = df.sort_values(
+                    "started_at", ascending=False,
+                )
+            row = df.iloc[0].to_dict()
+            for k, v in list(row.items()):
+                if hasattr(v, "isoformat"):
+                    row[k] = v.isoformat()
+                elif isinstance(v, float) and v != v:
+                    row[k] = None
+            return row
+        except Exception:
+            _logger.error(
+                "get_last_run_for_job %s failed",
+                job_id,
+                exc_info=True,
+            )
+            return None
 
     # ── Sentiment Scores ───────────────────────────────
 

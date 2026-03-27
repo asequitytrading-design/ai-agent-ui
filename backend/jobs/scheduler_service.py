@@ -20,6 +20,7 @@ from zoneinfo import ZoneInfo
 
 import schedule
 
+from config import get_settings
 from jobs.executor import JOB_EXECUTORS
 
 _logger = logging.getLogger(__name__)
@@ -75,6 +76,36 @@ def _next_run_ist(
     return None
 
 
+def _last_scheduled_window(
+    cron_days: list[str], cron_time: str,
+) -> datetime | None:
+    """Find the most recent past scheduled window.
+
+    Looks backward up to 7 days from now (IST) and
+    returns the IST-aware datetime of the last window
+    that should have fired, or ``None``.
+    """
+    now = datetime.now(IST)
+    time_obj = datetime.strptime(
+        cron_time, "%H:%M",
+    ).time()
+    day_names = [
+        "mon", "tue", "wed", "thu",
+        "fri", "sat", "sun",
+    ]
+
+    for offset in range(8):
+        candidate = now - timedelta(days=offset)
+        day_abbr = day_names[candidate.weekday()]
+        if day_abbr in cron_days:
+            candidate_dt = datetime.combine(
+                candidate.date(), time_obj, tzinfo=IST,
+            )
+            if candidate_dt <= now:
+                return candidate_dt
+    return None
+
+
 class SchedulerService:
     """Persistent job scheduler backed by Iceberg."""
 
@@ -99,6 +130,8 @@ class SchedulerService:
         """Load jobs from Iceberg and start the daemon."""
         self._cleanup_stale_runs()
         self.reload_jobs()
+        if get_settings().scheduler_catchup_enabled:
+            self._catchup_missed_jobs()
         self._thread = threading.Thread(
             target=self._loop,
             daemon=True,
@@ -143,6 +176,86 @@ class SchedulerService:
             _logger.warning(
                 "Stale run cleanup failed",
                 exc_info=True,
+            )
+
+    def _catchup_missed_jobs(self) -> None:
+        """Trigger catch-up runs for missed windows.
+
+        For each enabled job, compute the most recent
+        past scheduled window and compare it against the
+        last run.  If no run covers that window, fire a
+        single catch-up.
+        """
+        for job_id, job in self._jobs.items():
+            if not job.get("enabled"):
+                continue
+            cron_days = (
+                job.get("cron_days", "") or ""
+            ).split(",")
+            cron_days = [
+                d.strip().lower() for d in cron_days
+                if d.strip()
+            ]
+            cron_time = job.get("cron_time", "18:00")
+
+            last_window = _last_scheduled_window(
+                cron_days, cron_time,
+            )
+            if last_window is None:
+                continue
+
+            # Convert window to UTC tz-naive for
+            # comparison with Iceberg timestamps
+            window_utc = (
+                last_window.astimezone(UTC)
+                .replace(tzinfo=None)
+            )
+
+            last_run = self._repo.get_last_run_for_job(
+                job_id,
+            )
+
+            if last_run:
+                status = last_run.get("status")
+                if status == "running":
+                    _logger.debug(
+                        "Catchup skip %s: still"
+                        " running",
+                        job.get("name"),
+                    )
+                    continue
+
+                started = last_run.get("started_at")
+                if isinstance(started, str):
+                    started = datetime.fromisoformat(
+                        started.replace("Z", "+00:00"),
+                    ).replace(tzinfo=None)
+                elif hasattr(started, "replace"):
+                    started = started.replace(
+                        tzinfo=None,
+                    )
+
+                if started and started >= window_utc:
+                    _logger.debug(
+                        "Catchup skip %s: recent run"
+                        " at %s",
+                        job.get("name"), started,
+                    )
+                    continue
+
+            _logger.info(
+                "Catchup trigger: job=%s name=%s"
+                " last_window=%s last_run=%s",
+                job_id,
+                job.get("name"),
+                last_window.strftime("%Y-%m-%d %H:%M"),
+                (
+                    last_run.get("started_at")
+                    if last_run else "never"
+                ),
+            )
+            self.trigger_now(
+                job_id, trigger_type="catchup",
             )
 
     def _loop(self) -> None:
@@ -272,7 +385,9 @@ class SchedulerService:
                 )
                 return
 
-        run_id = self.trigger_now(job_id)
+        run_id = self.trigger_now(
+            job_id, trigger_type="scheduled",
+        )
         if run_id:
             _logger.info(
                 "Scheduled trigger: job=%s run=%s",
@@ -280,8 +395,12 @@ class SchedulerService:
                 run_id,
             )
 
-    def trigger_now(self, job_id: str) -> str | None:
-        """Manually trigger a job. Returns run_id."""
+    def trigger_now(
+        self,
+        job_id: str,
+        trigger_type: str = "manual",
+    ) -> str | None:
+        """Trigger a job. Returns run_id."""
         job = self._jobs.get(job_id)
         if not job:
             return None
@@ -311,6 +430,7 @@ class SchedulerService:
             "tickers_total": 0,
             "tickers_done": 0,
             "error_message": None,
+            "trigger_type": trigger_type,
         }
         self._repo.append_scheduler_run(run)
 

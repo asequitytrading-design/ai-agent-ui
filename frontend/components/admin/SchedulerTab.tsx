@@ -866,6 +866,28 @@ function RunTimeline() {
                 </p>
                 <div className="mt-1 flex items-center gap-2">
                   <StatusBadge status={r.status} />
+                  {r.trigger_type === "catchup" && (
+                    <span
+                      className="rounded-full bg-amber-100
+                        px-2 py-0.5 text-[10px]
+                        font-semibold text-amber-700
+                        dark:bg-amber-500/15
+                        dark:text-amber-400"
+                    >
+                      Catch-up
+                    </span>
+                  )}
+                  {r.trigger_type === "manual" && (
+                    <span
+                      className="rounded-full bg-blue-100
+                        px-2 py-0.5 text-[10px]
+                        font-semibold text-blue-700
+                        dark:bg-blue-500/15
+                        dark:text-blue-400"
+                    >
+                      Manual
+                    </span>
+                  )}
                   <span className="font-mono text-[11px] text-gray-400 dark:text-gray-500">
                     {fmtDuration(r.duration_secs)}
                   </span>

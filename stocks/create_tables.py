@@ -1472,6 +1472,12 @@ def _scheduler_runs_schema() -> Schema:
             field_type=StringType(),
             required=False,
         ),
+        NestedField(
+            field_id=13,
+            name="trigger_type",
+            field_type=StringType(),
+            required=False,
+        ),
     )
 
 
