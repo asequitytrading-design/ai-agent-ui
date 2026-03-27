@@ -75,7 +75,7 @@ export function InsightsFilters({
           <option value="all">All Sectors</option>
           {sectors.map((s) => (
             <option key={s} value={s}>
-              {s}
+              {s.charAt(0).toUpperCase() + s.slice(1)}
             </option>
           ))}
         </select>

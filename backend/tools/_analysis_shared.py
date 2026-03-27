@@ -2,7 +2,7 @@ import logging
 from datetime import date
 
 import pandas as pd
-from paths import CACHE_DIR, CHARTS_ANALYSIS_DIR
+from paths import CACHE_DIR
 from tools._stock_shared import (  # noqa: F401 — re-exported
     _get_repo,
     _require_repo,
@@ -11,7 +11,6 @@ from tools._stock_shared import (  # noqa: F401 — re-exported
 # Module-level logger; required at module scope.
 _logger = logging.getLogger(__name__)
 
-_CHARTS_ANALYSIS = CHARTS_ANALYSIS_DIR
 _CACHE_DIR = CACHE_DIR
 
 
@@ -50,12 +49,12 @@ def _save_cache(ticker: str, key: str, result: str) -> None:
 from tools._helpers import _currency_symbol, _load_currency  # noqa: F401,E402
 
 
-def _load_parquet(ticker: str) -> pd.DataFrame | None:
+def _load_ohlcv(ticker: str) -> pd.DataFrame | None:
     """Load OHLCV data for a ticker from Iceberg.
 
-    Returns a DataFrame with a DatetimeIndex and columns ``Open``, ``High``,
-    ``Low``, ``Close``, ``Adj Close``, ``Volume`` — the same shape as the
-    legacy ``pd.read_parquet(data/raw/{TICKER}_raw.parquet)`` output.
+    Returns a DataFrame with a DatetimeIndex and columns
+    ``Open``, ``High``, ``Low``, ``Close``, ``Adj Close``,
+    ``Volume``.
 
     Args:
         ticker: Stock ticker symbol (already uppercased).

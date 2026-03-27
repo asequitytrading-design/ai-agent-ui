@@ -28,8 +28,7 @@ try:
 except ImportError:
     _HAS_FEEDPARSER = False
     _logger.info(
-        "feedparser not installed — Google News "
-        "RSS fallback disabled",
+        "feedparser not installed — Google News " "RSS fallback disabled",
     )
 
 
@@ -68,8 +67,9 @@ def _cache_set(key: str, val: str, ttl: int):
 def get_ticker_news(ticker: str) -> str:
     """Get latest news headlines for a stock ticker.
 
-    Sources (in order): Redis cache → yfinance .news →
-    Google News RSS.  Never calls SerpAPI.
+    Sources (in order): yfinance .news → Google News RSS.
+    Always fetches fresh — no Redis cache.  Never calls
+    SerpAPI.
 
     Args:
         ticker: Stock ticker symbol (e.g. AAPL,
@@ -79,33 +79,40 @@ def get_ticker_news(ticker: str) -> str:
         Formatted news headlines with dates and
         publishers.
     """
-    cache_key = f"cache:news:ticker:{ticker}"
-
-    # 1. Redis cache (1h TTL)
-    cached = _cache_get(cache_key)
-    if cached:
-        return f"[Source: cache]\n{cached}"
-
     articles: list[dict] = []
 
     # 2. yfinance .news (free)
+    # yfinance >= 1.2 nests data under "content".
     try:
         t = yf.Ticker(ticker)
         news = t.news or []
         for item in news[:8]:
-            articles.append({
-                "title": item.get("title", ""),
-                "publisher": item.get(
-                    "publisher", "",
-                ),
-                "link": item.get("link", ""),
-                "date": item.get(
-                    "providerPublishTime", "",
-                ),
-            })
+            c = item.get("content", item)
+            prov = c.get("provider", {})
+            canon = c.get(
+                "canonicalUrl",
+                {},
+            )
+            articles.append(
+                {
+                    "title": (c.get("title") or item.get("title", "")),
+                    "publisher": (
+                        prov.get("displayName") or item.get("publisher", "")
+                    ),
+                    "link": (canon.get("url") or item.get("link", "")),
+                    "date": (
+                        c.get("pubDate")
+                        or item.get(
+                            "providerPublishTime",
+                            "",
+                        )
+                    ),
+                }
+            )
     except Exception:
         _logger.debug(
-            "yfinance news failed for %s", ticker,
+            "yfinance news failed for %s",
+            ticker,
         )
 
     # 3. Google News RSS fallback (free)
@@ -118,20 +125,21 @@ def get_ticker_news(ticker: str) -> str:
             )
             feed = feedparser.parse(url)
             for entry in feed.entries[:5]:
-                if not any(
-                    a["title"] == entry.title
-                    for a in articles
-                ):
-                    articles.append({
-                        "title": entry.title,
-                        "publisher": entry.get(
-                            "source", {},
-                        ).get("title", "Google News"),
-                        "link": entry.link,
-                        "date": entry.get(
-                            "published", "",
-                        ),
-                    })
+                if not any(a["title"] == entry.title for a in articles):
+                    articles.append(
+                        {
+                            "title": entry.title,
+                            "publisher": entry.get(
+                                "source",
+                                {},
+                            ).get("title", "Google News"),
+                            "link": entry.link,
+                            "date": entry.get(
+                                "published",
+                                "",
+                            ),
+                        }
+                    )
         except Exception:
             _logger.debug(
                 "Google News RSS failed for %s",
@@ -151,7 +159,6 @@ def get_ticker_news(ticker: str) -> str:
         )
 
     result = "\n".join(lines)
-    _cache_set(cache_key, result, 3600)
     return f"[Source: yfinance/rss]\n{result}"
 
 
@@ -165,6 +172,8 @@ def get_analyst_recommendations(ticker: str) -> str:
     """Get analyst buy/hold/sell recommendations.
 
     Source: Redis cache (24h) → yfinance (free).
+    Uses ``upgrades_downgrades`` for per-analyst ratings
+    and ``recommendations`` for consensus summary.
 
     Args:
         ticker: Stock ticker symbol.
@@ -180,28 +189,47 @@ def get_analyst_recommendations(ticker: str) -> str:
 
     try:
         t = yf.Ticker(ticker)
+
+        lines = [
+            f"**Analyst Recommendations for " f"{ticker}**\n",
+        ]
+
+        # Per-analyst upgrades/downgrades (yfinance 1.2+)
+        ud = t.upgrades_downgrades
+        if ud is not None and not ud.empty:
+            recent = ud.sort_index(
+                ascending=False,
+            ).head(10)
+            for idx, row in recent.iterrows():
+                dt = str(idx)[:10]
+                firm = row.get("Firm", "Unknown")
+                grade = row.get("ToGrade", "")
+                action = row.get("Action", "")
+                pt = row.get(
+                    "currentPriceTarget",
+                    "",
+                )
+                pt_str = f" (PT: ${pt})" if pt else ""
+                lines.append(
+                    f"- {dt}: **{firm}** — " f"{action} → {grade}{pt_str}"
+                )
+
+        # Consensus summary (buy/hold/sell counts)
         recs = t.recommendations
-        if recs is None or recs.empty:
-            return (
-                f"No analyst recommendations "
-                f"found for {ticker}."
+        if recs is not None and not recs.empty:
+            curr = recs.iloc[0]
+            lines.append(
+                f"\n**Consensus (current month):** "
+                f"Strong Buy: {curr.get('strongBuy', 0)}"
+                f" | Buy: {curr.get('buy', 0)}"
+                f" | Hold: {curr.get('hold', 0)}"
+                f" | Sell: {curr.get('sell', 0)}"
+                f" | Strong Sell: "
+                f"{curr.get('strongSell', 0)}"
             )
 
-        # Take last 10 recommendations
-        recent = recs.tail(10).reset_index()
-        lines = [
-            f"**Analyst Recommendations for "
-            f"{ticker}**\n"
-        ]
-        for _, row in recent.iterrows():
-            date_str = str(row.get("Date", ""))[:10]
-            firm = row.get("Firm", "Unknown")
-            grade = row.get("To Grade", "")
-            action = row.get("Action", "")
-            lines.append(
-                f"- {date_str}: **{firm}** — "
-                f"{action} → {grade}"
-            )
+        if len(lines) <= 1:
+            return f"No analyst recommendations " f"found for {ticker}."
 
         result = "\n".join(lines)
         _cache_set(cache_key, result, 86400)
@@ -210,12 +238,10 @@ def get_analyst_recommendations(ticker: str) -> str:
     except Exception as exc:
         _logger.warning(
             "Analyst recs failed for %s: %s",
-            ticker, exc,
+            ticker,
+            exc,
         )
-        return (
-            f"Could not fetch analyst "
-            f"recommendations for {ticker}."
-        )
+        return f"Could not fetch analyst " f"recommendations for {ticker}."
 
 
 # ---------------------------------------------------------------
@@ -240,8 +266,7 @@ def search_financial_news(query: str) -> str:
         sources.
     """
     cache_key = (
-        f"cache:news:search:"
-        f"{re.sub(r'[^a-z0-9]', '_', query.lower())}"
+        f"cache:news:search:" f"{re.sub(r'[^a-z0-9]', '_', query.lower())}"
     )
 
     cached = _cache_get(cache_key)
@@ -255,10 +280,21 @@ def search_financial_news(query: str) -> str:
         r"\b[A-Z]{1,5}(?:\.[A-Z]{1,2})?\b",
     )
     tickers = [
-        t for t in ticker_pattern.findall(query)
-        if t not in {
-            "I", "A", "IT", "IS", "AM", "AN",
-            "AT", "AS", "THE", "AND", "FOR",
+        t
+        for t in ticker_pattern.findall(query)
+        if t
+        not in {
+            "I",
+            "A",
+            "IT",
+            "IS",
+            "AM",
+            "AN",
+            "AT",
+            "AS",
+            "THE",
+            "AND",
+            "FOR",
         }
     ]
 
@@ -268,15 +304,19 @@ def search_financial_news(query: str) -> str:
             t = yf.Ticker(ticker)
             news = t.news or []
             for item in news[:3]:
-                articles.append({
-                    "title": item.get("title", ""),
-                    "publisher": item.get(
-                        "publisher", "",
-                    ),
-                    "date": item.get(
-                        "providerPublishTime", "",
-                    ),
-                })
+                articles.append(
+                    {
+                        "title": item.get("title", ""),
+                        "publisher": item.get(
+                            "publisher",
+                            "",
+                        ),
+                        "date": item.get(
+                            "providerPublishTime",
+                            "",
+                        ),
+                    }
+                )
         except Exception:
             pass
 
@@ -290,21 +330,23 @@ def search_financial_news(query: str) -> str:
             )
             feed = feedparser.parse(url)
             for entry in feed.entries[:5]:
-                if not any(
-                    a["title"] == entry.title
-                    for a in articles
-                ):
-                    articles.append({
-                        "title": entry.title,
-                        "publisher": entry.get(
-                            "source", {},
-                        ).get(
-                            "title", "Google News",
-                        ),
-                        "date": entry.get(
-                            "published", "",
-                        ),
-                    })
+                if not any(a["title"] == entry.title for a in articles):
+                    articles.append(
+                        {
+                            "title": entry.title,
+                            "publisher": entry.get(
+                                "source",
+                                {},
+                            ).get(
+                                "title",
+                                "Google News",
+                            ),
+                            "date": entry.get(
+                                "published",
+                                "",
+                            ),
+                        }
+                    )
         except Exception:
             pass
 
@@ -320,9 +362,7 @@ def search_financial_news(query: str) -> str:
                 )
 
                 search = SerpAPIWrapper(
-                    serpapi_api_key=(
-                        settings.serpapi_api_key
-                    ),
+                    serpapi_api_key=(settings.serpapi_api_key),
                 )
                 raw = search.run(
                     f"{query} stock market news",
@@ -331,11 +371,13 @@ def search_financial_news(query: str) -> str:
                     "SerpAPI called for: %s",
                     query[:50],
                 )
-                articles.append({
-                    "title": raw[:300],
-                    "publisher": "SerpAPI",
-                    "date": "",
-                })
+                articles.append(
+                    {
+                        "title": raw[:300],
+                        "publisher": "SerpAPI",
+                        "date": "",
+                    }
+                )
         except Exception:
             _logger.debug(
                 "SerpAPI fallback failed for: %s",
@@ -357,9 +399,6 @@ def search_financial_news(query: str) -> str:
     _cache_set(cache_key, result, 3600)
 
     sources = "yfinance/rss"
-    if any(
-        a["publisher"] == "SerpAPI"
-        for a in articles
-    ):
+    if any(a["publisher"] == "SerpAPI" for a in articles):
         sources = "yfinance/rss/serpapi"
     return f"[Source: {sources}]\n{result}"

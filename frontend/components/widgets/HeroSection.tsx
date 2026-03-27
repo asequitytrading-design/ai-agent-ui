@@ -31,11 +31,6 @@ const quickActions = [
     href: "/analytics/analysis?tab=portfolio-forecast",
     primary: false,
   },
-  {
-    label: "Link Stock",
-    href: "/analytics/marketplace",
-    primary: false,
-  },
 ] as const;
 
 export function HeroSection({

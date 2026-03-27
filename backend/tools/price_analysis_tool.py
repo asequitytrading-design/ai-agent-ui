@@ -24,7 +24,6 @@ from datetime import date
 
 import tools._analysis_shared as _sh
 from langchain_core.tools import tool
-from tools._analysis_chart import _create_analysis_chart
 from tools._analysis_indicators import _calculate_technical_indicators
 from tools._analysis_movement import _analyse_price_movement
 from tools._analysis_summary import _generate_summary_stats
@@ -122,7 +121,7 @@ def analyse_stock_price(ticker: str) -> str:
         _logger.debug("Freshness check skipped for %s: %s", ticker, exc)
 
     try:
-        df = _sh._load_parquet(ticker)
+        df = _sh._load_ohlcv(ticker)
         if df is None:
             return (
                 f"No OHLCV data found for '{ticker}'. "
@@ -135,7 +134,6 @@ def analyse_stock_price(ticker: str) -> str:
         df = _calculate_technical_indicators(df)
         movement = _analyse_price_movement(df)
         stats = _generate_summary_stats(df, ticker)
-        chart_path = _create_analysis_chart(df, ticker)
 
         repo = _sh._require_repo()
         repo.upsert_technical_indicators(ticker, df)
@@ -201,9 +199,7 @@ def analyse_stock_price(ticker: str) -> str:
             f"  Best Month      : {bm} ({bmr:+.1f}%)\n"
             f"  Worst Month     : {wm} ({wmr:+.1f}%)\n"
             f"  Best Year       : {by} ({byr:+.1f}%)\n"
-            f"  Worst Year      : {wy} ({wyr:+.1f}%)\n\n"
-            f"CHART\n"
-            f"  Saved to: {chart_path}\n"
+            f"  Worst Year      : {wy} ({wyr:+.1f}%)\n"
         )
 
         _sh._save_cache(ticker, "analysis", report)
