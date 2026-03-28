@@ -359,3 +359,33 @@ class TestCatchupMissedJobs:
         svc, repo = self._make_svc(jobs, None)
         svc._catchup_missed_jobs()
         repo.get_last_run_for_job.assert_not_called()
+
+
+# ── Schedule registration tests ──────────────────────
+
+
+class TestScheduleRegistration:
+    """Verify schedule lib receives IST time directly."""
+
+    def test_register_uses_ist_not_utc(self):
+        """Job at 21:00 IST registers as 21:00."""
+        from jobs.scheduler_service import (
+            SchedulerService,
+        )
+
+        repo = MagicMock()
+        svc = SchedulerService(repo)
+        job = {
+            "job_id": "test_job",
+            "cron_days": "mon",
+            "cron_time": "21:00",
+        }
+
+        svc._register_schedule(job)
+
+        jobs = svc._scheduler.get_jobs()
+        assert len(jobs) == 1
+        assert (
+            jobs[0].at_time.strftime("%H:%M")
+            == "21:00"
+        )

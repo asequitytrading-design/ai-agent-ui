@@ -39,18 +39,6 @@ _DAY_MAP = {
 }
 
 
-def _ist_to_utc(time_str: str) -> str:
-    """Convert an IST time string (HH:MM) to UTC."""
-    today = datetime.now(IST).date()
-    ist_dt = datetime.combine(
-        today,
-        datetime.strptime(time_str, "%H:%M").time(),
-        tzinfo=IST,
-    )
-    utc_dt = ist_dt.astimezone(UTC)
-    return utc_dt.strftime("%H:%M")
-
-
 def _next_run_ist(
     cron_days: list[str], cron_time: str,
 ) -> datetime | None:
@@ -297,7 +285,6 @@ class SchedulerService:
             job.get("cron_days", "") or ""
         ).split(",")
         cron_time = job.get("cron_time", "18:00")
-        utc_time = _ist_to_utc(cron_time)
         job_id = job["job_id"]
 
         for day_abbr in cron_days:
@@ -308,7 +295,9 @@ class SchedulerService:
             sched_day = getattr(
                 self._scheduler.every(), day_full,
             )
-            sched_day.at(utc_time).do(
+            # schedule lib uses system local time (IST)
+            # — no UTC conversion needed
+            sched_day.at(cron_time).do(
                 self._trigger_job, job_id,
             ).tag(job_id)
 
