@@ -150,8 +150,8 @@ export function BillingTab() {
       // Server-side upgrade via PATCH — no modal needed
       if (data.upgraded) {
         setSuccess("Plan upgraded! Pro-rata billing applied.");
-        await refreshAccessToken();
         fetchSubscription();
+        refreshAccessToken().catch(() => {});
         return;
       }
 
@@ -174,8 +174,15 @@ export function BillingTab() {
         description: `${tier.charAt(0).toUpperCase() + tier.slice(1)} Plan`,
         handler: async () => {
           setSuccess("Payment successful! Updating your plan...");
-          await refreshAccessToken();
-          setTimeout(() => fetchSubscription(), 3000);
+          // Don't refresh token here — if it fails
+          // (cookie mismatch, expiry), user gets
+          // kicked to login after a successful payment.
+          // Webhook updates tier server-side; next
+          // natural refresh picks up new claims.
+          setTimeout(() => {
+            fetchSubscription();
+            refreshAccessToken().catch(() => {});
+          }, 3000);
         },
         modal: {
           ondismiss: () => setError(""),
