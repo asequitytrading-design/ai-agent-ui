@@ -178,20 +178,43 @@ class UserRepository:
 
     # ── Audit (stays on Iceberg — not migrated) ──
 
+    def _get_iceberg_catalog(self):
+        """Lazy-load shared Iceberg catalog."""
+        from pyiceberg.catalog import load_catalog
+        return load_catalog("local")
+
     async def append_audit_event(
         self, event_type: str, actor_user_id: str,
         target_user_id: str,
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        """Write audit event to Iceberg (unchanged)."""
-        log.debug("Audit event %s (Iceberg)", event_type)
+        """Write audit event to Iceberg."""
+        from auth.repo.audit import append_audit_event
+        try:
+            cat = self._get_iceberg_catalog()
+            append_audit_event(
+                cat, event_type, actor_user_id,
+                target_user_id, metadata,
+            )
+        except Exception:
+            log.warning(
+                "Audit write failed: %s", event_type,
+                exc_info=True,
+            )
 
     async def list_audit_events(
         self,
     ) -> list[dict[str, Any]]:
-        """Read audit events from Iceberg (unchanged)."""
-        log.debug("List audit events (Iceberg)")
-        return []
+        """Read audit events from Iceberg."""
+        from auth.repo.audit import list_audit_events
+        try:
+            cat = self._get_iceberg_catalog()
+            return list_audit_events(cat)
+        except Exception:
+            log.warning(
+                "Audit read failed", exc_info=True,
+            )
+            return []
 
 
 # Deprecated alias — kept for backward compatibility with
