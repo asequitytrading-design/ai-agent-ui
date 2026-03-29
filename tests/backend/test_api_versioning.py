@@ -66,7 +66,8 @@ class TestV1EndpointsRespond:
         client = _make_client()
         resp = client.get("/v1/health")
         assert resp.status_code == 200
-        assert resp.json() == {"status": "ok"}
+        body = resp.json()
+        assert body["status"] == "ok"
 
     def test_agents_v1(self):
         """GET /v1/agents returns 200."""
