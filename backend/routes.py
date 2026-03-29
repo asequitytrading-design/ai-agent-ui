@@ -193,12 +193,12 @@ def create_app(
     # Usage tracking helper
     # ---------------------------------------------------------------
 
-    def _enforce_quota(user_id: str) -> None:
+    async def _enforce_quota(user_id: str) -> None:
         """Raise 429 if user's monthly quota is used."""
         try:
             from usage_tracker import is_quota_exceeded
 
-            if is_quota_exceeded(user_id):
+            if await is_quota_exceeded(user_id):
                 raise HTTPException(
                     status_code=429,
                     detail=(
@@ -219,12 +219,26 @@ def create_app(
                 detail="Usage tracking unavailable",
             )
 
-    def _track_usage(user_id: str) -> None:
-        """Increment monthly usage count (fire-and-forget)."""
+    async def _track_usage(user_id: str) -> None:
+        """Increment monthly usage count."""
         try:
             from usage_tracker import increment_usage
 
-            increment_usage(user_id)
+            await increment_usage(user_id)
+        except Exception:
+            _logger.debug(
+                "Usage tracking skipped for %s",
+                user_id,
+            )
+
+    def _track_usage_sync(user_id: str) -> None:
+        """Sync wrapper for thread contexts."""
+        import asyncio
+
+        try:
+            from usage_tracker import increment_usage
+
+            asyncio.run(increment_usage(user_id))
         except Exception:
             _logger.debug(
                 "Usage tracking skipped for %s",
@@ -243,7 +257,7 @@ def create_app(
     ):
         """Sync agent dispatch (POST /chat)."""
         req.user_id = current_user.user_id
-        _enforce_quota(req.user_id)
+        await _enforce_quota(req.user_id)
 
         # ── LangGraph path ────────────────────────
         if graph is not None and settings.use_langgraph:
@@ -292,7 +306,7 @@ def create_app(
                 status_code=500,
                 detail="Agent execution failed",
             )
-        _track_usage(req.user_id)
+        await _track_usage(req.user_id)
         return ChatResponse(
             response=result,
             agent_id=req.agent_id,
@@ -328,7 +342,7 @@ def create_app(
                 status_code=500,
                 detail="Agent execution failed",
             )
-        _track_usage(req.user_id)
+        await _track_usage(req.user_id)
         return ChatResponse(
             response=result.get("final_response", ""),
             agent_id=result.get("current_agent", "graph"),
@@ -342,7 +356,7 @@ def create_app(
     ):
         """NDJSON streaming (POST /chat/stream)."""
         req.user_id = current_user.user_id
-        _enforce_quota(req.user_id)
+        await _enforce_quota(req.user_id)
 
         # ── LangGraph path ────────────────────────
         if graph is not None and settings.use_langgraph:
@@ -373,7 +387,7 @@ def create_app(
                         req.history,
                     ):
                         event_queue.put(event)
-                    _track_usage(req.user_id)
+                    _track_usage_sync(req.user_id)
                 except Exception as exc:
                     _logger.warning(
                         "Stream worker error: %s",
@@ -527,7 +541,7 @@ def create_app(
                         )
                         + "\n"
                     )
-                    _track_usage(req.user_id)
+                    _track_usage_sync(req.user_id)
                 except Exception as exc:
                     event_queue.put(
                         json.dumps(
@@ -936,14 +950,14 @@ def create_app(
         """POST /admin/reset-usage — zero monthly counts."""
         from usage_tracker import reset_monthly_usage
 
-        count = reset_monthly_usage()
+        count = await reset_monthly_usage()
         return {"reset_count": count}
 
     async def _admin_usage_stats():
         """GET /admin/usage-stats — all users + counts."""
         from usage_tracker import get_usage_stats
 
-        return {"users": get_usage_stats()}
+        return {"users": await get_usage_stats()}
 
     async def _admin_reset_selected(
         request: Request,
@@ -955,7 +969,7 @@ def create_app(
             return {"reset_count": 0}
         from usage_tracker import reset_user_usage
 
-        count = reset_user_usage(user_ids)
+        count = await reset_user_usage(user_ids)
         return {"reset_count": count}
 
     admin_router.add_api_route(

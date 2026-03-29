@@ -32,11 +32,17 @@ def _get_repo() -> IcebergUserRepository:
     """Return the app-wide IcebergUserRepository.
 
     Constructed once and cached for the process lifetime.
+    Uses a session factory so each method call gets its
+    own per-request async session.
 
     Returns:
         The cached IcebergUserRepository instance.
     """
-    return IcebergUserRepository()
+    from backend.db.engine import get_session_factory
+
+    return IcebergUserRepository(
+        session_factory=get_session_factory(),
+    )
 
 
 @lru_cache(maxsize=1)

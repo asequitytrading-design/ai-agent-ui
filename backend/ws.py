@@ -256,7 +256,7 @@ async def _handle_chat(
     try:
         from usage_tracker import is_quota_exceeded
 
-        if is_quota_exceeded(user_id):
+        if await is_quota_exceeded(user_id):
             event_queue.put(
                 {
                     "type": "error",
@@ -428,9 +428,11 @@ def _run_graph(
     # Track usage
     if user_id:
         try:
+            import asyncio
+
             from usage_tracker import increment_usage
 
-            increment_usage(user_id)
+            asyncio.run(increment_usage(user_id))
         except Exception:
             _logger.debug(
                 "Usage tracking failed for %s",
@@ -458,9 +460,11 @@ def _run_legacy(
 
     if user_id:
         try:
+            import asyncio
+
             from usage_tracker import increment_usage
 
-            increment_usage(user_id)
+            asyncio.run(increment_usage(user_id))
         except Exception:
             _logger.debug(
                 "Usage tracking failed for %s",
