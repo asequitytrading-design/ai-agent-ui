@@ -5,6 +5,31 @@
 
 ---
 
+## Session Startup (do these on every new session)
+
+1. **Activate Serena** — `activate_project ai-agent-ui`
+   (required before `read_memory` / `write_memory` / `list_memories`)
+2. **Check Ollama** — SessionStart hook reports model status;
+   run `ollama-profile coding` if delegation needed
+3. **Superpowers skills** — always check for applicable skill
+   before starting work (brainstorming, TDD, executing-plans)
+4. **SuperClaude commands** — use `/sc:` prefix for git, build,
+   test, analyze, implement, troubleshoot workflows
+
+### Available MCP tools (verify with `list_memories`)
+
+| Server | Purpose | Activation |
+|--------|---------|------------|
+| Serena | Code analysis, shared memories, symbol navigation | `activate_project` |
+| Ollama | Local LLM delegation (Qwen for code gen) | auto (SessionStart hook) |
+| Context7 | Library/framework docs lookup | auto |
+| Playwright | Browser automation, E2E testing | auto |
+| Chrome DevTools | Page inspection, performance, screenshots | auto |
+| Atlassian (Jira) | Sprint/ticket management | auto |
+| Sequential Thinking | Multi-step reasoning | auto |
+
+---
+
 ## Project Overview
 
 Fullstack agentic chat app with stock analysis and Prophet forecasting.
