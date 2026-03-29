@@ -13,7 +13,7 @@ Covers:
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -162,13 +162,14 @@ class TestUsageTracker:
     """Verify increment_usage and reset_monthly_usage."""
 
     @patch("usage_tracker._logger")
-    def test_increment_usage_success(self, _):
+    @pytest.mark.asyncio
+    async def test_increment_usage_success(self, _):
         from usage_tracker import (
             _current_month,
             increment_usage,
         )
 
-        mock_repo = MagicMock()
+        mock_repo = AsyncMock()
         mock_repo.get_by_id.return_value = {
             "user_id": "u1",
             "monthly_usage_count": 2,
@@ -178,7 +179,7 @@ class TestUsageTracker:
             "auth.endpoints.helpers._get_repo",
             return_value=mock_repo,
         ):
-            increment_usage("u1")
+            await increment_usage("u1")
 
         mock_repo.update.assert_called_once_with(
             "u1",
@@ -189,23 +190,25 @@ class TestUsageTracker:
         )
 
     @patch("usage_tracker._logger")
-    def test_increment_no_crash_on_missing_user(
+    @pytest.mark.asyncio
+    async def test_increment_no_crash_on_missing_user(
         self, _,
     ):
         from usage_tracker import increment_usage
 
-        mock_repo = MagicMock()
+        mock_repo = AsyncMock()
         mock_repo.get_by_id.return_value = None
         with patch(
             "auth.endpoints.helpers._get_repo",
             return_value=mock_repo,
         ):
-            increment_usage("missing")
+            await increment_usage("missing")
 
         mock_repo.update.assert_not_called()
 
     @patch("usage_tracker._logger")
-    def test_increment_none_count_treated_as_zero(
+    @pytest.mark.asyncio
+    async def test_increment_none_count_treated_as_zero(
         self, _,
     ):
         from usage_tracker import (
@@ -213,7 +216,7 @@ class TestUsageTracker:
             increment_usage,
         )
 
-        mock_repo = MagicMock()
+        mock_repo = AsyncMock()
         mock_repo.get_by_id.return_value = {
             "user_id": "u1",
             "monthly_usage_count": None,
@@ -223,7 +226,7 @@ class TestUsageTracker:
             "auth.endpoints.helpers._get_repo",
             return_value=mock_repo,
         ):
-            increment_usage("u1")
+            await increment_usage("u1")
 
         mock_repo.update.assert_called_once_with(
             "u1",
@@ -234,7 +237,8 @@ class TestUsageTracker:
         )
 
     @patch("usage_tracker._logger")
-    def test_increment_auto_resets_on_new_month(
+    @pytest.mark.asyncio
+    async def test_increment_auto_resets_on_new_month(
         self, _,
     ):
         """When usage_month is old, reset + archive."""
@@ -243,7 +247,7 @@ class TestUsageTracker:
             increment_usage,
         )
 
-        mock_repo = MagicMock()
+        mock_repo = AsyncMock()
         mock_repo.get_by_id.return_value = {
             "user_id": "u1",
             "monthly_usage_count": 5,
@@ -256,7 +260,7 @@ class TestUsageTracker:
         ), patch(
             "usage_tracker._archive_usage",
         ) as mock_archive:
-            increment_usage("u1")
+            await increment_usage("u1")
 
         # Should archive old month
         mock_archive.assert_called_once_with(
@@ -272,10 +276,11 @@ class TestUsageTracker:
         )
 
     @patch("usage_tracker._logger")
-    def test_reset_monthly_usage(self, _):
+    @pytest.mark.asyncio
+    async def test_reset_monthly_usage(self, _):
         from usage_tracker import reset_monthly_usage
 
-        mock_repo = MagicMock()
+        mock_repo = AsyncMock()
         mock_repo.list_all.return_value = [
             {
                 "user_id": "u1",
@@ -300,7 +305,7 @@ class TestUsageTracker:
         ), patch(
             "usage_tracker._archive_usage",
         ) as mock_archive:
-            count = reset_monthly_usage()
+            count = await reset_monthly_usage()
 
         assert count == 2  # u1 and u3 had count > 0
         assert mock_repo.update.call_count == 2
