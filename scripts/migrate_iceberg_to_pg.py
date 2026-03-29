@@ -72,18 +72,19 @@ def _clean_value(v):
     import pandas as pd
     if v is None:
         return None
+    # Catch all NaT/NaN variants
+    try:
+        if pd.isna(v):
+            return None
+    except (TypeError, ValueError):
+        pass
     if isinstance(v, float) and math.isnan(v):
         return None
     if isinstance(v, pd.Timestamp):
-        if pd.isna(v):
-            return None
-        # asyncpg needs tz-aware timestamps
         if v.tzinfo is None:
-            from datetime import timezone
-            v = v.tz_localize(timezone.utc)
+            v = v.tz_localize("UTC")
         return v.to_pydatetime()
     if hasattr(v, 'isoformat') and hasattr(v, 'tzinfo'):
-        # datetime without tz
         if v.tzinfo is None:
             from datetime import timezone
             v = v.replace(tzinfo=timezone.utc)
