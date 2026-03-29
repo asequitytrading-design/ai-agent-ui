@@ -80,9 +80,9 @@ append-only analytics.
 
 | Table | Module | Pattern |
 |-------|--------|---------|
-| `auth.users` | `backend/db/models.py` | CRUD via `UserRepository` |
-| `auth.user_tickers` | `backend/db/models.py` | Upsert + delete |
-| `auth.payment_transactions` | `backend/db/models.py` | Insert + read |
+| `auth.users` | `backend/db/models/user.py` | CRUD via `UserRepository` |
+| `auth.user_tickers` | `backend/db/models/user_ticker.py` | Insert + delete |
+| `auth.payment_transactions` | `backend/db/models/payment.py` | Insert + update |
 | `stocks.registry` | `backend/db/pg_stocks.py` | Upsert |
 | `stocks.scheduled_jobs` | `backend/db/pg_stocks.py` | Upsert |
 
@@ -151,9 +151,9 @@ see all available topics.
 
 | Category | Topics |
 |----------|--------|
-| `shared/architecture/` | system-overview, agent-init-pattern, groq-chunking, iceberg-data-layer, auth-jwt-flow, langsmith-observability, lighthouse-performance-workflow, subscription-billing, portfolio-analytics, currency-aware-agent, token-budget-concurrency, payment-transaction-ledger, sentiment-agent, iceberg-column-projection, llm-cascade-profiles, docker-containerization, redis-cache-layer, per-ticker-refresh, api-versioning, security-hardening-patterns |
+| `shared/architecture/` | system-overview, agent-init-pattern, groq-chunking, iceberg-data-layer, auth-jwt-flow, langsmith-observability, lighthouse-performance-workflow, subscription-billing, portfolio-analytics, currency-aware-agent, token-budget-concurrency, payment-transaction-ledger, sentiment-agent, iceberg-column-projection, llm-cascade-profiles, docker-containerization, redis-cache-layer, per-ticker-refresh, api-versioning, security-hardening-patterns, hybrid-db-postgresql-iceberg |
 | `shared/conventions/` | python-style, typescript-style, git-workflow, testing-patterns, performance, error-handling, llm-tool-forcing, jira-mcp-usage, security-hardening, e2e-test-patterns, isort-black-exclude-virtualenv, git-push-workflow |
-| `shared/debugging/` | common-issues, mock-patching-gotchas, chat-session-recording, cookie-hostname-mismatch, ohlcv-nan-close-price, razorpay-integration-gotchas, iceberg-epoch-dates, portfolio-watchlist-sync, iceberg-table-corruption-recovery, razorpay-customer-exists, playwright-react19-dash-patterns |
+| `shared/debugging/` | common-issues, mock-patching-gotchas, chat-session-recording, cookie-hostname-mismatch, ohlcv-nan-close-price, razorpay-integration-gotchas, iceberg-epoch-dates, portfolio-watchlist-sync, iceberg-table-corruption-recovery, razorpay-customer-exists, playwright-react19-dash-patterns, asyncpg-sync-async-bridge |
 | `shared/onboarding/` | setup-guide, test-venv-setup, tooling |
 | `shared/api/` | streaming-protocol |
 
@@ -212,6 +212,22 @@ Load any memory with `read_memory` when you need the details.
   be `NaT` and floats can be `NaN`. Sanitize with
   `pd.Timestamp` checks and `float("nan")` guards before
   inserting into PostgreSQL — PG rejects both.
+- **Sync→async migration**: When making repo methods async,
+  ALL callers must be found — use `grep -rn "repo\."` across
+  auth/, backend/, stocks/. Missing `await` returns a coroutine
+  object that silently breaks (no compile error).
+- **`_run_pg()` takes a callable, not a coroutine**: Pass
+  `_run_pg(_call)` not `_run_pg(_call())`. The helper calls
+  it inside `asyncio.run()` in a fresh loop. Passing a
+  coroutine directly causes cross-loop Future errors.
+- **`_pg_session()` not `get_session_factory()`**: In sync
+  `StockRepository` wrappers, always use `_pg_session()` from
+  `stocks/repository.py` — it creates a fresh engine per call.
+  The cached `get_session_factory()` binds to uvicorn's loop
+  and fails in ThreadPoolExecutor contexts.
+- **Test mocks after async conversion**: Replace `MagicMock`
+  with `AsyncMock` for any mocked repo method. Awaiting a
+  plain MagicMock returns a coroutine, not the mock value.
 
 ---
 
