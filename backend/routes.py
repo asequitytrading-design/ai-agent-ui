@@ -1020,9 +1020,8 @@ def create_app(
     ):
         """GET /admin/payment-transactions."""
         from auth.endpoints.helpers import _get_repo
-        from auth.repo.schemas import (
-            _PAYMENT_TXN_TABLE,
-        )
+        from auth.repo import payment_repo
+        from backend.db.engine import get_session_factory
 
         repo = _get_repo()
 
@@ -1036,34 +1035,44 @@ def create_app(
                 "email": u.get("email", ""),
             }
 
-        cat = repo._get_catalog()
-        tbl = cat.load_table(_PAYMENT_TXN_TABLE)
-        df = tbl.scan().to_pandas()
-        if df.empty:
-            return {"transactions": []}
-        if user_id:
-            df = df[df["user_id"] == user_id]
-        if gateway:
-            df = df[df["gateway"] == gateway]
-        df = df.sort_values(
-            "created_at",
-            ascending=False,
-        ).head(limit)
-        import math as _math
+        # Read from PostgreSQL
+        factory = get_session_factory()
+        async with factory() as session:
+            from sqlalchemy import select
+            from backend.db.models.payment import (
+                PaymentTransaction,
+            )
 
-        rows = df.to_dict("records")
-        for r in rows:
+            q = select(PaymentTransaction)
+            if user_id:
+                q = q.where(
+                    PaymentTransaction.user_id == user_id
+                )
+            if gateway:
+                q = q.where(
+                    PaymentTransaction.gateway == gateway
+                )
+            q = q.order_by(
+                PaymentTransaction.created_at.desc()
+            ).limit(limit)
+            result = await session.execute(q)
+            txns = result.scalars().all()
+
+        rows = []
+        for t in txns:
+            r = {
+                c.name: getattr(t, c.name)
+                for c in t.__table__.columns
+            }
             if hasattr(r.get("created_at"), "isoformat"):
-                r["created_at"] = r["created_at"].isoformat()
-            # Enrich with user name/email
+                r["created_at"] = (
+                    r["created_at"].isoformat()
+                )
             uid = r.get("user_id", "")
             info = user_map.get(uid, {})
             r["user_name"] = info.get("name", "")
             r["user_email"] = info.get("email", "")
-            # Replace NaN with None for JSON compat
-            for k, v in list(r.items()):
-                if isinstance(v, float) and _math.isnan(v):
-                    r[k] = None
+            rows.append(r)
         return {"transactions": rows}
 
     admin_router.add_api_route(
