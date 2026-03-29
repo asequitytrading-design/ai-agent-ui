@@ -67,6 +67,15 @@ try:
 except ImportError:
     _GROQ_AVAILABLE = False
 
+# Ollama imports are optional — only when langchain-ollama
+# is installed AND OLLAMA_ENABLED is true.
+try:
+    from langchain_ollama import ChatOllama
+
+    _OLLAMA_AVAILABLE = True
+except ImportError:
+    _OLLAMA_AVAILABLE = False
+
 
 class FallbackLLM:
     """N-tier LLM cascade: Groq models → Anthropic.
@@ -96,8 +105,10 @@ class FallbackLLM:
         compressor: MessageCompressor,
         obs_collector: ObservabilityCollector | None = None,
         cascade_profile: str = "tool",
+        ollama_model: str | None = None,
+        ollama_first: bool = False,
     ) -> None:
-        """Construct Groq + Anthropic LLM instances.
+        """Construct Ollama + Groq + Anthropic LLM cascade.
 
         Args:
             groq_models: Ordered list of Groq model names,
@@ -113,12 +124,56 @@ class FallbackLLM:
                 collector for cascade tracking.
             cascade_profile: Profile name for observability
                 (``"tool"``, ``"synthesis"``, ``"test"``).
+            ollama_model: Local Ollama model name
+                (Tier 0).  ``None`` disables local LLM.
+            ollama_first: When ``True``, Ollama is tried
+                before Groq (Tier 0).  When ``False``,
+                Ollama is tried after all Groq tiers
+                but before Anthropic.
         """
         self._agent_id = agent_id
+        self._ollama_first = ollama_first
         self._budget = token_budget
         self._compressor = compressor
         self._obs = obs_collector
         self._cascade_profile = cascade_profile
+
+        # Ollama Tier 0 (local, zero cost).
+        self._ollama_tier: tuple | None = None
+        self._ollama_num_ctx: int = 0
+        if _OLLAMA_AVAILABLE and ollama_model:
+            from config import get_settings as _gs
+
+            _s = _gs()
+            if _s.ollama_enabled:
+                from ollama_manager import (
+                    get_ollama_manager,
+                )
+
+                _mgr = get_ollama_manager()
+                if _mgr.is_available():
+                    _ollm = ChatOllama(
+                        model=ollama_model,
+                        base_url=_s.ollama_base_url,
+                        num_ctx=_s.ollama_num_ctx,
+                        timeout=_s.ollama_timeout,
+                        temperature=temperature,
+                    )
+                    self._ollama_tier = (
+                        ollama_model,
+                        _ollm,
+                        _ollm,
+                    )
+                    self._ollama_num_ctx = (
+                        _s.ollama_num_ctx
+                    )
+                    _logger.info(
+                        "FallbackLLM [%s]: Ollama "
+                        "Tier 0 → %s (agent=%s)",
+                        cascade_profile,
+                        ollama_model,
+                        agent_id,
+                    )
 
         # Groq tiers: [(model_name, raw_llm, bound_llm), ...]
         self._groq_tiers: list[tuple] = []
@@ -171,6 +226,11 @@ class FallbackLLM:
         Returns:
             This :class:`FallbackLLM` instance.
         """
+        if self._ollama_tier is not None:
+            _on, _or, _ob = self._ollama_tier
+            _ob = _or.bind_tools(tools, **kwargs)
+            self._ollama_tier = (_on, _or, _ob)
+
         for i, (name, raw, _bound) in enumerate(self._groq_tiers):
             bound = raw.bind_tools(tools, **kwargs)
             self._groq_tiers[i] = (name, raw, bound)
@@ -230,12 +290,118 @@ class FallbackLLM:
             f"cascade.{self._agent_id}",
         )
 
-        # Step 3: Try each Groq tier in order.
+        # Step 2c: Try Ollama Tier 0 (local, no budget).
         from tools._ticker_linker import (
             get_current_user,
         )
 
         _user = get_current_user()
+
+        # Step 2c: Try Ollama FIRST if ollama_first=True.
+        if self._ollama_tier is not None and self._ollama_first:
+            from ollama_manager import (
+                get_ollama_manager as _get_mgr,
+            )
+
+            _mgr = _get_mgr()
+            _oname, _oraw, _obound = self._ollama_tier
+            if (
+                _mgr.is_available()
+                and _mgr.is_model_loaded(_oname)
+            ):
+                if est <= self._ollama_num_ctx:
+                    _t0 = time.monotonic()
+                    try:
+                        _kw = dict(kwargs)
+                        if _trace_cbs:
+                            _kw.setdefault("config", {})
+                            _kw["config"][
+                                "callbacks"
+                            ] = _trace_cbs
+                        result = _obound.invoke(
+                            compressed,
+                            **_kw,
+                        )
+                        _ms = int(
+                            (time.monotonic() - _t0)
+                            * 1000,
+                        )
+                        _pt = _ct = None
+                        _umeta = getattr(
+                            result,
+                            "usage_metadata",
+                            None,
+                        )
+                        if _umeta:
+                            _pt = _umeta.get(
+                                "input_tokens",
+                            )
+                            _ct = _umeta.get(
+                                "output_tokens",
+                            )
+                        if self._obs:
+                            self._obs.record_request(
+                                _oname,
+                                provider="ollama",
+                                agent_id=(
+                                    self._agent_id
+                                ),
+                                tier_index=0,
+                                user_id=_user,
+                                prompt_tokens=_pt,
+                                completion_tokens=_ct,
+                                latency_ms=_ms,
+                            )
+                        _logger.info(
+                            "Route → %s (local) | "
+                            "iter=%d tokens≈%d "
+                            "(agent=%s)",
+                            _oname,
+                            iteration,
+                            est,
+                            self._agent_id,
+                        )
+                        return result
+                    except Exception as exc:
+                        if self._obs:
+                            self._obs.record_cascade(
+                                _oname,
+                                "ollama_error",
+                                provider="ollama",
+                                agent_id=(
+                                    self._agent_id
+                                ),
+                                tier_index=0,
+                                user_id=_user,
+                            )
+                        _logger.warning(
+                            "Ollama %s failed (%s),"
+                            " cascading to Groq"
+                            " — agent=%s",
+                            _oname,
+                            exc,
+                            self._agent_id,
+                        )
+                else:
+                    if self._obs:
+                        self._obs.record_cascade(
+                            _oname,
+                            "context_exceeded",
+                            provider="ollama",
+                            agent_id=self._agent_id,
+                            tier_index=0,
+                            user_id=_user,
+                        )
+                    _logger.info(
+                        "Skip Ollama: est=%d > "
+                        "ctx=%d (agent=%s)",
+                        est,
+                        self._ollama_num_ctx,
+                        self._agent_id,
+                    )
+
+        # Step 3: Try each Groq tier in order.
+        _tier_offset = 1 if self._ollama_tier else 0
         for idx, (model_name, _raw, bound_llm) in enumerate(
             self._groq_tiers,
         ):
@@ -281,7 +447,7 @@ class FallbackLLM:
                             "budget_exhausted",
                             provider="groq",
                             agent_id=self._agent_id,
-                            tier_index=idx,
+                            tier_index=idx + _tier_offset,
                             user_id=_user,
                         )
                     _logger.info(
@@ -321,7 +487,7 @@ class FallbackLLM:
                         model_name,
                         provider="groq",
                         agent_id=self._agent_id,
-                        tier_index=idx,
+                        tier_index=idx + _tier_offset,
                         user_id=_user,
                         prompt_tokens=_pt,
                         completion_tokens=_ct,
@@ -361,7 +527,7 @@ class FallbackLLM:
                             "api_error",
                             provider="groq",
                             agent_id=self._agent_id,
-                            tier_index=idx,
+                            tier_index=idx + _tier_offset,
                             user_id=_user,
                         )
                     _logger.warning(
@@ -372,6 +538,105 @@ class FallbackLLM:
                     )
                     continue
                 raise
+
+        # Step 3b: Try Ollama AFTER Groq if not ollama_first.
+        if (
+            self._ollama_tier is not None
+            and not self._ollama_first
+        ):
+            from ollama_manager import (
+                get_ollama_manager as _get_mgr2,
+            )
+
+            _mgr2 = _get_mgr2()
+            _oname, _oraw, _obound = self._ollama_tier
+            if (
+                _mgr2.is_available()
+                and _mgr2.is_model_loaded(_oname)
+            ):
+                if est <= self._ollama_num_ctx:
+                    _t0 = time.monotonic()
+                    try:
+                        _kw = dict(kwargs)
+                        if _trace_cbs:
+                            _kw.setdefault("config", {})
+                            _kw["config"][
+                                "callbacks"
+                            ] = _trace_cbs
+                        result = _obound.invoke(
+                            compressed,
+                            **_kw,
+                        )
+                        _ms = int(
+                            (time.monotonic() - _t0)
+                            * 1000,
+                        )
+                        _pt = _ct = None
+                        _umeta = getattr(
+                            result,
+                            "usage_metadata",
+                            None,
+                        )
+                        if _umeta:
+                            _pt = _umeta.get(
+                                "input_tokens",
+                            )
+                            _ct = _umeta.get(
+                                "output_tokens",
+                            )
+                        if self._obs:
+                            self._obs.record_request(
+                                _oname,
+                                provider="ollama",
+                                agent_id=(
+                                    self._agent_id
+                                ),
+                                tier_index=(
+                                    len(
+                                        self._groq_tiers
+                                    )
+                                    + _tier_offset
+                                ),
+                                user_id=_user,
+                                prompt_tokens=_pt,
+                                completion_tokens=_ct,
+                                latency_ms=_ms,
+                            )
+                        _logger.info(
+                            "Route → %s (local) | "
+                            "iter=%d tokens≈%d "
+                            "(agent=%s)",
+                            _oname,
+                            iteration,
+                            est,
+                            self._agent_id,
+                        )
+                        return result
+                    except Exception as exc:
+                        if self._obs:
+                            self._obs.record_cascade(
+                                _oname,
+                                "ollama_error",
+                                provider="ollama",
+                                agent_id=(
+                                    self._agent_id
+                                ),
+                                tier_index=(
+                                    len(
+                                        self._groq_tiers
+                                    )
+                                    + _tier_offset
+                                ),
+                                user_id=_user,
+                            )
+                        _logger.warning(
+                            "Ollama %s failed (%s),"
+                            " cascading to "
+                            "Anthropic — agent=%s",
+                            _oname,
+                            exc,
+                            self._agent_id,
+                        )
 
         # Step 4: Anthropic fallback (disabled in test profile).
         if self._anthropic_bound is None:
@@ -407,7 +672,10 @@ class FallbackLLM:
                 self._anthropic_model,
                 provider="anthropic",
                 agent_id=self._agent_id,
-                tier_index=len(self._groq_tiers),
+                tier_index=(
+                    len(self._groq_tiers)
+                    + _tier_offset
+                ),
                 user_id=_user,
                 prompt_tokens=_pt,
                 completion_tokens=_ct,

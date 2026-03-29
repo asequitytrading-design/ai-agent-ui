@@ -21,7 +21,11 @@ _SYNTHESIS_PROMPT = (
     "Synthesize a clear, actionable response from the "
     "data provided. Include specific numbers, dates, "
     "and actionable recommendations where applicable. "
-    "Be concise but thorough."
+    "Be concise but thorough.\n\n"
+    "FORMAT: Use Markdown — **bold** for key figures, "
+    "bullet points for lists, tables for comparisons, "
+    "### headings for sections. Keep paragraphs short "
+    "(2-3 sentences max)."
 )
 
 # Minimum response length to skip synthesis.

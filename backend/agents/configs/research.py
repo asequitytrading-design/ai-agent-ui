@@ -26,7 +26,12 @@ _RESEARCH_SYSTEM_PROMPT = (
     "potential impact on stock price.\n"
     "- Always mention the source and date of news.\n"
     "- If no significant news is found, say so "
-    "clearly — do not fabricate news."
+    "clearly — do not fabricate news.\n"
+    "- Format responses in Markdown: use **bold** "
+    "for key figures, bullet points for lists, "
+    "### headings for sections, and Markdown tables "
+    "for metrics/risk data (| Metric | Value |). "
+    "Keep paragraphs short (2-3 sentences)."
 )
 
 RESEARCH_CONFIG = SubAgentConfig(

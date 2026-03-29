@@ -1252,6 +1252,70 @@ def create_app(
         dependencies=[Depends(superuser_only)],
     )
 
+    # ── Ollama local-LLM management ────────────
+
+    async def _admin_ollama_status():
+        """GET /admin/ollama/status."""
+        from ollama_manager import (
+            get_ollama_manager,
+        )
+
+        return get_ollama_manager().get_status()
+
+    async def _admin_ollama_load(
+        request: Request,
+    ):
+        """POST /admin/ollama/load."""
+        from ollama_manager import (
+            get_ollama_manager,
+        )
+
+        body = await request.json()
+        profile = body.get(
+            "profile",
+            "reasoning",
+        )
+        mgr = get_ollama_manager()
+        if not mgr.is_available():
+            raise HTTPException(
+                status_code=503,
+                detail="Ollama server not reachable",
+            )
+        return mgr.load_profile(profile)
+
+    async def _admin_ollama_unload():
+        """POST /admin/ollama/unload."""
+        from ollama_manager import (
+            get_ollama_manager,
+        )
+
+        mgr = get_ollama_manager()
+        if not mgr.is_available():
+            raise HTTPException(
+                status_code=503,
+                detail="Ollama server not reachable",
+            )
+        return mgr.unload_all()
+
+    admin_router.add_api_route(
+        "/admin/ollama/status",
+        _admin_ollama_status,
+        methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/ollama/load",
+        _admin_ollama_load,
+        methods=["POST"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/ollama/unload",
+        _admin_ollama_unload,
+        methods=["POST"],
+        dependencies=[Depends(superuser_only)],
+    )
+
     app.include_router(admin_router)
 
     # Dashboard + audit + insights endpoints.

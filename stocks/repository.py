@@ -2919,15 +2919,30 @@ class StockRepository:
             if math.isnan(avg_latency):
                 avg_latency = 0.0
 
-            # Per-model breakdown
+            # Per-model breakdown (include provider).
             per_model: dict = {}
+            has_provider = "provider" in df.columns
             if "model" in df.columns:
                 for model, grp in df.groupby("model"):
+                    prov = ""
+                    if has_provider:
+                        prov = (
+                            grp["provider"]
+                            .mode()
+                            .iloc[0]
+                            if not grp["provider"]
+                            .dropna()
+                            .empty
+                            else ""
+                        )
                     per_model[str(model)] = {
                         "requests": len(grp),
                         "cost": float(
-                            grp["estimated_cost_usd"].sum(skipna=True)
+                            grp[
+                                "estimated_cost_usd"
+                            ].sum(skipna=True)
                         ),
+                        "provider": str(prov),
                     }
 
             # Daily trend (last N days)
@@ -3374,9 +3389,43 @@ class StockRepository:
                     type=pa.timestamp("us"),
                 ),
             }
+            # session_id & user_id are required (non-
+            # nullable) in the Iceberg schema — build
+            # the Arrow table with a matching schema.
+            _schema = pa.schema([
+                pa.field(
+                    "session_id", pa.string(),
+                    nullable=False,
+                ),
+                pa.field(
+                    "user_id", pa.string(),
+                    nullable=False,
+                ),
+                pa.field(
+                    "started_at",
+                    pa.timestamp("us"),
+                ),
+                pa.field(
+                    "ended_at",
+                    pa.timestamp("us"),
+                ),
+                pa.field(
+                    "message_count", pa.int32(),
+                ),
+                pa.field(
+                    "messages_json", pa.string(),
+                ),
+                pa.field(
+                    "agent_ids_used", pa.string(),
+                ),
+                pa.field(
+                    "created_at",
+                    pa.timestamp("us"),
+                ),
+            ])
             self._append_rows(
                 _CHAT_AUDIT_LOG,
-                pa.table(arrays),
+                pa.table(arrays, schema=_schema),
             )
         except Exception as exc:
             _logger.error(

@@ -423,10 +423,16 @@ def create_dashboard_router() -> APIRouter:
         models = [
             ModelUsage(
                 model=name,
-                provider="groq",
-                request_count=int(info.get("requests", 0)),
+                provider=str(
+                    info.get("provider", "") or "groq"
+                ),
+                request_count=int(
+                    info.get("requests", 0)
+                ),
                 total_tokens=0,
-                estimated_cost_usd=float(info.get("cost", 0) or 0),
+                estimated_cost_usd=float(
+                    info.get("cost", 0) or 0
+                ),
             )
             for name, info in per_model.items()
         ]

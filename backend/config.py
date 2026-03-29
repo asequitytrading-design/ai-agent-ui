@@ -72,9 +72,27 @@ class Settings(BaseSettings):
     log_to_file: bool = True
     agent_timeout_seconds: int = 900
 
+    # PostgreSQL connection string (async driver).
+    # Override via DATABASE_URL env var.
+    database_url: str = (
+        "postgresql+asyncpg://app:devpass123"
+        "@localhost:5432/aiagent"
+    )
+
     # Environment profile: "dev" (default), "test" (free-only).
     # "test" skips gpt-oss-120b and Anthropic entirely.
     ai_agent_ui_env: str = "dev"
+
+    # ── Ollama local LLM (Tier 0) ────────────────
+    # When enabled and reachable, the local Ollama model
+    # is tried FIRST (zero cost).  Falls back to Groq on
+    # failure.  Set OLLAMA_ENABLED=false in prod / CI.
+    ollama_enabled: bool = True
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_model: str = "gpt-oss:20b"
+    ollama_num_ctx: int = 8192
+    ollama_timeout: int = 120
+    ollama_health_cache_ttl: int = 30
 
     # Groq model tiers — tried in order; cascade on budget
     # exhaustion or API error.  Comma-separated in env var.

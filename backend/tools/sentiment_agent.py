@@ -62,6 +62,12 @@ def _get_llm():
             tiers = _parse(settings.groq_model_tiers)
             anthropic = "claude-sonnet-4-6"
 
+        ollama = (
+            settings.ollama_model
+            if settings.ollama_enabled
+            else None
+        )
+
         return FallbackLLM(
             groq_models=tiers,
             anthropic_model=anthropic,
@@ -70,6 +76,8 @@ def _get_llm():
             token_budget=TokenBudget(),
             compressor=MessageCompressor(),
             cascade_profile="tool",
+            ollama_model=ollama,
+            ollama_first=True,
         )
     except Exception:
         _logger.debug(

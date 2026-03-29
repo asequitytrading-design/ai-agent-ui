@@ -33,7 +33,12 @@ _FORECASTER_SYSTEM_PROMPT = (
     "- Never fabricate forecast numbers — only "
     "report what the tools return.\n"
     "- If a forecast is stale, run a new one before "
-    "presenting results."
+    "presenting results.\n"
+    "- Format responses in Markdown: use **bold** "
+    "for key figures, bullet points for lists, "
+    "### headings for sections, and Markdown tables "
+    "for metrics/risk data (| Metric | Value |). "
+    "Keep paragraphs short (2-3 sentences)."
 )
 
 FORECASTER_CONFIG = SubAgentConfig(

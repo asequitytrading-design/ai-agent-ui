@@ -29,7 +29,12 @@ _SENTIMENT_SYSTEM_PROMPT = (
     "- Never fabricate sentiment — if data is "
     "unavailable, say so clearly.\n"
     "- Scores range from -1.0 (very bearish) to +1.0 "
-    "(very bullish). 0.0 is neutral."
+    "(very bullish). 0.0 is neutral.\n"
+    "- Format responses in Markdown: use **bold** "
+    "for key figures, bullet points for lists, "
+    "### headings for sections, and Markdown tables "
+    "for metrics/risk data (| Metric | Value |). "
+    "Keep paragraphs short (2-3 sentences)."
 )
 
 SENTIMENT_CONFIG = SubAgentConfig(

@@ -48,7 +48,12 @@ _PORTFOLIO_SYSTEM_PROMPT = (
     "- Present data in clear tables when possible.\n"
     "- Keep answers concise — do not add generic "
     "financial advice or hypothetical scenarios "
-    "unless the user explicitly asks."
+    "unless the user explicitly asks.\n"
+    "- Format responses in Markdown: use **bold** "
+    "for key figures, bullet points for lists, "
+    "### headings for sections, and Markdown tables "
+    "for metrics/risk data (| Metric | Value |). "
+    "Keep paragraphs short (2-3 sentences)."
 )
 
 PORTFOLIO_CONFIG = SubAgentConfig(

@@ -281,6 +281,12 @@ def _get_scoring_llm():
             tiers = _parse(settings.groq_model_tiers)
             anthropic = "claude-sonnet-4-6"
 
+        ollama = (
+            settings.ollama_model
+            if settings.ollama_enabled
+            else None
+        )
+
         return FallbackLLM(
             groq_models=tiers,
             anthropic_model=anthropic,
@@ -289,6 +295,8 @@ def _get_scoring_llm():
             token_budget=TokenBudget(),
             compressor=MessageCompressor(),
             cascade_profile="tool",
+            ollama_model=ollama,
+            ollama_first=True,
         )
     except Exception:
         _logger.debug(
@@ -334,9 +342,41 @@ def refresh_all_sentiment() -> int:
     has no gaps — even when forecasts are skipped (7-day
     cooldown).
 
+    When Ollama is available but the reasoning model is not
+    loaded, the batch auto-loads it before scoring and
+    unloads it after completion to free RAM.
+
     Returns:
         Number of tickers successfully scored.
     """
+    # Auto-load reasoning model for batch if available.
+    _auto_loaded = False
+    try:
+        from config import get_settings as _gs
+        from ollama_manager import (
+            get_ollama_manager,
+        )
+
+        _s = _gs()
+        if _s.ollama_enabled:
+            _mgr = get_ollama_manager()
+            if _mgr.is_available() and not (
+                _mgr.is_model_loaded(
+                    _s.ollama_model,
+                )
+            ):
+                _mgr.load_profile("reasoning")
+                _auto_loaded = True
+                _logger.info(
+                    "Batch: auto-loaded "
+                    "reasoning model",
+                )
+    except Exception:
+        _logger.debug(
+            "Ollama auto-load skipped",
+            exc_info=True,
+        )
+
     try:
         from tools._stock_shared import _get_repo
 
@@ -367,6 +407,20 @@ def refresh_all_sentiment() -> int:
             exc_info=True,
         )
         return 0
+    finally:
+        # Unload auto-loaded model to free RAM.
+        if _auto_loaded:
+            try:
+                _mgr.unload_all()
+                _logger.info(
+                    "Batch: unloaded reasoning "
+                    "model (auto-cleanup)",
+                )
+            except Exception:
+                _logger.debug(
+                    "Ollama auto-unload failed",
+                    exc_info=True,
+                )
 
 
 def start_gap_filler() -> None:

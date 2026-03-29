@@ -220,6 +220,12 @@ def setup_graph(
             )
             anthropic = "claude-sonnet-4-6"
 
+        ollama = (
+            settings.ollama_model
+            if settings.ollama_enabled
+            else None
+        )
+
         return FallbackLLM(
             groq_models=tiers,
             anthropic_model=anthropic,
@@ -229,6 +235,8 @@ def setup_graph(
             compressor=compressor,
             obs_collector=obs_collector,
             cascade_profile="tool",
+            ollama_model=ollama,
+            ollama_first=False,
         )
 
     graph = build_supervisor_graph(

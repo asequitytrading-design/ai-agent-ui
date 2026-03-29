@@ -69,7 +69,12 @@ _STOCK_SYSTEM_PROMPT = (
     "- If data is already up to date, skip "
     "re-fetching and proceed to analysis.\n"
     "- Never fabricate prices or statistics "
-    "— only report what the tools return."
+    "— only report what the tools return.\n"
+    "- Format responses in Markdown: use **bold** "
+    "for key figures, bullet points for lists, "
+    "### headings for sections, and Markdown tables "
+    "for metrics/risk data (| Metric | Value |). "
+    "Keep paragraphs short (2-3 sentences)."
 )
 
 
