@@ -78,7 +78,7 @@ class LinkTickerRequest(BaseModel):
 
 
 @router.get("/tickers")
-def get_user_tickers(
+async def get_user_tickers(
     user: UserContext = Depends(get_current_user),
 ) -> Dict[str, List[str]]:
     """Return the current user's linked tickers.
@@ -91,7 +91,7 @@ def get_user_tickers(
         sorted ticker symbols.
     """
     repo = _helpers._get_repo()
-    tickers = repo.get_user_tickers(user.user_id)
+    tickers = await repo.get_user_tickers(user.user_id)
     _logger.debug(
         "Listed %d tickers for user_id=%s",
         len(tickers),
@@ -101,7 +101,7 @@ def get_user_tickers(
 
 
 @router.post("/tickers")
-def link_ticker(
+async def link_ticker(
     body: LinkTickerRequest,
     user: UserContext = Depends(get_current_user),
 ) -> Dict[str, object]:
@@ -133,7 +133,7 @@ def link_ticker(
     ticker = body.ticker.upper().strip()
     repo = _helpers._get_repo()
     try:
-        linked = repo.link_ticker(
+        linked = await repo.link_ticker(
             user.user_id,
             ticker,
             body.source,
@@ -170,7 +170,7 @@ def link_ticker(
 
 
 @router.delete("/tickers/{ticker}")
-def unlink_ticker(
+async def unlink_ticker(
     ticker: str,
     user: UserContext = Depends(get_current_user),
 ) -> Dict[str, str]:
@@ -189,7 +189,7 @@ def unlink_ticker(
     normalised = ticker.upper().strip()
     repo = _helpers._get_repo()
     try:
-        removed = repo.unlink_ticker(
+        removed = await repo.unlink_ticker(
             user.user_id,
             normalised,
         )
@@ -438,7 +438,7 @@ def get_portfolio(
 
 
 @router.post("/portfolio")
-def add_portfolio_holding(
+async def add_portfolio_holding(
     body: AddPortfolioRequest,
     user: UserContext = Depends(get_current_user),
 ) -> Dict[str, str]:
@@ -469,7 +469,7 @@ def add_portfolio_holding(
     # in both Portfolio and Watchlist views.
     repo = _helpers._get_repo()
     try:
-        repo.link_ticker(
+        await repo.link_ticker(
             user.user_id,
             ticker,
             "portfolio",

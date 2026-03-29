@@ -60,7 +60,7 @@ def register(router: APIRouter) -> None:
                 )
 
         repo = _helpers._get_repo()
-        raw_events = repo.list_audit_events()
+        raw_events = await repo.list_audit_events()
         events = []
         for ev in raw_events:
             d = dict(ev)

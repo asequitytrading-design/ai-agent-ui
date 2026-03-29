@@ -84,10 +84,10 @@ def _safe_int(val) -> int | None:
         return None
 
 
-def _get_user_tickers(user: UserContext) -> list[str]:
+async def _get_user_tickers(user: UserContext) -> list[str]:
     """Fetch user's linked tickers."""
     repo = _helpers._get_repo()
-    return repo.get_user_tickers(user.user_id)
+    return await repo.get_user_tickers(user.user_id)
 
 
 def _get_company_info_df(
@@ -184,7 +184,7 @@ def create_insights_router() -> APIRouter:
             )
 
         stock_repo = _get_stock_repo()
-        tickers = _get_user_tickers(user)
+        tickers = await _get_user_tickers(user)
         if not tickers:
             return ScreenerResponse()
 
@@ -311,7 +311,7 @@ def create_insights_router() -> APIRouter:
             )
 
         stock_repo = _get_stock_repo()
-        tickers = _get_user_tickers(user)
+        tickers = await _get_user_tickers(user)
         if not tickers:
             return TargetsResponse()
 
@@ -423,7 +423,7 @@ def create_insights_router() -> APIRouter:
             )
 
         stock_repo = _get_stock_repo()
-        tickers = _get_user_tickers(user)
+        tickers = await _get_user_tickers(user)
         if not tickers:
             return DividendsResponse()
 
@@ -509,7 +509,7 @@ def create_insights_router() -> APIRouter:
             )
 
         stock_repo = _get_stock_repo()
-        tickers = _get_user_tickers(user)
+        tickers = await _get_user_tickers(user)
         if not tickers:
             return RiskResponse()
 
@@ -609,7 +609,7 @@ def create_insights_router() -> APIRouter:
             )
 
         stock_repo = _get_stock_repo()
-        tickers = _get_user_tickers(user)
+        tickers = await _get_user_tickers(user)
         if not tickers:
             return SectorsResponse()
 
@@ -765,7 +765,7 @@ def create_insights_router() -> APIRouter:
                     .unique(),
                 )
         else:
-            tickers = _get_user_tickers(user)
+            tickers = await _get_user_tickers(user)
 
         if not tickers:
             return CorrelationResponse(period=period)
@@ -885,7 +885,7 @@ def create_insights_router() -> APIRouter:
             )
 
         stock_repo = _get_stock_repo()
-        tickers = _get_user_tickers(user)
+        tickers = await _get_user_tickers(user)
         if not tickers:
             return QuarterlyResponse()
 
