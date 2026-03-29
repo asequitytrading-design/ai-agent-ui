@@ -570,7 +570,7 @@ function ForecastTab({ ticker }: { ticker: string }) {
       upper?: number;
     } | null) => {
       const el = fcTooltip.current;
-      if (!el || !info) return;
+      if (!el || !info || info.price == null) return;
       const s = tickerCurrency(ticker);
       const tag = info.isForecast
         ? '<span class="text-emerald-500 text-[9px]">FORECAST</span> '

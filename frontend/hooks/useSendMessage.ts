@@ -40,6 +40,9 @@ export function useSendMessage({
   // Fix #1: track in-flight stream so it can be aborted on unmount or new send
   const abortControllerRef = useRef<AbortController | null>(null);
 
+  // Collect tool calls during streaming to prepend to the final response.
+  const toolCallsRef = useRef<string[]>([]);
+
   // Abort any in-flight request when the component unmounts
   useEffect(() => {
     return () => {
@@ -56,19 +59,33 @@ export function useSendMessage({
         const iter = event.iteration as number;
         setStatusLine(iter > 1 ? `Thinking... (step ${iter})` : "Thinking...");
       } else if (event.type === "tool_start") {
-        setStatusLine(`${toolLabel(event.tool as string)}...`);
+        const tool = event.tool as string;
+        if (!toolCallsRef.current.includes(tool)) {
+          toolCallsRef.current.push(tool);
+        }
+        setStatusLine(`${toolLabel(tool)}...`);
       } else if (event.type === "tool_done") {
         setStatusLine(`Got result from ${event.tool as string}...`);
       } else if (event.type === "warning") {
         setStatusLine("Max iterations reached, finalising...");
       } else if (event.type === "final") {
+        // Prepend tool calls as a compact header.
+        let response = event.response as string;
+        const tools = toolCallsRef.current;
+        if (tools.length > 0) {
+          const toolLine = tools
+            .map((t) => `\`${t}\``)
+            .join(" → ");
+          response = `**Tools used:** ${toolLine}\n\n---\n\n${response}`;
+        }
+        toolCallsRef.current = [];
         setMessages([
           ...updatedMessages,
-          { role: "assistant", content: event.response as string, timestamp: new Date() },
+          { role: "assistant", content: response, timestamp: new Date() },
         ]);
         setStatusLine("");
         setLoading(false);
-        textareaRef.current?.focus();
+        setTimeout(() => textareaRef.current?.focus(), 150);
       } else if (event.type === "error" || event.type === "timeout") {
         setMessages([
           ...updatedMessages,
@@ -76,7 +93,7 @@ export function useSendMessage({
         ]);
         setStatusLine("");
         setLoading(false);
-        textareaRef.current?.focus();
+        setTimeout(() => textareaRef.current?.focus(), 150);
       }
     },
     [setLoading, setMessages, setStatusLine, textareaRef],
@@ -172,7 +189,7 @@ export function useSendMessage({
       } finally {
         setLoading(false);
         setStatusLine("");
-        textareaRef.current?.focus();
+        setTimeout(() => textareaRef.current?.focus(), 150);
       }
     },
     [agentId, handleEvent, messages, setLoading, setMessages, setStatusLine, textareaRef],
@@ -185,6 +202,7 @@ export function useSendMessage({
     if (!input.trim()) return;
 
     abortControllerRef.current?.abort();
+    toolCallsRef.current = [];
 
     const userMessage: Message = {
       role: "user",
