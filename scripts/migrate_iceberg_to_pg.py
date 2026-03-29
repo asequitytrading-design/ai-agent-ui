@@ -66,10 +66,38 @@ def _iceberg_rows(cat, table_name: str) -> list[dict]:
         return []
 
 
+def _clean_value(v):
+    """Sanitize Iceberg values for PostgreSQL."""
+    import math
+    import pandas as pd
+    if v is None:
+        return None
+    if isinstance(v, float) and math.isnan(v):
+        return None
+    if isinstance(v, pd.Timestamp):
+        if pd.isna(v):
+            return None
+        # asyncpg needs tz-aware timestamps
+        if v.tzinfo is None:
+            from datetime import timezone
+            v = v.tz_localize(timezone.utc)
+        return v.to_pydatetime()
+    if hasattr(v, 'isoformat') and hasattr(v, 'tzinfo'):
+        # datetime without tz
+        if v.tzinfo is None:
+            from datetime import timezone
+            v = v.replace(tzinfo=timezone.utc)
+    return v
+
+
 def _map_row(model_cls, row: dict) -> dict:
-    """Filter row keys to match ORM model columns."""
+    """Filter row keys and sanitize values for PG."""
     columns = {c.name for c in model_cls.__table__.columns}
-    return {k: v for k, v in row.items() if k in columns}
+    return {
+        k: _clean_value(v)
+        for k, v in row.items()
+        if k in columns
+    }
 
 
 async def migrate(database_url: str) -> dict[str, int]:
