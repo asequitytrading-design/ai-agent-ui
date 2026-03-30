@@ -30,6 +30,7 @@ export function ChatPanel() {
     isOpen,
     closePanel,
     agentId,
+    sessionId,
     ws,
   } = useChatContext();
 
@@ -65,6 +66,7 @@ export function ChatPanel() {
   const { sendMessage, handleKeyDown, handleInput } =
     useSendMessage({
       agentId,
+      sessionId,
       messages,
       setMessages,
       setLoading,

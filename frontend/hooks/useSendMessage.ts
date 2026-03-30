@@ -16,6 +16,7 @@ import type { UseWebSocketReturn, WsEvent } from "@/hooks/useWebSocket";
 
 interface UseSendMessageOptions {
   agentId: string;
+  sessionId: string;
   messages: Message[];
   setMessages: (updater: Message[] | ((prev: Message[]) => Message[])) => void;
   setLoading: (v: boolean) => void;
@@ -28,6 +29,7 @@ interface UseSendMessageOptions {
 
 export function useSendMessage({
   agentId,
+  sessionId,
   messages,
   setMessages,
   setLoading,
@@ -120,9 +122,10 @@ export function useSendMessage({
         history: messages.map((m) => ({ role: m.role, content: m.content })),
         agent_id: agentId,
         user_id: getUserIdFromToken(),
+        session_id: sessionId,
       });
     },
-    [ws, handleEvent, messages, agentId],
+    [ws, handleEvent, messages, agentId, sessionId],
   );
 
   // ---------------------------------------------------------------
@@ -139,9 +142,13 @@ export function useSendMessage({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             message: userMessage.content,
-            history: messages.map((m) => ({ role: m.role, content: m.content })),
+            history: messages.map((m) => ({
+              role: m.role,
+              content: m.content,
+            })),
             agent_id: agentId,
             user_id: getUserIdFromToken(),
+            session_id: sessionId,
           }),
           signal: controller.signal,
         });
@@ -192,7 +199,7 @@ export function useSendMessage({
         setTimeout(() => textareaRef.current?.focus(), 150);
       }
     },
-    [agentId, handleEvent, messages, setLoading, setMessages, setStatusLine, textareaRef],
+    [agentId, sessionId, handleEvent, messages, setLoading, setMessages, setStatusLine, textareaRef],
   );
 
   // ---------------------------------------------------------------
