@@ -49,6 +49,45 @@ def classify_followup(
         return "new_topic"
 
 
+def _get_classifier_llm():
+    """Build lightweight FallbackLLM for classification."""
+    try:
+        from config import get_settings
+        from llm_fallback import FallbackLLM
+        from message_compressor import (
+            MessageCompressor,
+        )
+        from token_budget import TokenBudget
+
+        s = get_settings()
+        tiers = [
+            t.strip()
+            for t in s.groq_model_tiers.split(",")
+            if t.strip()
+        ][:2]
+        ollama = (
+            s.ollama_model if s.ollama_enabled
+            else None
+        )
+        return FallbackLLM(
+            groq_models=tiers,
+            anthropic_model=None,
+            temperature=0,
+            agent_id="classifier",
+            token_budget=TokenBudget(),
+            compressor=MessageCompressor(),
+            cascade_profile="tool",
+            ollama_model=ollama,
+            ollama_first=True,
+        )
+    except Exception:
+        _logger.debug(
+            "Classifier LLM init failed",
+            exc_info=True,
+        )
+        return None
+
+
 def _classify_via_llm(
     user_input: str,
     ctx: ConversationContext,
@@ -56,15 +95,16 @@ def _classify_via_llm(
     """Call LLM to classify follow-up vs new topic."""
     from langchain_core.messages import HumanMessage
 
-    from llm_fallback import FallbackLLM
-
     prompt = _CLASSIFY_PROMPT.format(
         summary=ctx.summary or "No previous context.",
         topic=ctx.current_topic or "None",
         message=user_input,
     )
 
-    llm = FallbackLLM(max_tiers=2)
+    llm = _get_classifier_llm()
+    if llm is None:
+        return "new_topic"
+
     result = llm.invoke([HumanMessage(content=prompt)])
     text = (
         result.content

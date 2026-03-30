@@ -131,6 +131,7 @@ def build_supervisor_graph(
     g.add_edge(START, "guardrail")
 
     # Guardrail → router | decline | cache_hit
+    # Also allows direct sub-agent routing for follow-ups.
     g.add_conditional_edges(
         "guardrail",
         _route_by_next_agent,
@@ -138,6 +139,11 @@ def build_supervisor_graph(
             "router": "router",
             "decline": "decline",
             "cache_hit": "log_query",
+            "portfolio": "portfolio",
+            "stock_analyst": "stock_analyst",
+            "forecaster": "forecaster",
+            "research": "research",
+            "sentiment": "sentiment",
         },
     )
 

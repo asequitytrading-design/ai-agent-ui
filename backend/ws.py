@@ -244,6 +244,7 @@ async def _handle_chat(
     """
     message = msg.get("message", "")
     history = msg.get("history", [])
+    session_id = msg.get("session_id", "")
     user_id = user_ctx["user_id"]
     timeout = settings.agent_timeout_seconds
 
@@ -285,6 +286,7 @@ async def _handle_chat(
                     history,
                     user_id,
                     event_queue,
+                    session_id=session_id,
                 )
             else:
                 _run_legacy(
@@ -363,6 +365,7 @@ def _run_graph(
     history,
     user_id,
     event_queue,
+    session_id: str = "",
 ):
     """Run LangGraph supervisor in worker thread."""
     from langchain_core.messages import (
@@ -400,6 +403,7 @@ def _run_graph(
         "data_sources_used": [],
         "was_local_sufficient": True,
         "tool_events": [],
+        "session_id": session_id,
         "final_response": "",
         "error": None,
         "start_time_ns": 0,
@@ -415,6 +419,54 @@ def _run_graph(
         result = graph.invoke(input_state)
     finally:
         set_event_sink(None)
+
+    # Update conversation context for follow-ups.
+    if session_id:
+        try:
+            from agents.conversation_context import (
+                ConversationContext,
+                context_store,
+                update_summary,
+            )
+
+            ctx = context_store.get(session_id)
+            if ctx is None:
+                ctx = ConversationContext(
+                    session_id=session_id,
+                )
+            ctx.last_agent = result.get(
+                "current_agent", "",
+            )
+            ctx.last_intent = result.get("intent", "")
+            tickers = result.get("tickers", [])
+            ctx.current_topic = (
+                f"{', '.join(tickers)} "
+                f"{ctx.last_intent}"
+                if tickers else ctx.last_intent
+            )
+            for t in tickers:
+                if t not in ctx.tickers_mentioned:
+                    ctx.tickers_mentioned.append(t)
+            try:
+                update_summary(
+                    ctx, message,
+                    result.get("final_response", ""),
+                )
+            except Exception:
+                ctx.turn_count += 1
+            context_store.upsert(session_id, ctx)
+            _logger.debug(
+                "Context updated for session %s"
+                " (turn %d, agent=%s)",
+                session_id,
+                ctx.turn_count,
+                ctx.last_agent,
+            )
+        except Exception:
+            _logger.debug(
+                "WS context update failed",
+                exc_info=True,
+            )
 
     # Emit final (tool events already sent in real-time)
     event_queue.put(

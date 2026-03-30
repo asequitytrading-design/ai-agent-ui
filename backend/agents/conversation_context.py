@@ -108,9 +108,33 @@ def _get_summary_llm():
     Returns None if all unavailable.
     """
     try:
+        from config import get_settings
         from llm_fallback import FallbackLLM
+        from message_compressor import (
+            MessageCompressor,
+        )
+        from token_budget import TokenBudget
+
+        s = get_settings()
+        tiers = [
+            t.strip()
+            for t in s.groq_model_tiers.split(",")
+            if t.strip()
+        ][:2]
+        ollama = (
+            s.ollama_model if s.ollama_enabled
+            else None
+        )
         return FallbackLLM(
-            max_tiers=2, ollama_first=True,
+            groq_models=tiers,
+            anthropic_model=None,
+            temperature=0,
+            agent_id="summary",
+            token_budget=TokenBudget(),
+            compressor=MessageCompressor(),
+            cascade_profile="tool",
+            ollama_model=ollama,
+            ollama_first=True,
         )
     except Exception:
         return None
