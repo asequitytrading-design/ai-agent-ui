@@ -39,6 +39,7 @@ class AgentState(dict):
         ],
         "user_input": str,
         "user_id": str,
+        "session_id": str,
         "history": list[dict],
         # ── Routing ────────────────────────────────
         "intent": str,

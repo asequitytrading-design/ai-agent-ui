@@ -8,8 +8,11 @@ routed to the decline node.  Zero LLM cost.
 
 from __future__ import annotations
 
+import logging
 import re
 import time
+
+_logger = logging.getLogger(__name__)
 
 from agents.router import (
     _STOCK_KEYWORDS,
@@ -141,6 +144,51 @@ def guardrail(state: dict) -> dict:
     if not has_keyword and not has_ticker:
         return {
             "next_agent": "decline",
+            "start_time_ns": start_ns,
+        }
+
+    # ── Follow-up detection ────────────────────────
+    session_id = state.get("session_id", "")
+    _followup_result = "new_topic"
+    _ctx = None
+    if session_id:
+        try:
+            from agents.conversation_context import (
+                context_store,
+            )
+            from agents.nodes.topic_classifier import (
+                classify_followup,
+            )
+
+            _ctx = context_store.get(session_id)
+            _followup_result = classify_followup(
+                user_input, _ctx,
+            )
+            if _followup_result == "follow_up" and _ctx:
+                _logger.debug(
+                    "Follow-up for session %s"
+                    " — reusing agent=%s",
+                    session_id,
+                    _ctx.last_agent,
+                )
+        except Exception:
+            _logger.debug(
+                "Follow-up detection failed",
+                exc_info=True,
+            )
+
+    # If follow-up with known agent, skip router.
+    if (
+        _followup_result == "follow_up"
+        and _ctx
+        and _ctx.last_agent
+    ):
+        return {
+            "tickers": (
+                tickers or _ctx.tickers_mentioned
+            ),
+            "next_agent": _ctx.last_agent,
+            "intent": _ctx.last_intent,
             "start_time_ns": start_ns,
         }
 

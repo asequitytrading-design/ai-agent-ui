@@ -492,6 +492,7 @@ def create_app(
             "messages": msgs,
             "user_input": req.message,
             "user_id": req.user_id or "",
+            "session_id": req.session_id or "",
             "history": req.history or [],
             "user_context": user_ctx,
             "intent": "",
