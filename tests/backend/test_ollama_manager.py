@@ -160,7 +160,7 @@ def test_load_profile_reasoning(mgr):
     call_json = mock_post.call_args.kwargs["json"]
     assert call_json["model"] == "gpt-oss:20b"
     assert call_json["keep_alive"] == "1h"
-    assert call_json["options"]["num_ctx"] == 16384
+    assert call_json["options"]["num_ctx"] == 8192
 
 
 def test_load_profile_coding(mgr):

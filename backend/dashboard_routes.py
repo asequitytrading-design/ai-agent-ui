@@ -160,12 +160,12 @@ def create_dashboard_router() -> APIRouter:
             latest = t_valid.iloc[-1]
             cur = float(latest.get("close", 0))
             prev = float(
-                t_ohlcv.iloc[-2]["close"] if len(t_ohlcv) > 1 else cur
+                t_valid.iloc[-2]["close"] if len(t_valid) > 1 else cur
             )
             chg = cur - prev
             pct = (chg / prev * 100) if prev else 0.0
 
-            sparkline = t_ohlcv["close"].tolist()[-30:]
+            sparkline = t_valid["close"].tolist()[-30:]
 
             info = info_map.get(t)
             ccy = info.get("currency", "USD") if info else "USD"
@@ -607,6 +607,9 @@ def create_dashboard_router() -> APIRouter:
             if ohlcv.empty or len(ohlcv) < 2:
                 continue
 
+            ohlcv = ohlcv.dropna(subset=["close"])
+            if ohlcv.empty or len(ohlcv) < 2:
+                continue
             close = ohlcv["close"].astype(float)
             first = close.iloc[0]
             if not first or first == 0:

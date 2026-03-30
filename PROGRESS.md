@@ -2,6 +2,35 @@
 
 ---
 
+# Session: Mar 30, 2026 — Bug Fixes, Test Suite Cleanup, MkDocs Containerization
+
+## Branch: `feature/sprint4`
+
+### ASETPLTFRM-243: Portfolio NaN crash — Done
+- Sanitized NaN floats in watchlist endpoint (`dashboard_routes.py`)
+- Sparkline and previous close now use `t_valid` (NaN-filtered)
+- Compare endpoint: added `dropna(subset=["close"])` before normalization
+
+### ASETPLTFRM-242: MkDocs containerization — Done
+- `Dockerfile.docs`: squidfunk/mkdocs-material:9 + mkdocs-gen-files plugin
+- `docker-compose.yml`: docs service on port 8000
+- `docker-compose.override.yml`: dev hot-reload (writable mounts)
+- Frontend `DOCS_URL` default corrected to `localhost` (was 127.0.0.1)
+- `.env.example`: added `NEXT_PUBLIC_BACKEND_URL`, `NEXT_PUBLIC_DOCS_URL`
+
+### Test suite: 664 passed, 0 failed (was 18 failed)
+- 7 dashboard_routes: `MagicMock` → `AsyncMock` for async `get_user_tickers`
+- 5 sentiment_sources + 1 news_tools: added `feedparser==6.0.12` to requirements
+- 2 forecast_ensemble: fixed mock `_predict()` conditional DataFrame logic
+- 2 llm_usage_persistence: seeded LLM pricing in test fixture
+- 1 ollama_manager: fixed `num_ctx` assertion (16384 → 8192 for reasoning)
+- System: installed `libomp` (brew) for xgboost
+
+### Docker: all 5 services verified healthy
+- backend :8181, frontend :3000, postgres :5432, redis :6379, docs :8000
+
+---
+
 # Session: Mar 29, 2026 (evening) — Hybrid DB Migration Foundation
 
 ## Branch: `feature/sprint4` — Epic ASETPLTFRM-225

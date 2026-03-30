@@ -71,6 +71,19 @@ services:
         -c work_mem=32MB
         -c max_connections=20
 
+  # ── MkDocs Material (documentation) ────────────────
+  docs:
+    build:
+      context: .
+      dockerfile: Dockerfile.docs
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./docs:/docs/docs:ro
+      - ./mkdocs.yml:/docs/mkdocs.yml:ro
+      - ./scripts:/docs/scripts:ro
+    restart: unless-stopped
+
   # ── Redis 7 (cache + session store) ────────────────
   redis:
     image: redis:7-alpine

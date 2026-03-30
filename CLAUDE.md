@@ -43,7 +43,7 @@ All pages fully migrated from Dash to Next.js.
 | Frontend | 3000 | `frontend/app/page.tsx` | Next.js 16, React 19, lightweight-charts |
 | PostgreSQL | 5432 | Docker | PostgreSQL 16 Alpine (OLTP: 5 tables) |
 | Redis | 6379 | Docker | Redis 7 Alpine |
-| Docs | 8000 | `mkdocs serve` | MkDocs Material |
+| Docs | 8000 | Docker | MkDocs Material 9 (squidfunk) |
 | Alembic | — | `backend/db/migrations/` | Schema migrations for PostgreSQL |
 
 ```bash

@@ -20,6 +20,12 @@ services:
         --reload-dir /app/auth
         --reload-dir /app/stocks
 
+  docs:
+    volumes:
+      - ./docs:/docs/docs
+      - ./mkdocs.yml:/docs/mkdocs.yml
+      - ./scripts:/docs/scripts
+
   frontend:
     build:
       context: .

@@ -83,11 +83,11 @@ def _mock_prophet_model():
     def _predict(df):
         n = len(df)
         rng = np.random.default_rng(0)
-        return pd.DataFrame(
-            {"yhat": df["y"].values + rng.standard_normal(n) * 2}
-            if "y" in df.columns
-            else {"yhat": rng.standard_normal(n) * 2 + 200}
-        )
+        if "y" in df.columns:
+            yhat = df["y"].values + rng.standard_normal(n) * 2
+        else:
+            yhat = rng.standard_normal(n) * 2 + 200
+        return pd.DataFrame({"yhat": yhat})
 
     model.predict.side_effect = _predict
     return model
