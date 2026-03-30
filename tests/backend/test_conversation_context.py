@@ -64,3 +64,50 @@ class TestConversationContextStore:
         store.upsert("s1", ctx)
         store.delete("s1")
         assert store.get("s1") is None
+
+
+from unittest.mock import MagicMock, patch  # noqa: E402
+
+
+class TestUpdateSummary:
+    @patch(
+        "agents.conversation_context._get_summary_llm",
+    )
+    def test_updates_summary(self, mock_get_llm):
+        from agents.conversation_context import (
+            update_summary,
+        )
+
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = MagicMock(
+            content="User asked about AAPL sentiment. "
+            "Score was bullish at 0.62.",
+        )
+        mock_get_llm.return_value = mock_llm
+
+        ctx = ConversationContext(session_id="s1")
+        update_summary(
+            ctx,
+            user_input="What is AAPL sentiment?",
+            response="Sentiment is bullish, score 0.62",
+        )
+        assert "AAPL" in ctx.summary
+        assert ctx.turn_count == 1
+
+    @patch(
+        "agents.conversation_context._get_summary_llm",
+    )
+    def test_llm_failure_keeps_old_summary(
+        self, mock_get_llm,
+    ):
+        from agents.conversation_context import (
+            update_summary,
+        )
+
+        mock_get_llm.return_value = None
+
+        ctx = ConversationContext(session_id="s1")
+        ctx.summary = "Previous summary"
+        update_summary(ctx, "test", "test")
+        assert ctx.summary == "Previous summary"
+        assert ctx.turn_count == 1

@@ -88,3 +88,71 @@ class ConversationContextStore:
 
 # Module-level singleton.
 context_store = ConversationContextStore()
+
+_SUMMARY_PROMPT = (
+    "Update this conversation summary given the "
+    "latest exchange. Keep it under 3 sentences. "
+    "Include: topic discussed, key tickers/numbers "
+    "mentioned, and any conclusions.\n\n"
+    "Previous summary: {prev}\n"
+    "User asked: {user_input}\n"
+    "Assistant answered: {response}\n\n"
+    "Updated summary:"
+)
+
+
+def _get_summary_llm():
+    """Get cheapest available LLM for summarization.
+
+    Cascade: Ollama → Groq scout → Groq versatile.
+    Returns None if all unavailable.
+    """
+    try:
+        from llm_fallback import FallbackLLM
+        return FallbackLLM(
+            max_tiers=2, ollama_first=True,
+        )
+    except Exception:
+        return None
+
+
+def update_summary(
+    ctx: ConversationContext,
+    user_input: str,
+    response: str,
+) -> None:
+    """Update rolling summary in-place.
+
+    Increments turn_count regardless of LLM availability.
+    """
+    ctx.turn_count += 1
+
+    llm = _get_summary_llm()
+    if llm is None:
+        _logger.debug("No LLM for summary update")
+        return
+
+    from langchain_core.messages import HumanMessage
+
+    prompt = _SUMMARY_PROMPT.format(
+        prev=ctx.summary or "No previous context.",
+        user_input=user_input[:300],
+        response=response[:500],
+    )
+
+    try:
+        result = llm.invoke(
+            [HumanMessage(content=prompt)],
+        )
+        text = (
+            result.content
+            if hasattr(result, "content")
+            else str(result)
+        ).strip()
+        if text:
+            ctx.summary = text
+    except Exception:
+        _logger.debug(
+            "Summary update failed",
+            exc_info=True,
+        )
