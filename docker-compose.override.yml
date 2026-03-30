@@ -11,6 +11,7 @@ services:
       - ./stocks:/app/stocks
       - ./scripts:/app/scripts
       - ./dashboard:/app/dashboard
+      - ./fixtures:/app/fixtures
       - ${AI_AGENT_UI_HOME:-~/.ai-agent-ui}:${AI_AGENT_UI_HOME:-/Users/abhay/.ai-agent-ui}
     command: >
       uvicorn main:app

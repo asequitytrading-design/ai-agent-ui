@@ -48,19 +48,25 @@ class HeadlineItem:
 
 def fetch_all_headlines(
     ticker: str,
+    max_age_days: int = 7,
 ) -> list[HeadlineItem]:
     """Fetch headlines from all sources, deduplicate.
 
     Sources are tried in priority order.  If a source
     fails, it is skipped and the next source is tried.
+    Results are filtered to the last ``max_age_days``.
 
     Args:
         ticker: Stock ticker symbol (e.g. ``AAPL``).
+        max_age_days: Only keep headlines published
+            within this many days.  Defaults to 7.
 
     Returns:
         Deduplicated list of :class:`HeadlineItem` sorted
-        by weight descending.
+        by weight descending, filtered by recency.
     """
+    from tools._date_utils import is_within_window
+
     items: list[HeadlineItem] = []
 
     for fetcher in (
@@ -86,13 +92,23 @@ def fetch_all_headlines(
         return []
 
     deduped = _deduplicate(items)
+
+    # Filter by recency.
+    recent = [
+        h for h in deduped
+        if is_within_window(h.published, max_age_days)
+    ]
+
     _logger.debug(
-        "Headlines for %s: %d raw → %d deduped",
+        "Headlines for %s: %d raw → %d deduped"
+        " → %d within %dd",
         ticker,
         len(items),
         len(deduped),
+        len(recent),
+        max_age_days,
     )
-    return deduped
+    return recent
 
 
 # ------------------------------------------------------------------
@@ -210,10 +226,17 @@ def _deduplicate(
     if len(items) <= 1:
         return list(items)
 
-    # Sort by weight desc so higher-weight items survive.
+    from tools._date_utils import parse_published
+
+    def _sort_key(h: HeadlineItem):
+        dt = parse_published(h.published)
+        ts = dt.timestamp() if dt else 0.0
+        return (h.weight, ts)
+
+    # Sort by weight desc, then recency desc.
     ranked = sorted(
         items,
-        key=lambda h: h.weight,
+        key=_sort_key,
         reverse=True,
     )
     keep: list[HeadlineItem] = []

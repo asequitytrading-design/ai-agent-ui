@@ -26,6 +26,31 @@
 - 1 ollama_manager: fixed `num_ctx` assertion (16384 → 8192 for reasoning)
 - System: installed `libomp` (brew) for xgboost
 
+### ASETPLTFRM-244: Recency-aware news & sentiment (5 SP) — In Progress
+- New `backend/tools/_date_utils.py`: `parse_published()`, `is_within_window()`, `time_decay_weight()`
+- `_sentiment_sources.py`: `max_age_days=7` param, recency tiebreaker in dedup
+- `_sentiment_scorer.py`: time-decay weighting (1.0/0.5/0.25/0.1 by age bracket)
+- `news_tools.py`: `days_back=7` on `get_ticker_news` and `search_financial_news`
+- `sentiment_agent.py`: `days_back` passthrough on `score_ticker_sentiment`
+- Agent prompts (research, sentiment): recency rules + temporal expansion guidance
+- Design spec: `docs/superpowers/specs/2026-03-30-recency-aware-news-design.md`
+- 21 new tests for `_date_utils.py`, 685 total passing
+
+### Seed script fix for Docker
+- `scripts/seed_demo_data.py`: set PyIceberg env vars, async `UserRepository`
+- `docker-compose.override.yml`: mount `fixtures/` for seed script
+- Demo data seeds correctly via `docker compose exec backend`
+
+### E2E login redirect fix
+- `e2e/pages/frontend/login.page.ts`: `waitForURL("/")` → `**/dashboard**`
+- `e2e/tests/auth/login.spec.ts`: same fix
+- 100 E2E passed (was 97), 109 pre-existing frontend-chromium failures (ASETPLTFRM-246)
+
+### Performance: no regression
+- LHCI /login: Performance 100, Accessibility 95, Best Practices 96, SEO 100
+- Playwright full audit: 94/100 overall (identical to Sprint 3 baseline)
+- All 40 audit points unchanged vs Sprint 3
+
 ### Docker: all 5 services verified healthy
 - backend :8181, frontend :3000, postgres :5432, redis :6379, docs :8000
 

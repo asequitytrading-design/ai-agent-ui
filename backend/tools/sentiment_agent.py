@@ -118,16 +118,23 @@ def _staleness_note(score_date) -> str:
 
 
 @tool
-def score_ticker_sentiment(ticker: str) -> str:
-    """Score live sentiment for a specific stock ticker.
+def score_ticker_sentiment(
+    ticker: str,
+    days_back: int = 7,
+) -> str:
+    """Score live sentiment for a stock ticker.
 
-    Fetches latest headlines from yfinance, Yahoo Finance
-    RSS, and Google News RSS.  Scores via FallbackLLM and
-    persists the composite score to Iceberg.
+    Fetches headlines from the last ``days_back`` days
+    from yfinance, Yahoo RSS, and Google RSS.  Scores
+    via FallbackLLM with time-decay weighting (recent
+    headlines count more) and persists to Iceberg.
 
     Args:
         ticker: Stock ticker symbol (e.g. AAPL,
             RELIANCE.NS).
+        days_back: Number of days of headlines to score.
+            Defaults to 7.  Use 30 for "last month",
+            90 for "last quarter".
 
     Returns:
         Natural language summary of the sentiment score.
@@ -137,7 +144,9 @@ def score_ticker_sentiment(ticker: str) -> str:
     )
 
     llm = _get_llm()
-    avg = refresh_ticker_sentiment(ticker, llm=llm)
+    avg = refresh_ticker_sentiment(
+        ticker, llm=llm, max_age_days=days_back,
+    )
 
     if avg is None:
         return (
