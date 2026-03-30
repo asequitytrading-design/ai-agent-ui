@@ -67,14 +67,13 @@ ollama-profile status                       # check loaded model
 **Key dirs**: `backend/` (agents, tools, config), `backend/db/` (ORM models, async engine, Alembic migrations, DuckDB layer), `auth/` (JWT + RBAC + OAuth PKCE), `stocks/` (Iceberg — 14 OLAP tables), `frontend/` (SPA), `dashboard/` (Dash callbacks, imported by backend), `hooks/` (pre-commit, pre-push).
 
 **Docker files**: `Dockerfile.backend`, `Dockerfile.frontend`,
-`docker-compose.yml`, `docker-compose.override.yml` (dev hot-reload),
+`Dockerfile.docs`, `docker-compose.yml`,
+`docker-compose.override.yml` (dev hot-reload),
 `.env.example` (template), `.env` (secrets, gitignored).
 
 **Config**: `pyproject.toml` + `.flake8` (79 chars), `frontend/eslint.config.mjs`.
 
 **Data**: `~/.ai-agent-ui/` (override: `AI_AGENT_UI_HOME`). Paths in `backend/paths.py`.
-
-**Env**: `.env` (Docker Compose, gitignored), `.env.example` (template).
 
 ---
 
@@ -143,6 +142,7 @@ These rules MUST be followed in every interaction:
 2. **No bare `print()`** — use `logging.getLogger(__name__)`.
 3. **`X | None`** not `Optional[X]` (Python 3.12, PEP 604).
 4. **No module-level mutable globals** — all state in class instances.
+   Exception: `_logger = logging.getLogger(__name__)` is OK.
 5. **No bare `except:`** — always `except Exception` or specific.
 6. **Branch off `dev`** — NEVER push to `dev`, `qa`, `release`, `main`.
 7. **`apiFetch`** not `fetch` — auto-refreshes JWT.
@@ -281,6 +281,8 @@ PYTHONPATH=backend python scripts/migrate_iceberg_to_pg.py  # one-time data migr
 
 # Seed (required before first E2E run)
 PYTHONPATH=backend python scripts/seed_demo_data.py
+# Docker seed (when running via Docker Compose)
+docker compose exec backend python scripts/seed_demo_data.py
 
 # Performance (run from frontend/)
 npm run perf:check                # LHCI on /login (pre-PR gate)
