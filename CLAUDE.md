@@ -34,14 +34,15 @@
 
 Fullstack agentic chat app with stock analysis and Prophet forecasting.
 Native portfolio dashboard with TradingView lightweight-charts +
-react-plotly.js. Dual payment gateways (Razorpay INR + Stripe USD).
+react-plotly.js. Memory-augmented chat with pgvector semantic
+retrieval. Dual payment gateways (Razorpay INR + Stripe USD).
 All pages fully migrated from Dash to Next.js.
 
 | Service | Port | Entry point | Stack |
 |---------|------|-------------|-------|
 | Backend | 8181 | `backend/main.py` | Python 3.12, FastAPI, LangChain 1.x, SQLAlchemy 2.0 async |
 | Frontend | 3000 | `frontend/app/page.tsx` | Next.js 16, React 19, lightweight-charts |
-| PostgreSQL | 5432 | Docker | PostgreSQL 16 Alpine (OLTP: 5 tables) |
+| PostgreSQL | 5432 | Docker | pgvector/pgvector:pg16 (OLTP: 6 tables + pgvector) |
 | Redis | 6379 | Docker | Redis 7 Alpine |
 | Docs | 8000 | Docker | MkDocs Material 9 (squidfunk) |
 | Alembic | — | `backend/db/migrations/` | Schema migrations for PostgreSQL |
@@ -62,6 +63,7 @@ source ~/.ai-agent-ui/venv/bin/activate      # Python virtualenv
 # Ollama (host-native, not containerized)
 ollama-profile coding                       # load Qwen for code gen
 ollama-profile reasoning                    # load GPT-OSS 20B
+ollama-profile embedding                    # load nomic-embed-text (memory vectors)
 ollama-profile status                       # check loaded model
 ```
 
@@ -85,14 +87,17 @@ ollama-profile status                       # check loaded model
 | Tier | Provider | Model | When |
 |------|----------|-------|------|
 | 0 | Ollama (local) | gpt-oss:20b | Sentiment/batch (`ollama_first=True`) |
-| 1-4 | Groq (free) | llama-3.3-70b → kimi-k2 → gpt-oss-120b → llama-4-scout | Interactive chat |
+| 1-6 | Groq (free) | Round-robin pools: [70b, kimi-k2, qwen3-32b] → [gpt-oss-120b, gpt-oss-20b] → scout-17b | Interactive chat |
 | N-1 | Ollama (local) | gpt-oss:20b | Chat fallback (`ollama_first=False`) |
 | N | Anthropic (paid) | claude-sonnet-4-6 | Final fallback |
 
 - `OllamaManager` (`backend/ollama_manager.py`): TTL-cached health probe,
   load/unload profiles. If Ollama unavailable, cascade skips it.
+- `RoundRobinPool` (`backend/token_budget.py`): per-pool atomic
+  counter, `get_token_budget()` singleton seeded from Iceberg.
+  `ROUND_ROBIN_ENABLED=false` reverts to legacy sequential.
 - Admin API: `GET/POST /v1/admin/ollama/{status,load,unload}`
-- `ollama-profile` CLI: `coding` (Qwen), `reasoning` (GPT-OSS), `unload`
+- `ollama-profile` CLI: `coding`, `reasoning`, `embedding`, `unload`
 - Observability: `provider="ollama"` in `ObservabilityCollector`
 
 ---
@@ -111,6 +116,7 @@ append-only analytics.
 | `auth.payment_transactions` | `backend/db/models/payment.py` | Insert + update |
 | `stocks.registry` | `backend/db/pg_stocks.py` | Upsert |
 | `stocks.scheduled_jobs` | `backend/db/pg_stocks.py` | Upsert |
+| `public.user_memories` | `backend/db/models/memory.py` | pgvector semantic memory (768-dim) |
 
 ### Iceberg tables (14 — append / scoped-delete)
 
@@ -123,8 +129,8 @@ append-only analytics.
 
 - `backend/db/engine.py` — async `session_factory` (asyncpg driver,
   `pool_pre_ping=True`)
-- `backend/db/models/` — 5 SQLAlchemy ORM models (FK cascade,
-  JSONB, composite PK, indexes)
+- `backend/db/models/` — 6 SQLAlchemy ORM models (FK cascade,
+  JSONB, composite PK, indexes, pgvector)
 - `backend/db/migrations/` — Alembic async migrations
 - `auth/repo/repository.py` — `UserRepository` facade
   (session_factory injection, per-call sessions)
@@ -178,9 +184,9 @@ see all available topics.
 
 | Category | Topics |
 |----------|--------|
-| `shared/architecture/` | system-overview, agent-init-pattern, groq-chunking, iceberg-data-layer, auth-jwt-flow, langsmith-observability, lighthouse-performance-workflow, subscription-billing, portfolio-analytics, currency-aware-agent, token-budget-concurrency, payment-transaction-ledger, sentiment-agent, iceberg-column-projection, llm-cascade-profiles, docker-containerization, redis-cache-layer, per-ticker-refresh, api-versioning, security-hardening-patterns, hybrid-db-postgresql-iceberg, context-aware-chat, intent-aware-routing, summary-based-context, interactive-stock-discovery |
+| `shared/architecture/` | system-overview, agent-init-pattern, groq-chunking, iceberg-data-layer, auth-jwt-flow, langsmith-observability, lighthouse-performance-workflow, subscription-billing, portfolio-analytics, currency-aware-agent, token-budget-concurrency, payment-transaction-ledger, sentiment-agent, iceberg-column-projection, llm-cascade-profiles, docker-containerization, redis-cache-layer, per-ticker-refresh, api-versioning, security-hardening-patterns, hybrid-db-postgresql-iceberg, context-aware-chat, intent-aware-routing, summary-based-context, interactive-stock-discovery, memory-augmented-chat, round-robin-cascade, ollama-local-llm |
 | `shared/conventions/` | python-style, typescript-style, git-workflow, testing-patterns, performance, error-handling, llm-tool-forcing, jira-mcp-usage, security-hardening, e2e-test-patterns, isort-black-exclude-virtualenv, git-push-workflow |
-| `shared/debugging/` | common-issues, mock-patching-gotchas, chat-session-recording, cookie-hostname-mismatch, ohlcv-nan-close-price, razorpay-integration-gotchas, iceberg-epoch-dates, portfolio-watchlist-sync, iceberg-table-corruption-recovery, razorpay-customer-exists, playwright-react19-dash-patterns, asyncpg-sync-async-bridge, llm-hallucination-guardrail |
+| `shared/debugging/` | common-issues, mock-patching-gotchas, chat-session-recording, cookie-hostname-mismatch, ohlcv-nan-close-price, razorpay-integration-gotchas, iceberg-epoch-dates, portfolio-watchlist-sync, iceberg-table-corruption-recovery, razorpay-customer-exists, playwright-react19-dash-patterns, asyncpg-sync-async-bridge, llm-hallucination-guardrail, sync-async-migration-patterns, payment-cookie-redirect, bind-tools-model-lookup |
 | `shared/onboarding/` | setup-guide, test-venv-setup, tooling |
 | `shared/api/` | streaming-protocol |
 
@@ -230,23 +236,13 @@ Load any memory with `read_memory` when you need the details.
   reloads — stale connections from the old process cause
   "SSL connection has been closed unexpectedly". Always set
   in `backend/db/engine.py`.
-- **`_run_pg()` + `_pg_session()` bridge**: For sync callers
-  of async PG code (scheduler threads, background jobs): pass
-  a *callable* not a coroutine (`_run_pg(_call)` not
-  `_run_pg(_call())`), and use `_pg_session()` (fresh engine)
-  not `get_session_factory()` (cached, binds to uvicorn loop).
-  Both live in `stocks/repository.py`.
+- **Sync→async PG bridges**: See memory
+  `shared/debugging/sync-async-migration-patterns` for
+  `_run_pg()`, `_pg_session()`, missing `await`, `AsyncMock`.
 - **Iceberg NaT/NaN → PG insert**: Iceberg timestamps can
   be `NaT` and floats can be `NaN`. Sanitize with
   `pd.Timestamp` checks and `float("nan")` guards before
   inserting into PostgreSQL — PG rejects both.
-- **Sync→async migration**: When making repo methods async,
-  ALL callers must be found — use `grep -rn "repo\."` across
-  auth/, backend/, stocks/. Missing `await` returns a coroutine
-  object that silently breaks (no compile error).
-- **Test mocks after async conversion**: Replace `MagicMock`
-  with `AsyncMock` for any mocked repo method. Awaiting a
-  plain MagicMock returns a coroutine, not the mock value.
 - **Docker seed script**: `seed_demo_data.py` needs
   `PYICEBERG_CATALOG__LOCAL__URI` set before any pyiceberg
   import. Script now sets it from `paths.py`. Also needs
@@ -258,33 +254,44 @@ Load any memory with `read_memory` when you need the details.
 - **Test mock dates**: Never hardcode dates in test mocks
   (e.g., `"2026-03-21"`) — they go stale. Use
   `str(int(time.time()) - 86400)` for "yesterday".
-- **Intent-switch hallucination**: When user switches intents
-  mid-conversation (portfolio → stock analysis), the guardrail's
-  `best_intent()` detects the keyword change. If prior agent's
-  raw history is sent to the new agent, weaker Groq models
-  fabricate data instead of calling tools. Fix: summary-based
-  context in `sub_agents.py` sends `ConversationContext.summary`
-  (~100 tokens) instead of raw history (~3K tokens).
+- **Intent-switch hallucination**: See memory
+  `shared/architecture/summary-based-context`. Summary (~100
+  tokens) replaces raw history (~3K) on intent switches.
 - **Hallucination guardrail**: `synthesis.py:_is_hallucinated()`
   rejects responses with 3+ stock-analysis patterns (CMP:, P/E,
   RSI, SMA) but zero `tool_done` events. Don't use broad
   financial terms in the pattern — causes false positives on
   portfolio sector discussions.
 - **ReAct iteration counter**: `sub_agents.py` MUST pass
-  `iteration=iteration+1` to `llm_with_tools.invoke()`.
-  Without it, `FallbackLLM` always sees iteration=1 and
-  compression (system prompt condensing) never triggers.
+  `iteration=iteration+1`. See `shared/architecture/round-robin-cascade`.
 - **Groq tool call IDs → Anthropic**: Groq models generate
   tool call IDs that may not match Anthropic's
   `^[a-zA-Z0-9_-]+$` pattern. `_sanitize_tool_ids()` in
   `llm_fallback.py` cleans them before the Anthropic fallback.
-- **Turbopack cache corruption**: Docker's `/app/.next`
-  anonymous volume corrupts on unclean shutdown. Removed from
-  `docker-compose.override.yml` — `.next` now lives on bind
-  mount and rebuilds fresh each start.
-- **Groq 100K TPD daily limit**: Hit silently — only 429s
-  in logs. Monitor with `docker compose logs backend | grep 429`.
-  Consider Groq Dev Tier for heavier usage.
+- **Groq TPD daily limits**: Round-robin pools spread load
+  across 6 models (~2.3M combined TPD). Monitor via Admin →
+  LLM Observability → Daily Token Budget card. `TokenBudget`
+  seeds from Iceberg on restart so counters persist.
+- **`bind_tools` model_lookup**: After `FallbackLLM.bind_tools()`,
+  `_model_lookup` must be rebuilt. Pool routing uses this dict —
+  stale references send requests without tools, causing text-only
+  responses instead of tool calls.
+- **UserMemory `extend_existing`**: When `UserMemory` ORM model
+  is imported both at module level (via `__init__.py`) and lazily
+  inside functions, SQLAlchemy's `Base.metadata` raises "Table
+  already defined". Fix: `extend_existing=True` in `__table_args__`.
+- **Frontend Docker + Turbopack**: `lightningcss` native `.node`
+  addons can't resolve inside Turbopack's PostCSS sandbox in Alpine
+  containers. Frontend runs natively on host; Docker frontend uses
+  `profiles: ["native-frontend"]` so it doesn't start by default.
+- **Iceberg flush window**: `ObservabilityCollector` flushes every
+  30s. Restarts within that window lose unflushed events.
+  `seed_daily_from_iceberg()` on `TokenBudget` and
+  `_seed_from_iceberg()` on `ObservabilityCollector` restore
+  today's totals on startup.
+- **`ollama-profile embedding`**: Uses `/api/embed` (not
+  `/api/generate`) for warmup. Only 274MB — coexists with larger
+  models in theory but gets evicted under memory pressure.
 
 ---
 
@@ -298,13 +305,13 @@ flake8 backend/ auth/ stocks/ scripts/
 cd frontend && npx eslint . --fix
 
 # Test
-python -m pytest tests/ -v        # all (~719 tests)
+python -m pytest tests/ -v        # all (~755 tests)
 cd frontend && npx vitest run     # frontend (18 tests)
 cd e2e && npm test                # E2E (~219 tests, needs live services)
 
 # Database migrations (PostgreSQL)
-alembic upgrade head                          # apply all migrations
-alembic revision --autogenerate -m "desc"    # generate new migration
+PYTHONPATH=. alembic upgrade head              # apply all migrations
+PYTHONPATH=. alembic revision --autogenerate -m "desc"  # new migration
 PYTHONPATH=backend python scripts/migrate_iceberg_to_pg.py  # one-time data migration
 
 # Seed (required before first E2E run)
