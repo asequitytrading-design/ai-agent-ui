@@ -72,23 +72,52 @@ class Settings(BaseSettings):
     log_to_file: bool = True
     agent_timeout_seconds: int = 900
 
+    # PostgreSQL connection string (async driver).
+    # Override via DATABASE_URL env var.
+    database_url: str = (
+        "postgresql+asyncpg://app:devpass123"
+        "@localhost:5432/aiagent"
+    )
+
     # Environment profile: "dev" (default), "test" (free-only).
     # "test" skips gpt-oss-120b and Anthropic entirely.
     ai_agent_ui_env: str = "dev"
+
+    # ── Ollama local LLM (Tier 0) ────────────────
+    # When enabled and reachable, the local Ollama model
+    # is tried FIRST (zero cost).  Falls back to Groq on
+    # failure.  Set OLLAMA_ENABLED=false in prod / CI.
+    ollama_enabled: bool = True
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_model: str = "gpt-oss:20b"
+    ollama_num_ctx: int = 8192
+    ollama_timeout: int = 120
+    ollama_health_cache_ttl: int = 30
+
+    # ── Memory / embedding settings ──────────────
+    embedding_model: str = "nomic-embed-text"
+    embedding_dim: int = 768
+    memory_enabled: bool = True
+    memory_top_k: int = 5
+    memory_token_budget: int = 200
 
     # Groq model tiers — tried in order; cascade on budget
     # exhaustion or API error.  Comma-separated in env var.
     groq_model_tiers: str = (
         "llama-3.3-70b-versatile,"
         "moonshotai/kimi-k2-instruct,"
+        "qwen/qwen3-32b,"
         "openai/gpt-oss-120b,"
+        "openai/gpt-oss-20b,"
         "meta-llama/llama-4-scout-17b-16e-instruct"
     )
 
     # Synthesis tiers — used for final response (no tool calls).
     # Reserves gpt-oss-120b for quality output.
     synthesis_model_tiers: str = (
-        "openai/gpt-oss-120b," "moonshotai/kimi-k2-instruct"
+        "openai/gpt-oss-120b,"
+        "openai/gpt-oss-20b,"
+        "moonshotai/kimi-k2-instruct"
     )
 
     # Test tiers — free models only, zero paid exposure.
@@ -98,9 +127,38 @@ class Settings(BaseSettings):
         "meta-llama/llama-4-scout-17b-16e-instruct"
     )
 
+    # ── Round-robin model pools ──────────────────
+    # When enabled, models are grouped into pools
+    # and rotated within each pool to spread load
+    # across daily token budgets.
+    round_robin_enabled: bool = True
+
+    tool_pool_primary: str = (
+        "llama-3.3-70b-versatile,"
+        "moonshotai/kimi-k2-instruct,"
+        "qwen/qwen3-32b"
+    )
+    tool_pool_secondary: str = (
+        "openai/gpt-oss-120b,"
+        "openai/gpt-oss-20b"
+    )
+    tool_pool_tertiary: str = (
+        "meta-llama/"
+        "llama-4-scout-17b-16e-instruct"
+    )
+    synthesis_pool_primary: str = (
+        "openai/gpt-oss-120b,"
+        "openai/gpt-oss-20b,"
+        "moonshotai/kimi-k2-instruct"
+    )
+    synthesis_pool_secondary: str = (
+        "meta-llama/"
+        "llama-4-scout-17b-16e-instruct"
+    )
+
     # Message compression settings.
     max_history_turns: int = 3
-    max_tool_result_chars: int = 2000
+    max_tool_result_chars: int = 800
 
     # Auth / JWT settings — required for the authentication module.
     # JWT_SECRET_KEY must be at least 32 random characters.  Generate with:
@@ -159,6 +217,7 @@ class Settings(BaseSettings):
     # Job scheduler
     scheduler_enabled: bool = True
     scheduler_max_workers: int = 3
+    scheduler_catchup_enabled: bool = True
 
     # Smart cache warming: pre-warm Redis for the top
     # N most active users at startup.
@@ -206,3 +265,41 @@ def get_settings() -> Settings:
         True
     """
     return Settings()
+
+
+def _parse_csv(val: str) -> list[str]:
+    """Split comma-separated string, strip blanks."""
+    return [t.strip() for t in val.split(",") if t.strip()]
+
+
+def get_pool_groups(
+    profile: str,
+    settings: Settings | None = None,
+) -> list[list[str]] | None:
+    """Return pool groups for a cascade profile.
+
+    Returns ``None`` when round-robin is disabled
+    (legacy sequential mode).
+
+    Args:
+        profile: ``"tool"`` or ``"synthesis"``.
+        settings: Override settings (uses singleton
+            if ``None``).
+
+    Returns:
+        Ordered list of model-name lists, or ``None``.
+    """
+    s = settings or get_settings()
+    if not s.round_robin_enabled:
+        return None
+    if profile == "synthesis":
+        return [
+            _parse_csv(s.synthesis_pool_primary),
+            _parse_csv(s.synthesis_pool_secondary),
+        ]
+    # Default: tool profile
+    return [
+        _parse_csv(s.tool_pool_primary),
+        _parse_csv(s.tool_pool_secondary),
+        _parse_csv(s.tool_pool_tertiary),
+    ]

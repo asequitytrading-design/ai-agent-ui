@@ -1,155 +1,136 @@
-# Project Index: ai-agent-ui
+# Project Index: AI Agent UI
 
 > AI-agent-optimised codebase map. For human onboarding, see `docs/`.
-> Last refreshed: 2026-03-28 (Sprint 3 + Sentiment Agent)
-
----
+> Last refreshed: 2026-03-30 (Sprint 4 — Context-Aware Chat + Recency News)
 
 ## Project Structure
 
 ```
 ai-agent-ui/
-├── backend/              # FastAPI + LangChain + LangGraph (Python 3.12)
-│   ├── main.py           # ASGI entry, ChatServer, startup wiring
-│   ├── config.py         # Pydantic Settings (env-based)
-│   ├── routes.py         # HTTP chat + streaming endpoints
-│   ├── ws.py             # WebSocket /ws/chat
-│   ├── bootstrap.py      # Tool + agent + graph registration
-│   ├── llm_fallback.py   # N-tier Groq cascade + Anthropic fallback
-│   ├── token_budget.py   # Sliding-window TPM/RPM tracker
-│   ├── message_compressor.py  # 3-stage context compression
-│   ├── observability.py  # Tier health, cascade counts → Iceberg
-│   ├── tracing.py        # LangSmith + LangFuse setup
-│   ├── agents/           # LangGraph supervisor + 5 sub-agents
-│   │   ├── graph.py      # 11-node StateGraph builder
-│   │   ├── sub_agents.py # Factory + dynamic context injection
-│   │   ├── configs/      # portfolio, stock_analyst, forecaster, research, sentiment
-│   │   └── nodes/        # guardrail, router, llm_classifier, supervisor, synthesis, log_query, decline
-│   ├── tools/            # 26 LangChain @tool modules
-│   │   ├── stock_data_tool.py      # 7 stock data tools
-│   │   ├── price_analysis_tool.py  # Technical analysis + chart
-│   │   ├── forecasting_tool.py     # Prophet forecast pipeline
-│   │   ├── news_tools.py           # Tiered news (yfinance → RSS → SerpAPI)
-│   │   ├── portfolio_tools.py      # 7 portfolio tools
-│   │   ├── sentiment_agent.py      # 3 sentiment tools
-│   │   ├── _sentiment_sources.py   # 3-source headline fetcher + dedup
-│   │   ├── _sentiment_scorer.py    # FallbackLLM scoring + weighted avg
-│   │   ├── _forecast_model.py      # Prophet training
-│   │   ├── _forecast_ensemble.py   # XGBoost residual correction
-│   │   └── _forecast_shared.py     # Regressor loading from Iceberg
-│   ├── jobs/             # Background schedulers
-│   │   ├── gap_filler.py           # Daily: gaps, indices, sentiment, purge
-│   │   ├── scheduler_service.py    # Admin UI scheduler
-│   │   └── executor.py             # Job execution engine
-│   ├── dashboard_routes.py  # /v1/dashboard/*
-│   ├── insights_routes.py   # /v1/insights/*
-│   └── audit_routes.py      # /v1/audit/*
-├── auth/                 # JWT + RBAC + OAuth PKCE + Subscriptions
-│   ├── service.py        # AuthService
-│   ├── dependencies.py   # get_current_user, require_tier
-│   ├── endpoints/        # auth, oauth, ticker, subscription, admin routes
-│   ├── repo/             # Iceberg user CRUD (copy-on-write)
-│   └── create_tables.py  # 5 auth Iceberg tables
-├── stocks/               # Iceberg data layer
-│   ├── repository.py     # StockRepository (~4000 lines)
-│   └── create_tables.py  # 15 stocks Iceberg tables
-├── frontend/             # Next.js 16 + React 19 + Tailwind CSS 4
-│   ├── app/              # App Router pages
-│   │   ├── (authenticated)/dashboard/    # Portfolio dashboard
-│   │   ├── (authenticated)/analytics/    # Unified analytics
-│   │   ├── (authenticated)/admin/        # Admin panel
-│   │   └── login/
-│   ├── components/       # 44 React components
-│   │   ├── widgets/      # HeroSection, WatchlistWidget, ForecastChartWidget
-│   │   ├── charts/       # StockChart, ForecastChart, PortfolioChart, CompareChart, CorrelationHeatmap
-│   │   ├── admin/        # SchedulerTab, UserModal
-│   │   └── insights/     # InsightsTable, InsightsFilters
-│   ├── hooks/            # 19 custom hooks
-│   └── lib/              # apiFetch, config, types, auth, constants
-├── scripts/              # 22 utility scripts
-├── tests/backend/        # 49 test files, 613 test cases
-├── e2e/                  # Playwright E2E (~219 tests)
-├── docs/                 # MkDocs Material
-│   ├── design/           # Architecture specs
-│   └── workflow/         # Implementation plans
-└── dashboard/            # Legacy Dash app (deprecated)
+├── backend/          105 .py — FastAPI, LangChain agents, tools, ORM
+│   ├── agents/       LangGraph nodes, configs, conversation context
+│   │   └── nodes/    guardrail, router, supervisor, topic_classifier
+│   ├── tools/        25 tool implementations + _date_utils
+│   ├── db/           SQLAlchemy models, engine, Alembic, DuckDB
+│   └── jobs/         Scheduler service, executor, gap filler
+├── auth/             34 .py — JWT, OAuth PKCE, endpoints, repos
+│   ├── endpoints/    9 route handlers
+│   └── repo/         UserRepository facade (async PG)
+├── stocks/           8 .py — Iceberg (14 OLAP), repository
+├── frontend/         89 .tsx — Next.js 16, React 19, Tailwind 4
+│   ├── app/          18 pages (dashboard, analytics, admin, portfolio)
+│   ├── components/   Charts, widgets, admin, chat UI
+│   ├── hooks/        18 hooks (data, auth, chat, portfolio)
+│   └── providers/    ChatProvider (session_id), ThemeProvider
+├── tests/            60+ .py — pytest (712 tests)
+├── e2e/              55 .ts — Playwright E2E
+├── scripts/          39 — seed, migrate, backfill, perf
+└── docs/             40+ .md — MkDocs Material site
 ```
 
 ## Entry Points
 
-| Entry | Path | Port |
-|-------|------|------|
-| Backend | `backend/main.py` | 8181 |
-| Frontend | `frontend/app/page.tsx` | 3000 |
-| Docs | `mkdocs.yml` | 8000 |
-| Launcher | `./run.sh start` | all |
+- **Backend:** `backend/main.py` → uvicorn :8181
+- **Frontend:** `frontend/app/page.tsx` → Next.js :3000
+- **Docs:** Docker `docs` service → MkDocs :8000
+- **Tests:** `pytest tests/ -v` (712), `cd e2e && npm test` (E2E)
 
-## Iceberg Tables (20)
+## Data Architecture (Hybrid)
 
-### stocks (15 tables, ~336K rows)
-`registry` (52) · `company_info` (62) · `ohlcv` (152K) · `dividends` (1.6K) · `technical_indicators` (130K) · `analysis_summary` (57) · `forecast_runs` (57) · `forecasts` (52K) · `quarterly_results` (653) · `sentiment_scores` (47) · `llm_pricing` (0) · `llm_usage` (0) · `scheduled_jobs` (2) · `scheduler_runs` (2) · `portfolio_transactions` (8)
+**PostgreSQL (5 OLTP):** users, user_tickers, payment_transactions,
+stock_registry, scheduled_jobs — `backend/db/models/`, Alembic
 
-### auth (5 tables)
-`users` (5) · `user_tickers` (11) · `audit_log` (1) · `payment_transactions` (0) · `usage_history` (0)
+**Iceberg (14 OLAP):** ohlcv, indicators, forecasts, dividends,
+company_info, analysis_summary, forecast_runs, quarterly_results,
+llm_pricing, llm_usage, scheduler_runs, audit_log, usage_history,
+portfolio_transactions — `stocks/repository.py`
 
-## LangGraph Supervisor (5 sub-agents)
+**DuckDB:** In-process analytics — `backend/db/duckdb_engine.py`
 
-```
-START → guardrail → router → [llm_classifier] → supervisor
-  → portfolio | stock_analyst | forecaster | research | sentiment
-  → synthesis → log_query → END
-```
+## Core Modules
 
-| Agent | Purpose |
-|-------|---------|
-| portfolio | Currency-aware holdings, performance, risk metrics |
-| stock_analyst | Technical analysis pipeline (fetch → analyse → verdict) |
-| forecaster | Prophet + XGBoost ensemble forecasting |
-| research | Tiered news search (yfinance → RSS → SerpAPI) |
-| sentiment | 3-source headline scoring, market mood, hybrid cached/live |
+| Module | Path | Purpose |
+|--------|------|---------|
+| Routes | `backend/routes.py` | Main HTTP API + context update |
+| Dashboard | `backend/dashboard_routes.py` | Dashboard + watchlist |
+| Insights | `backend/insights_routes.py` | Analytics endpoints |
+| WebSocket | `backend/ws.py` | Real-time chat streaming |
+| LLM Fallback | `backend/llm_fallback.py` | Multi-tier cascade |
+| Token Budget | `backend/token_budget.py` | Cost-aware LLM routing |
+| Observability | `backend/observability.py` | OpenTelemetry + usage |
+| Agent Graph | `backend/agents/graph.py` | LangGraph supervisor |
+| Conv Context | `backend/agents/conversation_context.py` | Session context + summary |
+| Topic Classifier | `backend/agents/nodes/topic_classifier.py` | Follow-up detection |
+| Date Utils | `backend/tools/_date_utils.py` | News recency filtering |
+| Sentiment | `backend/tools/_sentiment_scorer.py` | Time-decay scoring |
+| Auth Service | `auth/service.py` | JWT + bcrypt |
+| User Repo | `auth/repo/repository.py` | Async PG user ops |
+| Stock Repo | `stocks/repository.py` | Iceberg + PG wrappers |
 
-## LLM Cascade
+## LLM Cascade (FallbackLLM)
 
-`llama-3.3-70b → kimi-k2 → gpt-oss-120b → scout-17b → claude-sonnet-4.6`
+| Tier | Provider | Model | Use |
+|------|----------|-------|-----|
+| 0 | Ollama | gpt-oss:20b | Sentiment/batch |
+| 1-4 | Groq | llama-3.3-70b → scout-17b | Interactive |
+| N | Anthropic | claude-sonnet-4-6 | Final fallback |
 
-All via FallbackLLM + TokenBudget + MessageCompressor + LangSmith tracing.
+## Context-Aware Chat (Phase 1)
 
-## Background Jobs (gap_filler.py)
+- `ConversationContext` in-memory store (1hr TTL)
+- Topic classifier: "follow_up" or "new_topic" via LLM
+- Rolling summary updated after each turn (Ollama/Groq)
+- [Conversation Context] block injected into system prompts
+- Frontend passes `session_id` in HTTP + WebSocket
 
-| UTC | Job |
-|-----|-----|
-| 05:30 | Market indices (VIX, GSPC, TNX, CL=F, DX-Y.NYB) |
-| 06:00 | Sentiment (all tickers, FallbackLLM, 3 sources) |
-| 12:30 | Data gaps (after NSE close) |
-| 15:30 | Data gaps (after NYSE close) |
-| Sun 04:00 | Purge (>11Y data, expire Iceberg snapshots) |
+## Recency-Aware News
+
+- `_date_utils.py`: parse Unix/RFC2822/ISO8601 dates
+- `days_back=7` default on news + sentiment tools
+- Time-decay: 1.0 (0-2d), 0.5 (3-7d), 0.25 (8-30d), 0.1 (>30d)
 
 ## Configuration
 
 | File | Purpose |
 |------|---------|
-| `~/.ai-agent-ui/backend.env` | Master env (secrets, API keys) |
-| `backend/config.py` | Pydantic Settings |
-| `pyproject.toml` | black, isort, pytest |
-| `.flake8` | 79 char line, exclude demoenv |
-| `frontend/.env.local` | NEXT_PUBLIC_BACKEND_URL |
+| `pyproject.toml` | Black/isort/pytest (79 chars) |
+| `docker-compose.yml` | 5 services: backend, frontend, PG, Redis, docs |
+| `docker-compose.override.yml` | Dev hot-reload + fixtures mount |
+| `Dockerfile.backend` | 2-stage Python 3.12-slim |
+| `Dockerfile.frontend` | 3-stage Next.js standalone |
+| `Dockerfile.docs` | MkDocs Material 9 |
+| `alembic.ini` | PG schema migrations |
+| `.pyiceberg.yaml` | Iceberg SQLite catalog |
+| `mkdocs.yml` | Documentation site |
 
 ## Key Dependencies
 
-**Backend**: FastAPI, LangChain 1.2.10, LangGraph 1.0.10, LangSmith 0.7.10, Prophet, XGBoost, PyIceberg, yfinance, feedparser, Razorpay SDK, Stripe SDK
+**Backend:** FastAPI, SQLAlchemy 2.0 async, LangChain 1.2,
+LangGraph 1.0, asyncpg, Alembic, DuckDB, PyIceberg, pandas,
+Prophet, yfinance, feedparser, Stripe, Razorpay, Redis, OTel
 
-**Frontend**: Next.js 16, React 19, Tailwind CSS 4, lightweight-charts (TradingView), ECharts, react-plotly.js
+**Frontend:** Next.js 16, React 19, TailwindCSS 4, ECharts,
+lightweight-charts, Plotly, SWR, Playwright
 
 ## Quick Start
 
 ```bash
-source ~/.ai-agent-ui/venv/bin/activate
-./run.sh start                                    # all services
-python -m pytest tests/ -v                        # 613 tests
-PYTHONPATH=backend python scripts/check_tables.py # Iceberg health
-PYTHONPATH=backend python scripts/seed_demo_data.py # first run
+docker compose up -d                    # 5 services
+docker compose exec backend \
+  python scripts/seed_demo_data.py      # Seed data
+# Visit http://localhost:3000
+# Admin: admin@demo.com / Admin123!
+# User:  test@demo.com  / Test1234!
 ```
 
-## Sprint 3 (94+ SP, all Done)
+## Stats
 
-Sentiment Agent (16 SP) · Unified Analytics (8) · Admin Scheduler (13) · Correlation Heatmap (5) · Security Hardening (24 fixes) · E2E Coverage (46 tests) · LangSmith Observability · Lighthouse Performance (45→87)
+| Metric | Count |
+|--------|-------|
+| Python modules | 165 |
+| TypeScript files | 89 |
+| Backend tests | 712 (60+ files) |
+| E2E tests | ~219 (55 files) |
+| Docker services | 5 (+ Ollama host-native) |
+| Perf score | 94/100 (Sprint 3 = Sprint 4) |
+| Sprint 4 tickets | 32 (31 Done) |

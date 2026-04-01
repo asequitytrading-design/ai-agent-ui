@@ -33,7 +33,7 @@ def _now_naive() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-def is_quota_exceeded(user_id: str) -> bool:
+async def is_quota_exceeded(user_id: str) -> bool:
     """Check if the user's monthly quota is exhausted.
 
     Performs a lazy reset if the month has changed.
@@ -53,11 +53,11 @@ def is_quota_exceeded(user_id: str) -> bool:
         from subscription_config import USAGE_QUOTAS
 
         repo = _get_repo()
-        user = repo.get_by_id(user_id)
+        user = await repo.get_by_id(user_id)
         if user is None:
             return False
 
-        user = _maybe_reset(
+        user = await _maybe_reset(
             repo, user, _current_month(),
         )
         tier = user.get("subscription_tier") or "free"
@@ -130,7 +130,7 @@ def _archive_usage(
         )
 
 
-def _maybe_reset(
+async def _maybe_reset(
     repo: object,
     user: dict,
     current_month: str,
@@ -141,7 +141,7 @@ def _maybe_reset(
     updates usage_month to current.
 
     Args:
-        repo: IcebergUserRepository instance.
+        repo: UserRepository instance.
         user: User dict from Iceberg.
         current_month: Current ``YYYY-MM``.
 
@@ -161,7 +161,7 @@ def _maybe_reset(
         _archive_usage(uid, stored_month, old_count, old_tier)
 
     # Reset counter + set new month
-    repo.update(
+    await repo.update(
         uid,
         {
             "monthly_usage_count": 0,
@@ -182,7 +182,7 @@ def _maybe_reset(
     return user
 
 
-def increment_usage(user_id: str) -> None:
+async def increment_usage(user_id: str) -> None:
     """Increment ``monthly_usage_count`` with lazy reset.
 
     If the stored ``usage_month`` differs from the current
@@ -196,7 +196,7 @@ def increment_usage(user_id: str) -> None:
         from auth.endpoints.helpers import _get_repo
 
         repo = _get_repo()
-        user = repo.get_by_id(user_id)
+        user = await repo.get_by_id(user_id)
         if user is None:
             _logger.warning(
                 "increment_usage: user_id=%s not found",
@@ -204,9 +204,11 @@ def increment_usage(user_id: str) -> None:
             )
             return
 
-        user = _maybe_reset(repo, user, _current_month())
+        user = await _maybe_reset(
+            repo, user, _current_month(),
+        )
         current = user.get("monthly_usage_count") or 0
-        repo.update(
+        await repo.update(
             user_id,
             {
                 "monthly_usage_count": current + 1,
@@ -225,7 +227,7 @@ def increment_usage(user_id: str) -> None:
         )
 
 
-def get_usage_stats() -> list[dict]:
+async def get_usage_stats() -> list[dict]:
     """Return usage stats for all users.
 
     Returns:
@@ -234,7 +236,7 @@ def get_usage_stats() -> list[dict]:
     from auth.endpoints.helpers import _get_repo
 
     repo = _get_repo()
-    users = repo.list_all()
+    users = await repo.list_all()
     result = []
     for u in users:
         result.append({
@@ -256,7 +258,7 @@ def get_usage_stats() -> list[dict]:
     return result
 
 
-def reset_user_usage(user_ids: list[str]) -> int:
+async def reset_user_usage(user_ids: list[str]) -> int:
     """Reset usage for specific users.
 
     Archives current month before resetting.
@@ -273,7 +275,7 @@ def reset_user_usage(user_ids: list[str]) -> int:
     month = _current_month()
     count = 0
     for uid in user_ids:
-        user = repo.get_by_id(uid)
+        user = await repo.get_by_id(uid)
         if not user:
             continue
         old = user.get("monthly_usage_count") or 0
@@ -284,7 +286,7 @@ def reset_user_usage(user_ids: list[str]) -> int:
                 old,
                 user.get("subscription_tier") or "free",
             )
-            repo.update(
+            await repo.update(
                 uid,
                 {
                     "monthly_usage_count": 0,
@@ -300,7 +302,7 @@ def reset_user_usage(user_ids: list[str]) -> int:
     return count
 
 
-def reset_monthly_usage() -> int:
+async def reset_monthly_usage() -> int:
     """Reset all users — archives first.
 
     Returns:
@@ -309,7 +311,7 @@ def reset_monthly_usage() -> int:
     from auth.endpoints.helpers import _get_repo
 
     repo = _get_repo()
-    users = repo.list_all()
+    users = await repo.list_all()
     month = _current_month()
     count = 0
     for user in users:
@@ -322,7 +324,7 @@ def reset_monthly_usage() -> int:
                 current,
                 user.get("subscription_tier") or "free",
             )
-            repo.update(
+            await repo.update(
                 uid,
                 {
                     "monthly_usage_count": 0,

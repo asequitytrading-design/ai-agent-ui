@@ -69,7 +69,7 @@ def create_app(
                 warm_tickers,
             )
 
-            warm_shared()
+            await warm_shared()
 
             top_n = getattr(
                 settings,
@@ -82,8 +82,9 @@ def create_app(
                 name="cache-warmup-tickers",
             ).start()
             threading.Thread(
-                target=warm_frequent_users,
-                args=(top_n,),
+                target=lambda: asyncio.run(
+                    warm_frequent_users(top_n)
+                ),
                 daemon=True,
                 name="cache-warmup-users",
             ).start()
@@ -193,12 +194,12 @@ def create_app(
     # Usage tracking helper
     # ---------------------------------------------------------------
 
-    def _enforce_quota(user_id: str) -> None:
+    async def _enforce_quota(user_id: str) -> None:
         """Raise 429 if user's monthly quota is used."""
         try:
             from usage_tracker import is_quota_exceeded
 
-            if is_quota_exceeded(user_id):
+            if await is_quota_exceeded(user_id):
                 raise HTTPException(
                     status_code=429,
                     detail=(
@@ -219,12 +220,26 @@ def create_app(
                 detail="Usage tracking unavailable",
             )
 
-    def _track_usage(user_id: str) -> None:
-        """Increment monthly usage count (fire-and-forget)."""
+    async def _track_usage(user_id: str) -> None:
+        """Increment monthly usage count."""
         try:
             from usage_tracker import increment_usage
 
-            increment_usage(user_id)
+            await increment_usage(user_id)
+        except Exception:
+            _logger.debug(
+                "Usage tracking skipped for %s",
+                user_id,
+            )
+
+    def _track_usage_sync(user_id: str) -> None:
+        """Sync wrapper for thread contexts."""
+        import asyncio
+
+        try:
+            from usage_tracker import increment_usage
+
+            asyncio.run(increment_usage(user_id))
         except Exception:
             _logger.debug(
                 "Usage tracking skipped for %s",
@@ -243,7 +258,7 @@ def create_app(
     ):
         """Sync agent dispatch (POST /chat)."""
         req.user_id = current_user.user_id
-        _enforce_quota(req.user_id)
+        await _enforce_quota(req.user_id)
 
         # ── LangGraph path ────────────────────────
         if graph is not None and settings.use_langgraph:
@@ -259,14 +274,17 @@ def create_app(
                 status_code=404,
                 detail=(f"Agent '{req.agent_id}' " "not found"),
             )
-        set_current_user(req.user_id)
         try:
+
+            def _run_with_user():
+                set_current_user(req.user_id)
+                return agent.run(
+                    req.message, req.history,
+                )
+
             loop = asyncio.get_running_loop()
             future = loop.run_in_executor(
-                executor,
-                agent.run,
-                req.message,
-                req.history,
+                executor, _run_with_user,
             )
             result = await asyncio.wait_for(
                 future,
@@ -292,7 +310,7 @@ def create_app(
                 status_code=500,
                 detail="Agent execution failed",
             )
-        _track_usage(req.user_id)
+        await _track_usage(req.user_id)
         return ChatResponse(
             response=result,
             agent_id=req.agent_id,
@@ -301,13 +319,15 @@ def create_app(
     async def _chat_langgraph(req: ChatRequest):
         """Sync chat via LangGraph supervisor graph."""
         input_state = _build_graph_input(req)
-        set_current_user(req.user_id)
         try:
+
+            def _invoke_with_user():
+                set_current_user(req.user_id)
+                return graph.invoke(input_state)
+
             loop = asyncio.get_running_loop()
             future = loop.run_in_executor(
-                executor,
-                graph.invoke,
-                input_state,
+                executor, _invoke_with_user,
             )
             result = await asyncio.wait_for(
                 future,
@@ -328,7 +348,7 @@ def create_app(
                 status_code=500,
                 detail="Agent execution failed",
             )
-        _track_usage(req.user_id)
+        await _track_usage(req.user_id)
         return ChatResponse(
             response=result.get("final_response", ""),
             agent_id=result.get("current_agent", "graph"),
@@ -342,7 +362,7 @@ def create_app(
     ):
         """NDJSON streaming (POST /chat/stream)."""
         req.user_id = current_user.user_id
-        _enforce_quota(req.user_id)
+        await _enforce_quota(req.user_id)
 
         # ── LangGraph path ────────────────────────
         if graph is not None and settings.use_langgraph:
@@ -373,7 +393,7 @@ def create_app(
                         req.history,
                     ):
                         event_queue.put(event)
-                    _track_usage(req.user_id)
+                    _track_usage_sync(req.user_id)
                 except Exception as exc:
                     _logger.warning(
                         "Stream worker error: %s",
@@ -477,6 +497,7 @@ def create_app(
             "messages": msgs,
             "user_input": req.message,
             "user_id": req.user_id or "",
+            "session_id": req.session_id or "",
             "history": req.history or [],
             "user_context": user_ctx,
             "intent": "",
@@ -486,10 +507,76 @@ def create_app(
             "data_sources_used": [],
             "was_local_sufficient": True,
             "tool_events": [],
+            "retrieved_memories": [],
             "final_response": "",
             "error": None,
             "start_time_ns": 0,
         }
+
+    def _update_conversation_context(
+        session_id: str,
+        user_input: str,
+        response: str,
+        agent: str,
+        intent: str,
+        tickers: list[str],
+        user_id: str,
+    ) -> None:
+        """Update or create conversation context."""
+        if not session_id:
+            return
+
+        try:
+            from agents.conversation_context import (
+                ConversationContext,
+                context_store,
+                update_summary,
+            )
+
+            ctx = context_store.get(session_id)
+            if ctx is None:
+                ctx = ConversationContext(
+                    session_id=session_id,
+                )
+                # Populate user profile on first turn.
+                try:
+                    user_ctx = _build_user_context(
+                        user_id,
+                    )
+                    ctx.user_tickers = user_ctx.get(
+                        "tickers", [],
+                    )
+                    ctx.market_preference = user_ctx.get(
+                        "market", "",
+                    )
+                    ctx.subscription_tier = user_ctx.get(
+                        "tier", "",
+                    )
+                except Exception:
+                    pass
+
+            ctx.last_agent = agent
+            ctx.last_intent = intent
+            ctx.current_topic = (
+                f"{', '.join(tickers)} {intent}"
+                if tickers else intent
+            )
+            for t in tickers:
+                if t not in ctx.tickers_mentioned:
+                    ctx.tickers_mentioned.append(t)
+
+            # Update summary (non-blocking).
+            try:
+                update_summary(ctx, user_input, response)
+            except Exception:
+                ctx.turn_count += 1
+
+            context_store.upsert(session_id, ctx)
+        except Exception:
+            _logger.debug(
+                "Context update failed",
+                exc_info=True,
+            )
 
     def _stream_langgraph(req: ChatRequest):
         """NDJSON streaming via LangGraph graph."""
@@ -516,6 +603,26 @@ def create_app(
                         )
                     finally:
                         set_event_sink(None)
+                    # Update conversation context.
+                    _update_conversation_context(
+                        session_id=(
+                            req.session_id or ""
+                        ),
+                        user_input=req.message,
+                        response=result.get(
+                            "final_response", "",
+                        ),
+                        agent=result.get(
+                            "current_agent", "",
+                        ),
+                        intent=result.get(
+                            "intent", "",
+                        ),
+                        tickers=result.get(
+                            "tickers", [],
+                        ),
+                        user_id=req.user_id or "",
+                    )
                     # Emit final
                     event_queue.put(
                         json.dumps(
@@ -527,7 +634,7 @@ def create_app(
                         )
                         + "\n"
                     )
-                    _track_usage(req.user_id)
+                    _track_usage_sync(req.user_id)
                 except Exception as exc:
                     event_queue.put(
                         json.dumps(
@@ -557,9 +664,23 @@ def create_app(
             media_type="application/x-ndjson",
         )
 
+    async def _pg_health() -> dict:
+        """Check PostgreSQL connectivity."""
+        try:
+            from sqlalchemy import text
+
+            from db.engine import get_engine
+
+            async with get_engine().connect() as conn:
+                await conn.execute(text("SELECT 1"))
+            return {"postgresql": "ok"}
+        except Exception as exc:
+            return {"postgresql": f"error: {exc}"}
+
     async def _health():
         """GET /health."""
-        return {"status": "ok"}
+        pg = await _pg_health()
+        return {"status": "ok", **pg}
 
     async def _list_agents():
         """GET /agents."""
@@ -850,7 +971,19 @@ def create_app(
             "enabled": enabled,
         }
 
+    async def _admin_daily_budget():
+        """GET /admin/daily-budget — Groq token usage."""
+        if token_budget is None:
+            return {"error": "Token budget not available"}
+        return token_budget.get_daily_budget()
+
     admin_router = APIRouter(prefix="/v1")
+    admin_router.add_api_route(
+        "/admin/daily-budget",
+        _admin_daily_budget,
+        methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
     admin_router.add_api_route(
         "/admin/metrics",
         _admin_metrics,
@@ -922,14 +1055,14 @@ def create_app(
         """POST /admin/reset-usage — zero monthly counts."""
         from usage_tracker import reset_monthly_usage
 
-        count = reset_monthly_usage()
+        count = await reset_monthly_usage()
         return {"reset_count": count}
 
     async def _admin_usage_stats():
         """GET /admin/usage-stats — all users + counts."""
         from usage_tracker import get_usage_stats
 
-        return {"users": get_usage_stats()}
+        return {"users": await get_usage_stats()}
 
     async def _admin_reset_selected(
         request: Request,
@@ -941,7 +1074,7 @@ def create_app(
             return {"reset_count": 0}
         from usage_tracker import reset_user_usage
 
-        count = reset_user_usage(user_ids)
+        count = await reset_user_usage(user_ids)
         return {"reset_count": count}
 
     admin_router.add_api_route(
@@ -991,14 +1124,13 @@ def create_app(
     ):
         """GET /admin/payment-transactions."""
         from auth.endpoints.helpers import _get_repo
-        from auth.repo.schemas import (
-            _PAYMENT_TXN_TABLE,
-        )
+        from auth.repo import payment_repo
+        from backend.db.engine import get_session_factory
 
         repo = _get_repo()
 
         # Build user_id → name/email lookup
-        all_users = repo.list_all()
+        all_users = await repo.list_all()
         user_map: dict[str, dict] = {}
         for u in all_users:
             uid = u.get("user_id", "")
@@ -1007,34 +1139,44 @@ def create_app(
                 "email": u.get("email", ""),
             }
 
-        cat = repo._get_catalog()
-        tbl = cat.load_table(_PAYMENT_TXN_TABLE)
-        df = tbl.scan().to_pandas()
-        if df.empty:
-            return {"transactions": []}
-        if user_id:
-            df = df[df["user_id"] == user_id]
-        if gateway:
-            df = df[df["gateway"] == gateway]
-        df = df.sort_values(
-            "created_at",
-            ascending=False,
-        ).head(limit)
-        import math as _math
+        # Read from PostgreSQL
+        factory = get_session_factory()
+        async with factory() as session:
+            from sqlalchemy import select
+            from backend.db.models.payment import (
+                PaymentTransaction,
+            )
 
-        rows = df.to_dict("records")
-        for r in rows:
+            q = select(PaymentTransaction)
+            if user_id:
+                q = q.where(
+                    PaymentTransaction.user_id == user_id
+                )
+            if gateway:
+                q = q.where(
+                    PaymentTransaction.gateway == gateway
+                )
+            q = q.order_by(
+                PaymentTransaction.created_at.desc()
+            ).limit(limit)
+            result = await session.execute(q)
+            txns = result.scalars().all()
+
+        rows = []
+        for t in txns:
+            r = {
+                c.name: getattr(t, c.name)
+                for c in t.__table__.columns
+            }
             if hasattr(r.get("created_at"), "isoformat"):
-                r["created_at"] = r["created_at"].isoformat()
-            # Enrich with user name/email
+                r["created_at"] = (
+                    r["created_at"].isoformat()
+                )
             uid = r.get("user_id", "")
             info = user_map.get(uid, {})
             r["user_name"] = info.get("name", "")
             r["user_email"] = info.get("email", "")
-            # Replace NaN with None for JSON compat
-            for k, v in list(r.items()):
-                if isinstance(v, float) and _math.isnan(v):
-                    r[k] = None
+            rows.append(r)
         return {"transactions": rows}
 
     admin_router.add_api_route(
@@ -1070,12 +1212,18 @@ def create_app(
         cron_days = body.get("cron_days", [])
         if isinstance(cron_days, list):
             cron_days = ",".join(cron_days)
+        cron_dates = body.get("cron_dates", [])
+        if isinstance(cron_dates, list):
+            cron_dates = ",".join(
+                str(d) for d in cron_dates
+            )
         job = {
             "name": body.get("name", "Untitled"),
             "job_type": body.get(
                 "job_type", "data_refresh",
             ),
             "cron_days": cron_days,
+            "cron_dates": cron_dates or "",
             "cron_time": body.get("cron_time", "18:00"),
             "scope": body.get("scope", "all"),
         }
@@ -1099,8 +1247,8 @@ def create_app(
         else:
             updates = {}
             for k in (
-                "name", "cron_days", "cron_time",
-                "scope",
+                "name", "cron_days", "cron_dates",
+                "cron_time", "scope",
             ):
                 if k in body:
                     v = body[k]
@@ -1108,6 +1256,12 @@ def create_app(
                         v, list,
                     ):
                         v = ",".join(v)
+                    if k == "cron_dates" and isinstance(
+                        v, list,
+                    ):
+                        v = ",".join(
+                            str(d) for d in v
+                        )
                     updates[k] = v
             if updates:
                 svc.update_job(job_id, updates)
@@ -1237,6 +1391,70 @@ def create_app(
         "/admin/scheduler/stats",
         _scheduler_stats,
         methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
+
+    # ── Ollama local-LLM management ────────────
+
+    async def _admin_ollama_status():
+        """GET /admin/ollama/status."""
+        from ollama_manager import (
+            get_ollama_manager,
+        )
+
+        return get_ollama_manager().get_status()
+
+    async def _admin_ollama_load(
+        request: Request,
+    ):
+        """POST /admin/ollama/load."""
+        from ollama_manager import (
+            get_ollama_manager,
+        )
+
+        body = await request.json()
+        profile = body.get(
+            "profile",
+            "reasoning",
+        )
+        mgr = get_ollama_manager()
+        if not mgr.is_available():
+            raise HTTPException(
+                status_code=503,
+                detail="Ollama server not reachable",
+            )
+        return mgr.load_profile(profile)
+
+    async def _admin_ollama_unload():
+        """POST /admin/ollama/unload."""
+        from ollama_manager import (
+            get_ollama_manager,
+        )
+
+        mgr = get_ollama_manager()
+        if not mgr.is_available():
+            raise HTTPException(
+                status_code=503,
+                detail="Ollama server not reachable",
+            )
+        return mgr.unload_all()
+
+    admin_router.add_api_route(
+        "/admin/ollama/status",
+        _admin_ollama_status,
+        methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/ollama/load",
+        _admin_ollama_load,
+        methods=["POST"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/ollama/unload",
+        _admin_ollama_unload,
+        methods=["POST"],
         dependencies=[Depends(superuser_only)],
     )
 

@@ -15,6 +15,7 @@ export interface SchedulerJob {
   name: string;
   job_type: string;
   cron_days: string[];
+  cron_dates: number[];
   cron_time: string;
   scope: string;
   enabled: boolean;
@@ -37,6 +38,7 @@ export interface SchedulerRun {
   tickers_total: number;
   tickers_done: number;
   error_message: string | null;
+  trigger_type: string | null;
 }
 
 export interface SchedulerStats {

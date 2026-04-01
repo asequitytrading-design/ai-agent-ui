@@ -34,10 +34,30 @@ from logging_config import setup_logging  # noqa: E402
 from message_compressor import MessageCompressor  # noqa: E402
 from observability import ObservabilityCollector  # noqa: E402
 from routes import create_app  # noqa: E402
-from token_budget import TokenBudget  # noqa: E402
+from token_budget import TokenBudget  # noqa: E402,F401
 from tools.registry import ToolRegistry  # noqa: E402
 
 logger = logging.getLogger(__name__)
+
+
+def _ensure_iceberg_tables() -> None:
+    """Create missing Iceberg tables (idempotent)."""
+    try:
+        from auth.create_tables import (
+            create_tables as create_auth_tables,
+        )
+        from stocks.create_tables import (
+            create_tables as create_stock_tables,
+        )
+        create_auth_tables()
+        create_stock_tables()
+        logger.info("Iceberg tables ensured.")
+    except Exception:
+        logger.warning(
+            "Iceberg table init failed — "
+            "tables may need manual creation",
+            exc_info=True,
+        )
 
 
 class ChatServer:
@@ -58,12 +78,21 @@ class ChatServer:
                 :func:`~config.get_settings`.
         """
         self.settings = settings
+        _ensure_iceberg_tables()
+
+        from db.engine import get_session_factory
+
+        self._pg_session_factory = get_session_factory()
+        logger.info("PostgreSQL async engine ready")
+
         self.tool_registry = ToolRegistry()
         self.agent_registry = AgentRegistry()
 
         self.executor = ThreadPoolExecutor(max_workers=10)
 
-        self.token_budget = TokenBudget()
+        from token_budget import get_token_budget
+
+        self.token_budget = get_token_budget()
         self.compressor = MessageCompressor(
             max_history_turns=settings.max_history_turns,
             max_tool_result_chars=(settings.max_tool_result_chars),

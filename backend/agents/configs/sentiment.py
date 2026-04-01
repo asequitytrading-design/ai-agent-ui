@@ -26,10 +26,21 @@ _SENTIMENT_SYSTEM_PROMPT = (
     "- Always explain the sentiment score in plain "
     "language: what it means, how many headlines were "
     "analysed, and how fresh the data is.\n"
+    "- Sentiment is scored from headlines within the "
+    "last 7 days by default. Recent headlines (0-2 "
+    "days) are weighted more heavily.\n"
+    "- When the user asks about historical sentiment, "
+    "pass a larger days_back to score_ticker_sentiment "
+    "(e.g. 30 for last month, 90 for last quarter).\n"
     "- Never fabricate sentiment — if data is "
     "unavailable, say so clearly.\n"
     "- Scores range from -1.0 (very bearish) to +1.0 "
-    "(very bullish). 0.0 is neutral."
+    "(very bullish). 0.0 is neutral.\n"
+    "- Format responses in Markdown: use **bold** "
+    "for key figures, bullet points for lists, "
+    "### headings for sections, and Markdown tables "
+    "for metrics/risk data (| Metric | Value |). "
+    "Keep paragraphs short (2-3 sentences)."
 )
 
 SENTIMENT_CONFIG = SubAgentConfig(

@@ -20,6 +20,7 @@ from zoneinfo import ZoneInfo
 
 import schedule
 
+from config import get_settings
 from jobs.executor import JOB_EXECUTORS
 
 _logger = logging.getLogger(__name__)
@@ -36,18 +37,6 @@ _DAY_MAP = {
     "sat": "saturday",
     "sun": "sunday",
 }
-
-
-def _ist_to_utc(time_str: str) -> str:
-    """Convert an IST time string (HH:MM) to UTC."""
-    today = datetime.now(IST).date()
-    ist_dt = datetime.combine(
-        today,
-        datetime.strptime(time_str, "%H:%M").time(),
-        tzinfo=IST,
-    )
-    utc_dt = ist_dt.astimezone(UTC)
-    return utc_dt.strftime("%H:%M")
 
 
 def _next_run_ist(
@@ -71,6 +60,98 @@ def _next_run_ist(
                 candidate.date(), time_obj, tzinfo=IST,
             )
             if candidate_dt > now:
+                return candidate_dt
+    return None
+
+
+def _last_scheduled_window(
+    cron_days: list[str], cron_time: str,
+) -> datetime | None:
+    """Find the most recent past scheduled window.
+
+    Looks backward up to 7 days from now (IST) and
+    returns the IST-aware datetime of the last window
+    that should have fired, or ``None``.
+    """
+    now = datetime.now(IST)
+    time_obj = datetime.strptime(
+        cron_time, "%H:%M",
+    ).time()
+    day_names = [
+        "mon", "tue", "wed", "thu",
+        "fri", "sat", "sun",
+    ]
+
+    for offset in range(8):
+        candidate = now - timedelta(days=offset)
+        day_abbr = day_names[candidate.weekday()]
+        if day_abbr in cron_days:
+            candidate_dt = datetime.combine(
+                candidate.date(), time_obj, tzinfo=IST,
+            )
+            if candidate_dt <= now:
+                return candidate_dt
+    return None
+
+
+def _next_run_ist_dates(
+    cron_dates: str, cron_time: str,
+) -> datetime | None:
+    """Next run in IST for day-of-month schedule."""
+    stripped = cron_dates.strip()
+    if not stripped:
+        return None
+    allowed = {
+        int(d.strip())
+        for d in stripped.split(",")
+        if d.strip().isdigit()
+    }
+    if not allowed:
+        return None
+    now = datetime.now(IST)
+    time_obj = datetime.strptime(
+        cron_time, "%H:%M",
+    ).time()
+    for offset in range(63):
+        candidate = now + timedelta(days=offset)
+        if candidate.day in allowed:
+            candidate_dt = datetime.combine(
+                candidate.date(),
+                time_obj,
+                tzinfo=IST,
+            )
+            if candidate_dt > now:
+                return candidate_dt
+    return None
+
+
+def _last_window_dates(
+    cron_dates: str, cron_time: str,
+) -> datetime | None:
+    """Most recent past window for day-of-month."""
+    stripped = cron_dates.strip()
+    if not stripped:
+        return None
+    allowed = {
+        int(d.strip())
+        for d in stripped.split(",")
+        if d.strip().isdigit()
+    }
+    if not allowed:
+        return None
+    now = datetime.now(IST)
+    time_obj = datetime.strptime(
+        cron_time, "%H:%M",
+    ).time()
+    for offset in range(63):
+        candidate = now - timedelta(days=offset)
+        if candidate.day in allowed:
+            candidate_dt = datetime.combine(
+                candidate.date(),
+                time_obj,
+                tzinfo=IST,
+            )
+            if candidate_dt <= now:
                 return candidate_dt
     return None
 
@@ -99,6 +180,8 @@ class SchedulerService:
         """Load jobs from Iceberg and start the daemon."""
         self._cleanup_stale_runs()
         self.reload_jobs()
+        if get_settings().scheduler_catchup_enabled:
+            self._catchup_missed_jobs()
         self._thread = threading.Thread(
             target=self._loop,
             daemon=True,
@@ -145,6 +228,94 @@ class SchedulerService:
                 exc_info=True,
             )
 
+    def _catchup_missed_jobs(self) -> None:
+        """Trigger catch-up runs for missed windows.
+
+        For each enabled job, compute the most recent
+        past scheduled window and compare it against the
+        last run.  If no run covers that window, fire a
+        single catch-up.
+        """
+        for job_id, job in self._jobs.items():
+            if not job.get("enabled"):
+                continue
+            cron_dates = (
+                job.get("cron_dates", "") or ""
+            ).strip()
+            cron_days = (
+                job.get("cron_days", "") or ""
+            ).split(",")
+            cron_days = [
+                d.strip().lower() for d in cron_days
+                if d.strip()
+            ]
+            cron_time = job.get("cron_time", "18:00")
+
+            if cron_dates:
+                last_window = _last_window_dates(
+                    cron_dates, cron_time,
+                )
+            else:
+                last_window = _last_scheduled_window(
+                    cron_days, cron_time,
+                )
+            if last_window is None:
+                continue
+
+            # Convert window to UTC tz-naive for
+            # comparison with Iceberg timestamps
+            window_utc = (
+                last_window.astimezone(UTC)
+                .replace(tzinfo=None)
+            )
+
+            last_run = self._repo.get_last_run_for_job(
+                job_id,
+            )
+
+            if last_run:
+                status = last_run.get("status")
+                if status == "running":
+                    _logger.debug(
+                        "Catchup skip %s: still"
+                        " running",
+                        job.get("name"),
+                    )
+                    continue
+
+                started = last_run.get("started_at")
+                if isinstance(started, str):
+                    started = datetime.fromisoformat(
+                        started.replace("Z", "+00:00"),
+                    ).replace(tzinfo=None)
+                elif hasattr(started, "replace"):
+                    started = started.replace(
+                        tzinfo=None,
+                    )
+
+                if started and started >= window_utc:
+                    _logger.debug(
+                        "Catchup skip %s: recent run"
+                        " at %s",
+                        job.get("name"), started,
+                    )
+                    continue
+
+            _logger.info(
+                "Catchup trigger: job=%s name=%s"
+                " last_window=%s last_run=%s",
+                job_id,
+                job.get("name"),
+                last_window.strftime("%Y-%m-%d %H:%M"),
+                (
+                    last_run.get("started_at")
+                    if last_run else "never"
+                ),
+            )
+            self.trigger_now(
+                job_id, trigger_type="catchup",
+            )
+
     def _loop(self) -> None:
         """Run pending jobs every 30 seconds."""
         import time as _time
@@ -180,24 +351,36 @@ class SchedulerService:
 
     def _register_schedule(self, job: dict) -> None:
         """Register a single job with the schedule lib."""
+        cron_dates = (
+            job.get("cron_dates", "") or ""
+        ).strip()
         cron_days = (
             job.get("cron_days", "") or ""
         ).split(",")
         cron_time = job.get("cron_time", "18:00")
-        utc_time = _ist_to_utc(cron_time)
         job_id = job["job_id"]
 
-        for day_abbr in cron_days:
-            day_abbr = day_abbr.strip().lower()
-            day_full = _DAY_MAP.get(day_abbr)
-            if not day_full:
-                continue
-            sched_day = getattr(
-                self._scheduler.every(), day_full,
-            )
-            sched_day.at(utc_time).do(
+        if cron_dates:
+            # Day-of-month: register daily, gate in
+            # _trigger_job on matching day
+            self._scheduler.every().day.at(
+                cron_time,
+            ).do(
                 self._trigger_job, job_id,
             ).tag(job_id)
+        else:
+            for day_abbr in cron_days:
+                day_abbr = day_abbr.strip().lower()
+                day_full = _DAY_MAP.get(day_abbr)
+                if not day_full:
+                    continue
+                sched_day = getattr(
+                    self._scheduler.every(), day_full,
+                )
+                # schedule lib uses local time (IST)
+                sched_day.at(cron_time).do(
+                    self._trigger_job, job_id,
+                ).tag(job_id)
 
     def add_job(self, job: dict) -> str:
         """Create and persist a new job. Returns job_id."""
@@ -263,6 +446,21 @@ class SchedulerService:
         if not job or not job.get("enabled"):
             return
 
+        # Day-of-month gate: skip if today doesn't
+        # match any configured date
+        cron_dates = (
+            job.get("cron_dates", "") or ""
+        ).strip()
+        if cron_dates:
+            today_dom = datetime.now(IST).day
+            allowed = [
+                int(d.strip())
+                for d in cron_dates.split(",")
+                if d.strip().isdigit()
+            ]
+            if today_dom not in allowed:
+                return
+
         with self._lock:
             existing = self._futures.get(job_id)
             if existing and not existing.done():
@@ -272,7 +470,9 @@ class SchedulerService:
                 )
                 return
 
-        run_id = self.trigger_now(job_id)
+        run_id = self.trigger_now(
+            job_id, trigger_type="scheduled",
+        )
         if run_id:
             _logger.info(
                 "Scheduled trigger: job=%s run=%s",
@@ -280,8 +480,12 @@ class SchedulerService:
                 run_id,
             )
 
-    def trigger_now(self, job_id: str) -> str | None:
-        """Manually trigger a job. Returns run_id."""
+    def trigger_now(
+        self,
+        job_id: str,
+        trigger_type: str = "manual",
+    ) -> str | None:
+        """Trigger a job. Returns run_id."""
         job = self._jobs.get(job_id)
         if not job:
             return None
@@ -311,6 +515,7 @@ class SchedulerService:
             "tickers_total": 0,
             "tickers_done": 0,
             "error_message": None,
+            "trigger_type": trigger_type,
         }
         self._repo.append_scheduler_run(run)
 
@@ -367,11 +572,21 @@ class SchedulerService:
         result = []
         runs = self._repo.get_scheduler_runs(days=7)
         for job in self._jobs.values():
+            cron_dates = (
+                job.get("cron_dates", "") or ""
+            ).strip()
             cron_days = (
                 job.get("cron_days", "") or ""
             ).split(",")
             cron_time = job.get("cron_time", "18:00")
-            nxt = _next_run_ist(cron_days, cron_time)
+            if cron_dates:
+                nxt = _next_run_ist_dates(
+                    cron_dates, cron_time,
+                )
+            else:
+                nxt = _next_run_ist(
+                    cron_days, cron_time,
+                )
 
             # Find last run for this job
             job_runs = [
@@ -393,6 +608,14 @@ class SchedulerService:
                 "name": job.get("name", ""),
                 "job_type": job.get("job_type", ""),
                 "cron_days": cron_days,
+                "cron_dates": (
+                    [
+                        int(d.strip())
+                        for d in cron_dates.split(",")
+                        if d.strip().isdigit()
+                    ]
+                    if cron_dates else []
+                ),
                 "cron_time": cron_time,
                 "scope": job.get("scope", "all"),
                 "enabled": bool(job.get("enabled")),

@@ -244,10 +244,17 @@ async def _handle_chat(
     """
     message = msg.get("message", "")
     history = msg.get("history", [])
+    session_id = msg.get("session_id", "")
     user_id = user_ctx["user_id"]
     timeout = settings.agent_timeout_seconds
 
     event_queue: queue.Queue = queue.Queue()
+
+    # Capture the running event loop for async
+    # fire-and-forget tasks from worker threads.
+    import asyncio
+
+    _main_loop = asyncio.get_running_loop()
 
     # ── Choose execution path ─────────────────────
     use_graph = graph is not None and getattr(settings, "use_langgraph", False)
@@ -256,7 +263,7 @@ async def _handle_chat(
     try:
         from usage_tracker import is_quota_exceeded
 
-        if is_quota_exceeded(user_id):
+        if await is_quota_exceeded(user_id):
             event_queue.put(
                 {
                     "type": "error",
@@ -285,6 +292,8 @@ async def _handle_chat(
                     history,
                     user_id,
                     event_queue,
+                    session_id=session_id,
+                    main_loop=_main_loop,
                 )
             else:
                 _run_legacy(
@@ -363,6 +372,8 @@ def _run_graph(
     history,
     user_id,
     event_queue,
+    session_id: str = "",
+    main_loop=None,
 ):
     """Run LangGraph supervisor in worker thread."""
     from langchain_core.messages import (
@@ -387,6 +398,29 @@ def _run_graph(
 
     user_ctx = build_user_context(user_id or "")
 
+    # Retrieve memories from pgvector (async → sync bridge)
+    _memories: list[dict] = []
+    if main_loop and user_id:
+        try:
+            import asyncio
+
+            from memory_retriever import (
+                retrieve_memories,
+            )
+
+            fut = asyncio.run_coroutine_threadsafe(
+                retrieve_memories(
+                    user_id, message, top_k=5,
+                ),
+                main_loop,
+            )
+            _memories = fut.result(timeout=3)
+        except Exception:
+            _logger.debug(
+                "Memory retrieval skipped",
+                exc_info=True,
+            )
+
     input_state = {
         "messages": msgs,
         "user_input": message,
@@ -400,6 +434,8 @@ def _run_graph(
         "data_sources_used": [],
         "was_local_sufficient": True,
         "tool_events": [],
+        "session_id": session_id,
+        "retrieved_memories": _memories,
         "final_response": "",
         "error": None,
         "start_time_ns": 0,
@@ -416,21 +452,139 @@ def _run_graph(
     finally:
         set_event_sink(None)
 
+    # Update conversation context for follow-ups.
+    if session_id:
+        try:
+            from agents.conversation_context import (
+                ConversationContext,
+                context_store,
+                update_summary,
+            )
+
+            ctx = context_store.get(session_id)
+            if ctx is None:
+                ctx = ConversationContext(
+                    session_id=session_id,
+                )
+            ctx.last_agent = result.get(
+                "current_agent", "",
+            )
+            ctx.last_intent = result.get("intent", "")
+            tickers = result.get("tickers", [])
+            ctx.current_topic = (
+                f"{', '.join(tickers)} "
+                f"{ctx.last_intent}"
+                if tickers else ctx.last_intent
+            )
+            for t in tickers:
+                if t not in ctx.tickers_mentioned:
+                    ctx.tickers_mentioned.append(t)
+            try:
+                update_summary(
+                    ctx, message,
+                    result.get("final_response", ""),
+                )
+            except Exception:
+                ctx.turn_count += 1
+            context_store.upsert(session_id, ctx)
+            _logger.debug(
+                "Context updated for session %s"
+                " (turn %d, agent=%s)",
+                session_id,
+                ctx.turn_count,
+                ctx.last_agent,
+            )
+        except Exception:
+            _logger.debug(
+                "WS context update failed",
+                exc_info=True,
+            )
+
+    # ── Post-response async tasks (fire-and-forget) ──
+    _final_resp = result.get("final_response", "")
+    _cur_agent = result.get("current_agent", "")
+
+    if main_loop and session_id:
+        import asyncio
+
+        # Memory extraction (summary + facts → pgvector)
+        try:
+            from memory_extractor import (
+                extract_and_store_memories,
+            )
+
+            _summary = ""
+            try:
+                _ctx_r = context_store.get(session_id)
+                if _ctx_r:
+                    _summary = _ctx_r.summary
+            except Exception:
+                pass
+
+            asyncio.run_coroutine_threadsafe(
+                extract_and_store_memories(
+                    user_id=user_id,
+                    session_id=session_id,
+                    user_input=message,
+                    response=_final_resp,
+                    summary=_summary,
+                    turn_number=(
+                        _ctx_r.turn_count
+                        if _ctx_r
+                        else 1
+                    ),
+                    agent_id=_cur_agent,
+                ),
+                main_loop,
+            )
+        except Exception:
+            _logger.debug(
+                "Memory extraction dispatch failed",
+                exc_info=True,
+            )
+
+        # Per-answer Iceberg persistence
+        try:
+            from audit_persistence import (
+                persist_chat_turn,
+            )
+
+            asyncio.run_coroutine_threadsafe(
+                persist_chat_turn(
+                    user_id=user_id,
+                    session_id=session_id,
+                    user_input=message,
+                    response=_final_resp,
+                    agent_id=_cur_agent,
+                ),
+                main_loop,
+            )
+        except Exception:
+            _logger.debug(
+                "Chat turn persistence failed",
+                exc_info=True,
+            )
+
     # Emit final (tool events already sent in real-time)
-    event_queue.put(
-        {
-            "type": "final",
-            "response": result.get("final_response", ""),
-            "agent": result.get("current_agent", ""),
-        }
-    )
+    final_event = {
+        "type": "final",
+        "response": _final_resp,
+        "agent": _cur_agent,
+        "memory_used": len(_memories) > 0,
+    }
+    actions = result.get("response_actions", [])
+    if actions:
+        final_event["actions"] = actions
+    event_queue.put(final_event)
 
     # Track usage
     if user_id:
         try:
+            import asyncio
+
             from usage_tracker import increment_usage
 
-            increment_usage(user_id)
+            asyncio.run(increment_usage(user_id))
         except Exception:
             _logger.debug(
                 "Usage tracking failed for %s",
@@ -458,9 +612,11 @@ def _run_legacy(
 
     if user_id:
         try:
+            import asyncio
+
             from usage_tracker import increment_usage
 
-            increment_usage(user_id)
+            asyncio.run(increment_usage(user_id))
         except Exception:
             _logger.debug(
                 "Usage tracking failed for %s",

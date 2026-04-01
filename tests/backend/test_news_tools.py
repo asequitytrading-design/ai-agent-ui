@@ -1,8 +1,12 @@
 """Unit tests for tiered financial news tools."""
 
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+# Dynamic "yesterday" timestamp for mock articles.
+_RECENT_TS = str(int(time.time()) - 86400)
 
 
 class TestGetTickerNews:
@@ -19,7 +23,7 @@ class TestGetTickerNews:
                 "title": "Fresh AAPL news",
                 "publisher": "Reuters",
                 "link": "https://example.com",
-                "providerPublishTime": "2026-03-26",
+                "providerPublishTime": _RECENT_TS,
             },
         ]
         mock_yf.Ticker.return_value = mock_ticker
@@ -40,7 +44,7 @@ class TestGetTickerNews:
                 "title": "AAPL hits new high",
                 "publisher": "Reuters",
                 "link": "https://example.com",
-                "providerPublishTime": "2026-03-21",
+                "providerPublishTime": _RECENT_TS,
             },
         ]
         mock_yf.Ticker.return_value = mock_ticker
@@ -149,7 +153,7 @@ class TestSearchFinancialNews:
             {
                 "title": f"News {i}",
                 "publisher": "X",
-                "providerPublishTime": "2026-03-21",
+                "providerPublishTime": _RECENT_TS,
             }
             for i in range(5)
         ]

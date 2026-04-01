@@ -230,7 +230,7 @@ def verify_razorpay_signature(
 # ---------------------------------------------------------------
 
 
-def _log_transaction(
+async def _log_transaction(
     user_id: str,
     gateway: str,
     event_type: str,
@@ -244,47 +244,29 @@ def _log_transaction(
     status: str = "success",
     raw_payload: str | None = None,
 ) -> None:
-    """Append a payment event to the ledger.
+    """Append a payment event to the PG ledger.
 
-    Fire-and-forget — errors logged, never raised.
+    Fire-and-forget -- errors logged, never raised.
     """
     try:
-        import uuid
-        from datetime import datetime, timezone
-
-        import pyarrow as pa
-
-        from auth.repo.schemas import (
-            _PAYMENT_TXN_PA_SCHEMA,
-            _PAYMENT_TXN_TABLE,
-        )
-
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
         repo = _helpers._get_repo()
-        cat = repo._get_catalog()
-        tbl = cat.load_table(_PAYMENT_TXN_TABLE)
-        row = pa.table(
-            {
-                "transaction_id": [str(uuid.uuid4())],
-                "user_id": [user_id],
-                "gateway": [gateway],
-                "event_type": [event_type],
-                "gateway_event_id": [gateway_event_id],
-                "subscription_id": [subscription_id],
-                "customer_id": [customer_id],
-                "amount": [amount],
-                "currency": [currency],
-                "tier_before": [tier_before],
-                "tier_after": [tier_after],
-                "status": [status],
-                "raw_payload": [raw_payload],
-                "created_at": [now],
-            },
-            schema=_PAYMENT_TXN_PA_SCHEMA,
-        )
-        tbl.append(row)
+        await repo.record_payment({
+            "user_id": user_id,
+            "gateway": gateway,
+            "event_type": event_type,
+            "gateway_event_id": gateway_event_id,
+            "subscription_id": subscription_id,
+            "customer_id": customer_id,
+            "amount": amount,
+            "currency": currency,
+            "tier_before": tier_before,
+            "tier_after": tier_after,
+            "status": status,
+            "raw_payload": raw_payload,
+        })
         _logger.info(
-            "Transaction logged: user=%s gw=%s" " event=%s status=%s",
+            "Transaction logged: user=%s gw=%s"
+            " event=%s status=%s",
             user_id,
             gateway,
             event_type,
@@ -292,7 +274,8 @@ def _log_transaction(
         )
     except Exception:
         _logger.exception(
-            "Failed to log transaction for user=%s",
+            "Failed to log transaction for"
+            " user=%s",
             user_id,
         )
 
@@ -302,7 +285,7 @@ def _log_transaction(
 # ---------------------------------------------------------------
 
 
-def _checkout_razorpay(
+async def _checkout_razorpay(
     repo: Any,
     db_user: dict | None,
     user: UserContext,
@@ -351,7 +334,7 @@ def _checkout_razorpay(
                     "could not be found by email: "
                     f"{user.email}"
                 ) from exc
-        repo.update(
+        await repo.update(
             user.user_id,
             {"razorpay_customer_id": rz_cust_id},
         )
@@ -380,7 +363,7 @@ def _checkout_razorpay(
                 old_tier = (
                     db_user.get("subscription_tier") if db_user else None
                 ) or "free"
-                _safe_update(
+                await _safe_update(
                     repo,
                     user.user_id,
                     {
@@ -392,7 +375,7 @@ def _checkout_razorpay(
                     TIER_PRICE_INR,
                 )
 
-                _log_transaction(
+                await _log_transaction(
                     user_id=user.user_id,
                     gateway="razorpay",
                     event_type="upgrade",
@@ -420,7 +403,7 @@ def _checkout_razorpay(
             }
         )
         rz_sub_id = sub["id"]
-        repo.update(
+        await repo.update(
             user.user_id,
             {"razorpay_subscription_id": rz_sub_id},
         )
@@ -445,7 +428,7 @@ def _checkout_razorpay(
     )
 
 
-def _checkout_stripe(
+async def _checkout_stripe(
     repo: Any,
     db_user: dict | None,
     user: UserContext,
@@ -465,7 +448,7 @@ def _checkout_stripe(
             name=(db_user.get("full_name", "") if db_user else ""),
         )
         st_cust_id = cust.id
-        repo.update(
+        await repo.update(
             user.user_id,
             {"stripe_customer_id": st_cust_id},
         )
@@ -492,7 +475,7 @@ def _checkout_stripe(
                     ],
                     proration_behavior="create_prorations",
                 )
-                _safe_update(
+                await _safe_update(
                     repo,
                     user.user_id,
                     {
@@ -507,7 +490,7 @@ def _checkout_stripe(
                     TIER_PRICE_USD,
                 )
 
-                _log_transaction(
+                await _log_transaction(
                     user_id=user.user_id,
                     gateway="stripe",
                     event_type="upgrade",
@@ -589,7 +572,7 @@ def register(router: APIRouter) -> None:
         response_model=CheckoutResponse,
         tags=["subscription"],
     )
-    def checkout(
+    async def checkout(
         body: CheckoutRequest,
         user: UserContext = Depends(get_current_user),
     ) -> CheckoutResponse:
@@ -602,7 +585,7 @@ def register(router: APIRouter) -> None:
         from subscription_config import TIER_ORDER
 
         repo = _helpers._get_repo()
-        db_user = repo.get_by_id(user.user_id)
+        db_user = await repo.get_by_id(user.user_id)
 
         db_tier = (
             db_user.get("subscription_tier") if db_user else None
@@ -622,7 +605,7 @@ def register(router: APIRouter) -> None:
 
         # ── Stripe path ──────────────────────
         if body.gateway == "stripe":
-            return _checkout_stripe(
+            return await _checkout_stripe(
                 repo,
                 db_user,
                 user,
@@ -630,7 +613,7 @@ def register(router: APIRouter) -> None:
             )
 
         # ── Razorpay path (default) ─────────
-        return _checkout_razorpay(
+        return await _checkout_razorpay(
             repo,
             db_user,
             user,
@@ -646,7 +629,7 @@ def register(router: APIRouter) -> None:
         response_model=SubscriptionStatus,
         tags=["subscription"],
     )
-    def get_subscription(
+    async def get_subscription(
         user: UserContext = Depends(get_current_user),
     ) -> SubscriptionStatus:
         """Return current subscription tier and usage."""
@@ -657,7 +640,7 @@ def register(router: APIRouter) -> None:
         )
 
         repo = _helpers._get_repo()
-        db_user = repo.get_by_id(user.user_id)
+        db_user = await repo.get_by_id(user.user_id)
 
         tier = (
             (db_user.get("subscription_tier") or DEFAULT_TIER)
@@ -703,12 +686,12 @@ def register(router: APIRouter) -> None:
         "/subscription/cancel",
         tags=["subscription"],
     )
-    def cancel_subscription(
+    async def cancel_subscription(
         user: UserContext = Depends(get_current_user),
     ) -> dict[str, str]:
         """Cancel the user's active subscription."""
         repo = _helpers._get_repo()
-        db_user = repo.get_by_id(user.user_id)
+        db_user = await repo.get_by_id(user.user_id)
         db_tier = (
             db_user.get("subscription_tier") if db_user else None
         ) or "free"
@@ -749,7 +732,7 @@ def register(router: APIRouter) -> None:
                 )
 
         # Reset to free + clear both sub IDs
-        _safe_update(
+        await _safe_update(
             repo,
             user.user_id,
             {
@@ -761,7 +744,7 @@ def register(router: APIRouter) -> None:
         )
 
         gw = "stripe" if st_sub_id else "razorpay" if rz_sub_id else "unknown"
-        _log_transaction(
+        await _log_transaction(
             user_id=user.user_id,
             gateway=gw,
             event_type="user_cancelled",
@@ -783,7 +766,7 @@ def register(router: APIRouter) -> None:
         "/subscription/cleanup",
         tags=["subscription"],
     )
-    def cleanup_subscriptions(
+    async def cleanup_subscriptions(
         dry_run: bool = True,
         user: UserContext = Depends(superuser_only),
     ) -> dict[str, Any]:
@@ -797,7 +780,7 @@ def register(router: APIRouter) -> None:
         Only orphaned subs are cancelled on execute.
         """
         repo = _helpers._get_repo()
-        all_users = repo.list_all()
+        all_users = await repo.list_all()
         client = _get_razorpay_client()
 
         # Build lookup maps
@@ -952,11 +935,11 @@ def register(router: APIRouter) -> None:
         )
 
         if event == "subscription.charged":
-            _handle_charged(entity)
+            await _handle_charged(entity)
         elif event == "subscription.cancelled":
-            _handle_cancelled(entity)
+            await _handle_cancelled(entity)
         elif event == "payment.failed":
-            _handle_payment_failed(
+            await _handle_payment_failed(
                 payment_entity,
                 entity,
             )
@@ -1023,19 +1006,19 @@ def register(router: APIRouter) -> None:
         )
 
         if event_type == "checkout.session.completed":
-            _handle_stripe_checkout(data)
+            await _handle_stripe_checkout(data)
         elif event_type in (
             "customer.subscription.deleted",
             "customer.subscription.updated",
         ):
-            _handle_stripe_sub_change(data)
+            await _handle_stripe_sub_change(data)
         elif event_type == "invoice.payment_failed":
-            _handle_stripe_payment_failed(data)
+            await _handle_stripe_payment_failed(data)
 
         return {"status": "ok"}
 
 
-def _handle_stripe_checkout(
+async def _handle_stripe_checkout(
     session: dict[str, Any],
 ) -> None:
     """Process checkout.session.completed."""
@@ -1059,11 +1042,11 @@ def _handle_stripe_checkout(
         return
 
     repo = _helpers._get_repo()
-    old_user = repo.get_by_id(user_id)
+    old_user = await repo.get_by_id(user_id)
     old_tier = (
         old_user.get("subscription_tier") if old_user else None
     ) or "free"
-    _safe_update(
+    await _safe_update(
         repo,
         user_id,
         {
@@ -1077,7 +1060,7 @@ def _handle_stripe_checkout(
     amt_cents = session.get("amount_total")
     amt = float(amt_cents) / 100 if amt_cents else None
 
-    _log_transaction(
+    await _log_transaction(
         user_id=user_id,
         gateway="stripe",
         event_type="checkout_completed",
@@ -1096,7 +1079,7 @@ def _handle_stripe_checkout(
     )
 
 
-def _handle_stripe_sub_change(
+async def _handle_stripe_sub_change(
     sub: dict[str, Any],
 ) -> None:
     """Process subscription.deleted/updated."""
@@ -1105,12 +1088,14 @@ def _handle_stripe_sub_change(
     sub_id = sub.get("id", "")
 
     repo = _helpers._get_repo()
-    user = _find_user_by_stripe(repo, sub_id, cust_id)
+    user = await _find_user_by_stripe(
+        repo, sub_id, cust_id,
+    )
     if user is None:
         return
 
     if status in ("canceled", "unpaid"):
-        _safe_update(
+        await _safe_update(
             repo,
             user["user_id"],
             {
@@ -1119,7 +1104,7 @@ def _handle_stripe_sub_change(
                 "stripe_subscription_id": None,
             },
         )
-        _log_transaction(
+        await _log_transaction(
             user_id=user["user_id"],
             gateway="stripe",
             event_type="cancelled",
@@ -1135,7 +1120,7 @@ def _handle_stripe_sub_change(
         )
 
 
-def _handle_stripe_payment_failed(
+async def _handle_stripe_payment_failed(
     invoice: dict[str, Any],
 ) -> None:
     """Process invoice.payment_failed."""
@@ -1143,16 +1128,18 @@ def _handle_stripe_payment_failed(
     sub_id = invoice.get("subscription", "")
 
     repo = _helpers._get_repo()
-    user = _find_user_by_stripe(repo, sub_id, cust_id)
+    user = await _find_user_by_stripe(
+        repo, sub_id, cust_id,
+    )
     if user is None:
         return
 
-    _safe_update(
+    await _safe_update(
         repo,
         user["user_id"],
         {"subscription_status": "past_due"},
     )
-    _log_transaction(
+    await _log_transaction(
         user_id=user["user_id"],
         gateway="stripe",
         event_type="payment_failed",
@@ -1166,13 +1153,13 @@ def _handle_stripe_payment_failed(
     )
 
 
-def _find_user_by_stripe(
+async def _find_user_by_stripe(
     repo: Any,
     sub_id: str,
     cust_id: str,
 ) -> dict | None:
     """Find user by Stripe IDs (sub_id first)."""
-    users = repo.list_all()
+    users = await repo.list_all()
     if sub_id:
         match = next(
             (u for u in users if u.get("stripe_subscription_id") == sub_id),
@@ -1193,20 +1180,21 @@ def _find_user_by_stripe(
 # ---------------------------------------------------------------
 
 
-def _safe_update(
+async def _safe_update(
     repo: Any,
     user_id: str,
     updates: dict[str, Any],
 ) -> None:
-    """Update with retry on Iceberg commit conflict."""
+    """Update with retry on commit conflict."""
     for attempt in range(3):
         try:
-            repo.update(user_id, updates)
+            await repo.update(user_id, updates)
             return
         except Exception as exc:
             if "CommitFailed" in type(exc).__name__ and attempt < 2:
                 _logger.warning(
-                    "Iceberg conflict, retry %d/3" " user=%s",
+                    "Commit conflict, retry %d/3"
+                    " user=%s",
                     attempt + 1,
                     user_id,
                 )
@@ -1219,7 +1207,7 @@ def _safe_update(
 # ---------------------------------------------------------------
 
 
-def _handle_charged(entity: dict[str, Any]) -> None:
+async def _handle_charged(entity: dict[str, Any]) -> None:
     """Process subscription.charged — activate tier.
 
     Only updates if the webhook sub_id matches the
@@ -1233,7 +1221,9 @@ def _handle_charged(entity: dict[str, Any]) -> None:
         return
 
     repo = _helpers._get_repo()
-    user = _find_user_by_razorpay(repo, sub_id, cust_id)
+    user = await _find_user_by_razorpay(
+        repo, sub_id, cust_id,
+    )
     if user is None:
         _logger.warning(
             "Webhook charged: no user for sub=%s",
@@ -1254,7 +1244,7 @@ def _handle_charged(entity: dict[str, Any]) -> None:
     tier = _plan_id_to_tier(plan_id)
     if tier is None:
         return
-    _safe_update(
+    await _safe_update(
         repo,
         user["user_id"],
         {
@@ -1265,7 +1255,7 @@ def _handle_charged(entity: dict[str, Any]) -> None:
     )
     from subscription_config import TIER_PRICE_INR
 
-    _log_transaction(
+    await _log_transaction(
         user_id=user["user_id"],
         gateway="razorpay",
         event_type="charged",
@@ -1284,7 +1274,7 @@ def _handle_charged(entity: dict[str, Any]) -> None:
     )
 
 
-def _handle_cancelled(entity: dict[str, Any]) -> None:
+async def _handle_cancelled(entity: dict[str, Any]) -> None:
     """Process subscription.cancelled — reset to free."""
     sub_id = entity.get("id", "")
     cust_id = entity.get("customer_id", "")
@@ -1293,7 +1283,9 @@ def _handle_cancelled(entity: dict[str, Any]) -> None:
         return
 
     repo = _helpers._get_repo()
-    user = _find_user_by_razorpay(repo, sub_id, cust_id)
+    user = await _find_user_by_razorpay(
+        repo, sub_id, cust_id,
+    )
     if user is None:
         return
 
@@ -1306,7 +1298,7 @@ def _handle_cancelled(entity: dict[str, Any]) -> None:
         )
         return
 
-    _safe_update(
+    await _safe_update(
         repo,
         user["user_id"],
         {
@@ -1315,7 +1307,7 @@ def _handle_cancelled(entity: dict[str, Any]) -> None:
             "razorpay_subscription_id": None,
         },
     )
-    _log_transaction(
+    await _log_transaction(
         user_id=user["user_id"],
         gateway="razorpay",
         event_type="cancelled",
@@ -1331,7 +1323,7 @@ def _handle_cancelled(entity: dict[str, Any]) -> None:
     )
 
 
-def _handle_payment_failed(
+async def _handle_payment_failed(
     payment: dict[str, Any],
     sub_entity: dict[str, Any],
 ) -> None:
@@ -1340,7 +1332,7 @@ def _handle_payment_failed(
     cust_id = payment.get("customer_id", "")
 
     repo = _helpers._get_repo()
-    user = _find_user_by_razorpay(
+    user = await _find_user_by_razorpay(
         repo,
         sub_id,
         cust_id,
@@ -1348,12 +1340,12 @@ def _handle_payment_failed(
     if user is None:
         return
 
-    _safe_update(
+    await _safe_update(
         repo,
         user["user_id"],
         {"subscription_status": "past_due"},
     )
-    _log_transaction(
+    await _log_transaction(
         user_id=user["user_id"],
         gateway="razorpay",
         event_type="payment_failed",
@@ -1372,7 +1364,7 @@ def _handle_payment_failed(
 # ---------------------------------------------------------------
 
 
-def _find_user_by_razorpay(
+async def _find_user_by_razorpay(
     repo: Any,
     sub_id: str,
     cust_id: str,
@@ -1382,7 +1374,7 @@ def _find_user_by_razorpay(
     Prioritises subscription_id match over customer_id
     to avoid confusion with orphaned subscriptions.
     """
-    users = repo.list_all()
+    users = await repo.list_all()
     if sub_id:
         match = next(
             (u for u in users if u.get("razorpay_subscription_id") == sub_id),

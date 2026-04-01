@@ -117,12 +117,16 @@ def score_headlines(
         )
         return None
 
-    # Weighted average.
+    from tools._date_utils import time_decay_weight
+
+    # Weighted average with time-decay.
     total_weight = 0.0
     weighted_sum = 0.0
     for item, score in zip(headlines, raw_scores):
-        weighted_sum += score * item.weight
-        total_weight += item.weight
+        decay = time_decay_weight(item.published)
+        w = item.weight * decay
+        weighted_sum += score * w
+        total_weight += w
 
     if total_weight == 0:
         return 0.0
@@ -134,6 +138,7 @@ def score_headlines(
 def refresh_ticker_sentiment(
     ticker: str,
     llm=None,
+    max_age_days: int = 7,
 ) -> float | None:
     """End-to-end: fetch → score → persist to Iceberg.
 
@@ -178,7 +183,9 @@ def refresh_ticker_sentiment(
             return float(existing["avg_score"].iloc[-1])
 
     # Fetch from all sources.
-    headlines = fetch_all_headlines(ticker)
+    headlines = fetch_all_headlines(
+        ticker, max_age_days=max_age_days,
+    )
     if not headlines:
         _logger.info(
             "No headlines for %s, skipping",

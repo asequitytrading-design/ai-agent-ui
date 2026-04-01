@@ -129,6 +129,19 @@ def setup_tools(registry):
             exc_info=True,
         )
 
+    # Sector discovery
+    try:
+        from tools.sector_discovery_tool import (
+            suggest_sector_stocks,
+        )
+
+        registry.register(suggest_sector_stocks)
+    except Exception:
+        _logger.warning(
+            "Sector discovery tool registration failed",
+            exc_info=True,
+        )
+
     _logger.info(
         "Tools registered: %s",
         registry.list_names(),
@@ -220,6 +233,14 @@ def setup_graph(
             )
             anthropic = "claude-sonnet-4-6"
 
+        ollama = (
+            settings.ollama_model
+            if settings.ollama_enabled
+            else None
+        )
+
+        from config import get_pool_groups
+
         return FallbackLLM(
             groq_models=tiers,
             anthropic_model=anthropic,
@@ -229,6 +250,12 @@ def setup_graph(
             compressor=compressor,
             obs_collector=obs_collector,
             cascade_profile="tool",
+            ollama_model=ollama,
+            ollama_first=False,
+            pool_groups=(
+                None if env == "test"
+                else get_pool_groups("tool")
+            ),
         )
 
     graph = build_supervisor_graph(

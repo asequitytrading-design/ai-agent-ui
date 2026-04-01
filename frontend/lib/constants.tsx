@@ -15,10 +15,17 @@ export type View =
   | "docs"
   | "admin";
 
+export interface ActionButton {
+  label: string;
+  prompt: string;
+}
+
 export interface Message {
   role: "user" | "assistant";
   content: string;
   timestamp: Date;
+  actions?: ActionButton[];
+  memoryUsed?: boolean;
 }
 
 // ---------------------------------------------------------------------------

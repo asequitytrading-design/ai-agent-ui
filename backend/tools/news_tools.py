@@ -64,16 +64,22 @@ def _cache_set(key: str, val: str, ttl: int):
 
 
 @tool
-def get_ticker_news(ticker: str) -> str:
-    """Get latest news headlines for a stock ticker.
+def get_ticker_news(
+    ticker: str,
+    days_back: int = 7,
+) -> str:
+    """Get recent news headlines for a stock ticker.
 
     Sources (in order): yfinance .news → Google News RSS.
     Always fetches fresh — no Redis cache.  Never calls
-    SerpAPI.
+    SerpAPI.  Results filtered to last ``days_back`` days.
 
     Args:
         ticker: Stock ticker symbol (e.g. AAPL,
             RELIANCE.NS).
+        days_back: Number of days of news to return.
+            Defaults to 7.  Use 30 for "last month",
+            90 for "last quarter".
 
     Returns:
         Formatted news headlines with dates and
@@ -149,8 +155,25 @@ def get_ticker_news(ticker: str) -> str:
     if not articles:
         return f"No news found for {ticker}."
 
+    # Filter by recency.
+    from tools._date_utils import is_within_window
+
+    articles = [
+        a for a in articles
+        if is_within_window(str(a.get("date", "")), days_back)
+    ]
+
+    if not articles:
+        return (
+            f"No recent news for {ticker} in the "
+            f"last {days_back} days."
+        )
+
     # Format output
-    lines = [f"**Latest News for {ticker}**\n"]
+    lines = [
+        f"**News for {ticker}** "
+        f"(last {days_back} days)\n",
+    ]
     for i, a in enumerate(articles[:8], 1):
         lines.append(
             f"{i}. **{a['title']}**\n"
@@ -250,23 +273,31 @@ def get_analyst_recommendations(ticker: str) -> str:
 
 
 @tool
-def search_financial_news(query: str) -> str:
-    """Search for financial news across multiple sources.
+def search_financial_news(
+    query: str,
+    days_back: int = 7,
+) -> str:
+    """Search for recent financial news across sources.
 
     Priority: Redis cache → yfinance .news for
     extracted tickers → Google News RSS → SerpAPI
     (LAST RESORT, paid — only if free sources
-    return <3 results).
+    return <3 results).  Results filtered to last
+    ``days_back`` days.
 
     Args:
         query: Financial news search query.
+        days_back: Number of days of news to return.
+            Defaults to 7.  Use 30 for "last month",
+            90 for "last quarter".
 
     Returns:
         Aggregated news headlines from available
         sources.
     """
+    q_norm = re.sub(r'[^a-z0-9]', '_', query.lower())
     cache_key = (
-        f"cache:news:search:" f"{re.sub(r'[^a-z0-9]', '_', query.lower())}"
+        f"cache:news:search:{q_norm}:{days_back}"
     )
 
     cached = _cache_get(cache_key)
@@ -387,7 +418,26 @@ def search_financial_news(query: str) -> str:
     if not articles:
         return f"No financial news found for: {query}"
 
-    lines = [f"**Financial News: {query}**\n"]
+    # Filter by recency.
+    from tools._date_utils import is_within_window
+
+    articles = [
+        a for a in articles
+        if is_within_window(
+            str(a.get("date", "")), days_back,
+        )
+    ]
+
+    if not articles:
+        return (
+            f"No recent financial news for: {query} "
+            f"in the last {days_back} days."
+        )
+
+    lines = [
+        f"**Financial News: {query}** "
+        f"(last {days_back} days)\n",
+    ]
     for i, a in enumerate(articles[:8], 1):
         lines.append(
             f"{i}. **{a['title']}**\n"

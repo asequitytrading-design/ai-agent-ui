@@ -35,6 +35,12 @@ class ChatRequest(BaseModel):
         default=None,
         description=("Authenticated user's ID for ticker linking."),
     )
+    session_id: str | None = Field(
+        default=None,
+        description=(
+            "Session ID for context tracking."
+        ),
+    )
 
 
 class ChatResponse(BaseModel):

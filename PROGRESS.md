@@ -2,6 +2,363 @@
 
 ---
 
+# Session: Apr 1, 2026 — Round-Robin Cascade, Memory Layer, Observability Redesign
+
+## Branch: `feature/sprint4` | 7 commits | ~3,300 lines added | 755 tests
+
+### Bug Fixes (ASETPLTFRM-261 to 263)
+
+- **Forecast NaN (261):** inline backtest fallback + NaN/inf guard in `_forecast_accuracy.py`
+- **Auto-link ticker (262):** `set_current_user` moved into executor thread closures in `routes.py`
+- **Daily budget dashboard (263):** `GET /v1/admin/daily-budget` + `DailyTokenBudgetCard` component
+
+### Round-Robin Cascade (ASETPLTFRM-264)
+
+- `RoundRobinPool` class, pool-aware `FallbackLLM.invoke()`, `_try_model` extraction
+- `get_token_budget()` singleton (fixes 10+ fragmented instances)
+- Added qwen/qwen3-32b + openai/gpt-oss-20b (combined TPD ~2.3M)
+- Iceberg TPD/RPD seeding on restart via `seed_daily_from_iceberg()`
+- Critical fix: `bind_tools()` now rebuilds `_model_lookup` for pool routing
+
+### LLM Observability Redesign (ASETPLTFRM-265)
+
+- 5-card summary: Requests, Total Tokens, Input, Output, Cascades
+- Per-model cards: TPM, TPD, RPM, RPD bars + request count + In/Out split
+- `ObservabilityCollector` seeds per-model tokens from Iceberg on restart
+
+### Memory-Augmented Chat (ASETPLTFRM-266)
+
+- **pgvector:** `pgvector/pgvector:pg16` Docker image, `UserMemory` ORM, Alembic migration
+- **Embedding:** `EmbeddingService` wrapping Ollama `nomic-embed-text` (768 dim)
+- **Write path:** `memory_extractor.py` (summary upsert + LLM fact extraction), `audit_persistence.py` (per-answer Iceberg)
+- **Read path:** `memory_retriever.py` (cosine top-5, token-budgeted), `[Memory context]` block in sub-agent prompts
+- **Frontend:** "Start new session from this" button, violet "memory" indicator, `startFromSession()` in ChatProvider
+- **Synthesis pass:** final text re-invoked with synthesis-tier LLM after tool calls
+- **Graceful degradation:** falls back to ConversationContext.summary if Ollama/pgvector unavailable
+
+### Docker / Frontend
+
+- Frontend dev moved to native host (`native-frontend` Docker profile) — Turbopack lightningcss incompatibility
+- `ollama-profile embedding` command added (coexists with other models)
+- `pgvector` added to `backend/requirements.txt`
+
+### Live Test Results
+
+- 4-turn session: round-robin 7:4:4 across 3 models, 36,974 tokens, 12.2:1 I/O ratio
+- 29 memories in pgvector (3 summaries + 26 facts), retrieval scores 0.58-0.77
+- System prompt compression: 7-15% reduction, summary-based context saves ~90% per follow-up
+
+---
+
+# Session: Mar 31, 2026 — Stale Prices Fix, Intent Routing, Anti-Hallucination, Stock Discovery, Token Optimization
+
+## Branch: `feature/sprint4`
+
+### ASETPLTFRM-257: Chat returns stale/wrong stock prices — Done
+
+**Layer 1 — Stale data fix:**
+- Removed file-based cache from `_analysis_shared.py` and `_forecast_shared.py` (eliminated `_load_cache`, `_save_cache`)
+- Added `_is_ohlcv_stale()` + `_auto_fetch()` yfinance fallback to `_load_ohlcv()` in both modules
+- Updated Iceberg freshness gate in `analyse_stock_price` to compare analysis_date vs latest OHLCV date
+- Fixed forecast NaN accuracy guard (`math.isnan` check)
+- Fixed currency defaulting to USD for .NS/.BO tickers (now defaults to INR)
+
+**Layer 2 — Intent-aware routing:**
+- Extracted `best_intent()` and `score_intents()` from `router_node.py`
+- Restructured guardrail follow-up logic: keyword check before LLM classifier, only reuse agent on same intent
+- Added `_merge_tickers()` and `_build_clarification()` for ambiguous intent switches
+- 18 new routing tests in `test_guardrail_routing.py`
+
+**Layer 3 — Anti-hallucination:**
+- Query cache only stores responses with tool_events (`synthesis.py`)
+- Hallucination guardrail: rejects data-heavy responses (3+ stock-analysis patterns) with zero tool calls
+- Stock analyst Step 3 enforcement: MANDATORY `get_ticker_news` + `get_analyst_recommendations`
+- Tool call ID sanitization for Anthropic cascade (`_sanitize_tool_ids` in `llm_fallback.py`)
+
+### ASETPLTFRM-259: Interactive Stock Discovery — Done
+- New `suggest_sector_stocks` tool with Iceberg scan + popular fallback (8 sectors, ~40 stocks)
+- New `get_stocks_by_sector()` method on `StockRepository`
+- DISCOVERY PIPELINE section in stock_analyst + portfolio agent prompts
+- Actions extraction (`<!--actions:[]-->`) in synthesis node
+- `response_actions` field in graph state + WS `final` event
+- Frontend: `ActionButtons` component, `sendDirect` hook, Message type extension
+
+### ASETPLTFRM-260: Token Optimization — Done
+- Fixed iteration counter not being passed from sub_agents ReAct loop to `FallbackLLM` (compression never triggered)
+- Reduced tool result truncation: 2000 → 800 chars default, progressive 500 → 300
+- **Summary-based context injection**: replaced raw conversation history (~3K tokens) with `ConversationContext.summary` (~100 tokens) for all sub-agent invocations
+- Intent switch: system prompt + user query only (no prior agent history)
+- Same-intent follow-up: system prompt + summary + user query
+
+### Infrastructure
+- IST timestamps in all backend logs (`logging_config.py`)
+- Removed `/app/.next` anonymous volume from `docker-compose.override.yml` (fixes Turbopack cache corruption)
+- Added "sector"/"sectors" to `_STOCK_KEYWORDS` in `router.py`
+- `MAX_ITERATIONS` increased from 15 to 25
+
+### New Jira Tickets Created
+- ASETPLTFRM-261: Fix forecast accuracy NaN
+- ASETPLTFRM-262: Auto-link ticker to watchlist during analysis
+- ASETPLTFRM-263: Add Groq daily token usage dashboard
+
+### Test suite: 718-719 passed, 2 pre-existing failures
+- 18 new routing tests added
+- Zero new test failures introduced
+
+---
+
+# Session: Mar 30, 2026 — Bug Fixes, Recency-Aware News, Context-Aware Chat Phase 1
+
+## Branch: `feature/sprint4`
+
+### ASETPLTFRM-243: Portfolio NaN crash — Done
+- Sanitized NaN floats in watchlist endpoint (`dashboard_routes.py`)
+- Sparkline and previous close now use `t_valid` (NaN-filtered)
+- Compare endpoint: added `dropna(subset=["close"])` before normalization
+
+### ASETPLTFRM-242: MkDocs containerization — Done
+- `Dockerfile.docs`: squidfunk/mkdocs-material:9 + mkdocs-gen-files plugin
+- `docker-compose.yml`: docs service on port 8000
+- `docker-compose.override.yml`: dev hot-reload (writable mounts)
+- Frontend `DOCS_URL` default corrected to `localhost` (was 127.0.0.1)
+- `.env.example`: added `NEXT_PUBLIC_BACKEND_URL`, `NEXT_PUBLIC_DOCS_URL`
+
+### Test suite: 664 passed, 0 failed (was 18 failed)
+- 7 dashboard_routes: `MagicMock` → `AsyncMock` for async `get_user_tickers`
+- 5 sentiment_sources + 1 news_tools: added `feedparser==6.0.12` to requirements
+- 2 forecast_ensemble: fixed mock `_predict()` conditional DataFrame logic
+- 2 llm_usage_persistence: seeded LLM pricing in test fixture
+- 1 ollama_manager: fixed `num_ctx` assertion (16384 → 8192 for reasoning)
+- System: installed `libomp` (brew) for xgboost
+
+### ASETPLTFRM-244: Recency-aware news & sentiment (5 SP) — Done
+- New `backend/tools/_date_utils.py`: `parse_published()`, `is_within_window()`, `time_decay_weight()`
+- `_sentiment_sources.py`: `max_age_days=7` param, recency tiebreaker in dedup
+- `_sentiment_scorer.py`: time-decay weighting (1.0/0.5/0.25/0.1 by age bracket)
+- `news_tools.py`: `days_back=7` on `get_ticker_news` and `search_financial_news`
+- `sentiment_agent.py`: `days_back` passthrough on `score_ticker_sentiment`
+- Agent prompts (research, sentiment): recency rules + temporal expansion guidance
+- Design spec: `docs/superpowers/specs/2026-03-30-recency-aware-news-design.md`
+- 21 new tests for `_date_utils.py`, 685 total passing
+
+### Seed script fix for Docker
+- `scripts/seed_demo_data.py`: set PyIceberg env vars, async `UserRepository`
+- `docker-compose.override.yml`: mount `fixtures/` for seed script
+- Demo data seeds correctly via `docker compose exec backend`
+
+### E2E login redirect fix
+- `e2e/pages/frontend/login.page.ts`: `waitForURL("/")` → `**/dashboard**`
+- `e2e/tests/auth/login.spec.ts`: same fix
+- 100 E2E passed (was 97), 109 pre-existing frontend-chromium failures (ASETPLTFRM-246)
+
+### Performance: no regression
+- LHCI /login: Performance 100, Accessibility 95, Best Practices 96, SEO 100
+- Playwright full audit: 94/100 overall (identical to Sprint 3 baseline)
+- All 40 audit points unchanged vs Sprint 3
+
+### ASETPLTFRM-247: Scheduler event loop fix (2 SP) — Done
+- `stocks/repository.py`: `upsert_registry()` changed `get_session_factory()` → `_pg_session()`
+- Daily Market Close USA schedule now succeeds (was failing with "Task attached to different loop")
+
+### ASETPLTFRM-248: Docs 404 fix (1 SP) — In Progress
+- Pre-generated `config-reference.md` and `api-reference.md` (were auto-generated by gen-files plugin)
+- Removed `mkdocs-gen-files` from `Dockerfile.docs` and `mkdocs.yml`
+- All docs pages return 200
+
+### Context-Aware Chat Phase 1 (19 SP, 8 stories) — Done
+**Epic:** LLM Agent Framework (ASETPLTFRM-2)
+**Stories:** ASETPLTFRM-249 through 256
+
+- **ConversationContext** (`backend/agents/conversation_context.py`): dataclass + thread-safe in-memory store with TTL eviction + rolling summary generator via Ollama/Groq cascade
+- **Topic Classifier** (`backend/agents/nodes/topic_classifier.py`): 1-shot LLM classify "follow_up" vs "new_topic", graceful degradation
+- **Guardrail Integration** (`backend/agents/nodes/guardrail.py`): follow-up detection after cache check, reuses last_agent on follow-ups (skips router)
+- **Context Injection** (`backend/agents/base.py`): `_build_messages()` prepends [Conversation Context] block to system prompt with summary, topic, portfolio, market
+- **Post-Response Update** (`backend/routes.py`): `_update_conversation_context()` after `graph.invoke()`, populates user profile on first turn, calls `update_summary()`
+- **Frontend** (`frontend/hooks/useSendMessage.ts`, `ChatPanel.tsx`): passes `session_id` in HTTP + WebSocket
+- **Integration Test** (`tests/backend/test_context_integration.py`): 3-turn multi-turn flow test
+- Design spec: `docs/superpowers/specs/2026-03-30-context-aware-chat-design.md`
+- Plan: `docs/superpowers/plans/2026-03-30-context-aware-chat.md`
+
+### Docker: all 5 services verified healthy
+- backend :8181, frontend :3000, postgres :5432, redis :6379, docs :8000
+
+### Performance: no regression
+- LHCI /login: Performance 100, Accessibility 95, Best Practices 96, SEO 100
+- Playwright full audit: 94/100 overall (identical to Sprint 3 baseline)
+
+### Test suite: 701 passed, 10 skipped
+- Up from 646/664 at session start
+
+---
+
+# Session: Mar 29, 2026 (evening) — Hybrid DB Migration Foundation
+
+## Branch: `feature/sprint4` — Epic ASETPLTFRM-225
+
+### Hybrid DB Migration: PostgreSQL (OLTP) + Iceberg (OLAP)
+
+**Split:** 5 tables → PostgreSQL (CRUD), 14 tables → Iceberg (append/scoped-delete)
+
+**PostgreSQL tables:** users, user_tickers, payment_transactions,
+stock_registry, scheduled_jobs
+
+**Completed:**
+- SQLAlchemy 2.0 async engine + session factory (`backend/db/`)
+- 5 ORM models with constraints (FK cascade, composite PK, JSONB, indexes)
+- Alembic async migrations (initial schema applied to Docker PG)
+- Auth repo rewrite: user_reads, user_writes, oauth → async SQLAlchemy
+- Ticker repo + payment repo (new modules)
+- IcebergUserRepository facade with session_factory injection
+- Stock registry + scheduler PG functions (`backend/db/pg_stocks.py`)
+- DuckDB query layer foundation (`backend/db/duckdb_engine.py`)
+- Data migration script (`scripts/migrate_iceberg_to_pg.py`)
+- Async conversion of 37 functions across 11 files (endpoints + callers)
+- PG health check in `/v1/health`
+- 30 new tests (all passing), 652/666 existing tests passing
+  (14 failures pre-existing, unrelated to migration)
+
+**Jira stories:** ASETPLTFRM-231 through 236 (24 SP)
+**Design spec:** `docs/superpowers/specs/2026-03-29-hybrid-db-migration-design.md`
+**Plan:** `docs/superpowers/plans/2026-03-29-hybrid-db-migration.md`
+
+---
+
+# Session: Mar 29, 2026 — Ollama LLM Integration + Chat UX + Containerization
+
+## Branch: `feature/sprint4` — Sprint 4 completed (43 SP, 12 tickets)
+
+### ASETPLTFRM-222: Ollama multi-model profile switcher (3 SP, Done)
+- `ollama-profile` CLI at `~/.local/bin/` — coding/reasoning/unload/status
+- GPT-OSS 20B pulled (13 GB MXFP4), Qwen 2.5 Coder 14B for coding
+- Claude Code `SessionStart` hook for model status reporting
+
+### ASETPLTFRM-223: Local Ollama LLM as Tier 0 in cascade (8 SP, Done)
+- `OllamaManager` singleton with TTL-cached health probe
+- FallbackLLM Tier 0 with `ollama_first` flag:
+  - `True` for sentiment + batch (before Groq)
+  - `False` for interactive chat (after Groq, before Anthropic)
+- Admin REST: GET/POST /admin/ollama/{status,load,unload}
+- Performance tuning: flash attention, KV cache q8_0, num_ctx 8192
+- LLM Usage widget: provider from Iceberg data (was hardcoded "groq")
+- 12 unit tests for OllamaManager
+
+### Chat UX Fixes (part of ASETPLTFRM-223)
+- **Auto-scroll**: `scrollTop = scrollHeight` on scroll container
+- **Input focus**: `readOnly` during loading (not `disabled`), `autoFocus`
+- **Markdown formatting**: all 6 agent prompts + synthesis updated
+- **Tool calls header**: `Tools used: tool1 → tool2` prepended to responses
+- **Tables for metrics**: prompts request `| Metric | Value |` format
+- **Past sessions fix**: PyArrow non-nullable schema for Iceberg fields
+- **CompareChart null fix**: filter null values before setData()
+
+### ASETPLTFRM-227-230: Containerization Epic (13 SP, Done)
+- `Dockerfile.backend`: 2-stage (builder + runtime), Python 3.12-slim
+- `Dockerfile.frontend`: 3-stage (deps + build + runner), Node 22 Alpine
+- `docker-compose.yml`: backend, frontend, postgres:16, redis:7
+- `docker-compose.override.yml`: dev hot-reload with source mounts
+- `.env.example`: documented env vars template
+- `next.config.ts`: added `output: "standalone"`
+- `config.py`: added `database_url` setting
+- Docker Desktop 29.3.1 installed, all 4 services verified healthy
+
+### Bugfixes (from previous sessions, transitioned to Done)
+- ASETPLTFRM-216 (5 SP) — Scheduler catch-up on startup
+- ASETPLTFRM-217 (2 SP) — Scheduler timezone fix
+- ASETPLTFRM-218 (2 SP) — Scheduler edit jobs UI
+- ASETPLTFRM-219 (5 SP) — Day-of-month scheduling
+- ASETPLTFRM-220 (3 SP) — Admin Transactions bug
+- ASETPLTFRM-221 (2 SP) — Auto-create Iceberg tables
+
+### Backlog Created (Sprint 5-6)
+- **Epic: Hybrid DB Migration** (ASETPLTFRM-225) — 31 SP, 7 stories
+  - PostgreSQL for OLTP, Iceberg for OLAP, DuckDB query engine
+- **Epic: Cloud IaC** (ASETPLTFRM-226) — 21 SP, 4 stories
+  - Terraform + Kubernetes, CI/CD, backup + monitoring
+
+---
+
+# Session: Mar 29, 2026 (Early) — Forecast Bugfix + Ollama Multi-Model Switcher
+
+## Branch: `feature/sprint4`
+
+### Bugfix: Forecast chart null price crash
+- `page.tsx:573` — added null guard for `info.price` in `handleFcMove` callback
+- Crosshair hover over gaps in chart series no longer throws TypeError
+
+### ASETPLTFRM-223: Local Ollama LLM as Tier 0 in cascade (5 SP, Done)
+- **OllamaManager** (`backend/ollama_manager.py`): singleton with TTL-cached health probe, load/unload, status
+- **FallbackLLM Tier 0** (`backend/llm_fallback.py`): Ollama tried first, cascades to Groq on failure/context exceeded/unavailable
+- **Config** (`backend/config.py`): 6 new settings (ollama_enabled, model, base_url, num_ctx, timeout, health_cache_ttl)
+- **Wired into**: bootstrap llm_factory, sentiment agent `_get_llm()`, batch gap_filler with auto-load/unload
+- **Admin API** (`backend/routes.py`): GET /admin/ollama/status, POST load, POST unload (superuser auth)
+- **Observability**: provider="ollama" in existing ObservabilityCollector — zero changes needed
+- **Dependency**: `langchain-ollama>=0.3.0` added to requirements.txt
+- **Tests**: 12 unit tests for OllamaManager (all pass)
+
+### ASETPLTFRM-222: Ollama multi-model profile switcher (3 SP, Done)
+- **`ollama-profile` CLI** (`~/.local/bin/ollama-profile`):
+  - Interactive menu + direct invocation: `coding`, `reasoning`, `unload`, `status`
+  - Profiles: Qwen 2.5 Coder 14B (coding) + GPT-OSS 20B (reasoning)
+  - Clean unload→load transition, KV cache freed on switch
+  - Already-loaded detection, model-pulled validation
+  - Bash 3.2 compatible (macOS default)
+- **Claude Code SessionStart hook** (`~/.claude/hooks/ollama-session-check.sh`):
+  - Reports Ollama model status at session start
+  - Injects context so Claude knows which model is loaded
+- **GPT-OSS 20B pulled** — 13 GB, MoE (3.6B active), matches o3-mini reasoning
+- Disk: ~32 GB total in `~/.ollama/models/` (3 models)
+
+---
+
+# Session: Mar 28, 2026 (Late) — Sprint 4 Scheduler Overhaul + Billing Fixes
+
+## Branch: `feature/sprint4` (6 commits)
+
+### ASETPLTFRM-216: Scheduler catch-up on startup (5 SP, In Progress)
+- `_last_scheduled_window()` + `_catchup_missed_jobs()` — detect missed job windows on backend start
+- `trigger_type` tracking: "scheduled", "manual", "catchup" — persisted in Iceberg, shown as badges in UI
+- Amber "Catch-up" badge + blue "Manual" badge in run timeline
+- `scheduler_catchup_enabled` config (default: true)
+- 13 unit tests
+
+### ASETPLTFRM-217: Scheduler timezone fix (2 SP, In Progress)
+- Root cause: `_ist_to_utc()` converted IST cron_time to UTC for `schedule.at()`, but schedule lib uses system local time (IST) — jobs fired 5.5h early
+- Fix: removed `_ist_to_utc()` entirely, pass cron_time directly
+- 1 regression test
+
+### ASETPLTFRM-218: Scheduler edit jobs UI (2 SP, In Progress)
+- PencilIcon + edit button on job rows
+- NewScheduleForm: edit mode with pre-fill, PATCH submit, Cancel button
+- Title/button toggle: "Edit Schedule" / "New Schedule"
+
+### ASETPLTFRM-219: Day-of-month scheduling (5 SP, In Progress)
+- `cron_dates` column in Iceberg `scheduled_jobs` + auto-schema-evolution
+- Monthly jobs: register as daily, gate in `_trigger_job` on matching day
+- `_next_run_ist_dates()` + `_last_window_dates()` helpers
+- Frontend: Weekly/Monthly toggle, 7x5 day grid (1-31)
+- 7 monthly tests (21 total scheduler tests)
+
+### Billing redirect fixes (not ticketed)
+- SameSite=strict → lax on refresh token cookie (payment redirects)
+- Non-blocking `refreshAccessToken()` in Razorpay handler (was causing login redirect after successful payment)
+- `NEXT_PUBLIC_BACKEND_URL` fixed: 127.0.0.1 → localhost (cookie hostname mismatch)
+
+### Environment setup
+- Installed ngrok, configured reserved domain tunnel
+- Migrated Iceberg auth.users table (+10 subscription columns)
+- Installed 15 new Python packages + 201 frontend packages
+- Updated 87 Jira tickets (Sprint 3 dates/SP/assignee/epic links)
+
+### Qwen evaluation
+- Qwen2.5-Coder 14B: 13 tok/s, 16K context, 13GB VRAM on M5 24GB
+- Delegation workflow validated: Claude reasons → Qwen writes code
+- Decision: stay at 16K context, split multi-file requests
+
+### Pending: ASETPLTFRM-220
+- Admin Transactions tab shows 0 transactions after successful payments
+
+---
+
 # Session: Mar 28, 2026 — Sentiment Agent + Bug Fixes
 
 ## ASETPLTFRM-211: Sentiment Agent (16 SP, Done)

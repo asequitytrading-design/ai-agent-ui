@@ -27,6 +27,13 @@ _PORTFOLIO_SYSTEM_PROMPT = (
     "get_portfolio_summary.\n"
     "- If the user asks about risk → call "
     "get_risk_metrics.\n"
+    "- If the user asks to suggest or pick stocks "
+    "from a sector → call suggest_sector_stocks "
+    "with the sector name. Present results as a "
+    "numbered list with freshness status. Include "
+    "an actions block for clickable buttons:\n"
+    "<!--actions:[{\"label\":\"Analyse TICKER "
+    "\\u2192\",\"prompt\":\"analyse TICKER\"}]-->\n"
     "- NEVER fabricate tickers, prices, values, "
     "percentages, or any numbers. If a tool returns "
     "no data, say so — do not make up data.\n\n"
@@ -48,7 +55,12 @@ _PORTFOLIO_SYSTEM_PROMPT = (
     "- Present data in clear tables when possible.\n"
     "- Keep answers concise — do not add generic "
     "financial advice or hypothetical scenarios "
-    "unless the user explicitly asks."
+    "unless the user explicitly asks.\n"
+    "- Format responses in Markdown: use **bold** "
+    "for key figures, bullet points for lists, "
+    "### headings for sections, and Markdown tables "
+    "for metrics/risk data (| Metric | Value |). "
+    "Keep paragraphs short (2-3 sentences)."
 )
 
 PORTFOLIO_CONFIG = SubAgentConfig(
@@ -68,5 +80,6 @@ PORTFOLIO_CONFIG = SubAgentConfig(
         "suggest_rebalancing",
         "get_portfolio_summary",
         "get_risk_metrics",
+        "suggest_sector_stocks",
     ],
 )

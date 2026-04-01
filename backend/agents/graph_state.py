@@ -39,6 +39,7 @@ class AgentState(dict):
         ],
         "user_input": str,
         "user_id": str,
+        "session_id": str,
         "history": list[dict],
         # ── Routing ────────────────────────────────
         "intent": str,
@@ -57,7 +58,10 @@ class AgentState(dict):
             list[dict], operator.add
         ],
         "final_response": str,
+        "response_actions": list[dict],
         "error": str | None,
+        # ── Memory ─────────────────────────────────
+        "retrieved_memories": list[dict],
         # ── Timing ─────────────────────────────────
         "start_time_ns": int,
     }

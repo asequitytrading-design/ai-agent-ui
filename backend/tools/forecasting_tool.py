@@ -153,19 +153,9 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
     )
     sym = _sh._currency_symbol(_sh._load_currency(ticker))
 
-    cached = _sh._load_cache(ticker, f"forecast_{months}m")
-    if cached:
-        _logger.info(
-            "Returning cached forecast for %s (%dm)",
-            ticker,
-            months,
-        )
-        return cached
-
     # 7-day cooldown: skip re-running Prophet if a forecast
-    # was generated within the last 7 days.  Instead of a
-    # "come back later" message, return the existing forecast
-    # report rebuilt from Iceberg data.
+    # was generated within the last 7 days.  Return the
+    # existing forecast report rebuilt from Iceberg data.
     try:
         repo_check = _sh._get_repo()
         if repo_check is not None:
@@ -187,14 +177,9 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
                             sym,
                         )
                         if report:
-                            _sh._save_cache(
-                                ticker,
-                                f"forecast_{months}m",
-                                report,
-                            )
                             _logger.info(
                                 "Forecast cooldown: %s %dm"
-                                " — returning cached "
+                                " — returning Iceberg "
                                 "report (run %s)",
                                 ticker,
                                 months,
@@ -269,6 +254,8 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
 
         # Read accuracy from last CV run in Iceberg
         # (background refresh computes this).
+        import math
+
         repo = _sh._require_repo()
         _prev_run = repo.get_latest_forecast_run(
             ticker,
@@ -279,12 +266,46 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
             _mae = _prev_run.get("mae")
             _rmse = _prev_run.get("rmse")
             _mape = _prev_run.get("mape")
-            if _mae is not None:
+            if (
+                _mae is not None
+                and not math.isnan(_mae)
+                and _rmse is not None
+                and not math.isnan(_rmse)
+            ):
                 accuracy = {
-                    "MAE": _mae,
-                    "RMSE": _rmse,
-                    "MAPE_pct": _mape,
+                    "MAE": round(_mae, 2),
+                    "RMSE": round(_rmse, 2),
+                    "MAPE_pct": (
+                        round(_mape, 1)
+                        if _mape is not None
+                        and not math.isnan(_mape)
+                        else 0.0
+                    ),
                 }
+
+        # Inline backtest when no prior accuracy exists
+        # (first forecast for this ticker/horizon).
+        if not accuracy:
+            from tools._forecast_accuracy import (
+                _calculate_forecast_accuracy,
+            )
+
+            _logger.info(
+                "No prior accuracy for %s %dm — "
+                "running inline backtest",
+                ticker,
+                months,
+            )
+            _inline = _calculate_forecast_accuracy(
+                model, prophet_df,
+            )
+            if "error" not in _inline:
+                accuracy = _inline
+            else:
+                _logger.info(
+                    "Inline backtest: %s",
+                    _inline.get("error"),
+                )
 
         _run_date = date.today()
         _run_dict = {
@@ -336,7 +357,10 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
             )
             acc_header = "MODEL ACCURACY (cross-validated)"
         else:
-            acc_line = "  Pending — available after " "background refresh"
+            acc_line = (
+                "  Insufficient data for accuracy "
+                "metrics (need 2+ years)"
+            )
             acc_header = "MODEL ACCURACY"
 
         report = (
@@ -352,7 +376,6 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
             f"{acc_line}\n"
         )
 
-        _sh._save_cache(ticker, f"forecast_{months}m", report)
         _logger.info("forecast_stock complete for %s", ticker)
         return report
 

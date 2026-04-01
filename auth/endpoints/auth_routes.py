@@ -62,7 +62,7 @@ def _set_refresh_cookie(
         value=refresh_token,
         httponly=True,
         secure=_secure,
-        samesite="strict",
+        samesite="lax",  # lax for payment redirects
         path=_COOKIE_PATH,
         max_age=_COOKIE_MAX_AGE,
     )
@@ -98,7 +98,7 @@ def register(router: APIRouter) -> None:
 
     @router.post("/auth/login", response_model=TokenResponse, tags=["auth"])
     @limiter.limit(login_limit)
-    def login(
+    async def login(
         request: Request,
         body: LoginRequest,
         service: AuthService = Depends(get_auth_service),
@@ -117,17 +117,17 @@ def register(router: APIRouter) -> None:
                 or account is deactivated.
         """
         repo = _helpers._get_repo()
-        user = repo.get_by_email(str(body.email))
+        user = await repo.get_by_email(str(body.email))
         user = _helpers._require_active_user(user, str(body.email))
         if not service.verify_password(body.password, user["hashed_password"]):
             _logger.warning(
                 "Login failed for email=%s (wrong password).", body.email
             )
             raise HTTPException(status_code=401, detail="Invalid credentials")
-        repo.update(
+        await repo.update(
             user["user_id"], {"last_login_at": datetime.now(timezone.utc)}
         )
-        repo.append_audit_event(
+        await repo.append_audit_event(
             "LOGIN",
             actor_user_id=user["user_id"],
             target_user_id=user["user_id"],
@@ -168,7 +168,7 @@ def register(router: APIRouter) -> None:
         tags=["auth"],
     )
     @limiter.limit(login_limit)
-    def login_form(
+    async def login_form(
         request: Request,
         form: OAuth2PasswordRequestForm = Depends(),
         service: AuthService = Depends(get_auth_service),
@@ -186,14 +186,14 @@ def register(router: APIRouter) -> None:
             HTTPException: 401 if credentials are invalid.
         """
         repo = _helpers._get_repo()
-        user = repo.get_by_email(form.username)
+        user = await repo.get_by_email(form.username)
         user = _helpers._require_active_user(user, form.username)
         if not service.verify_password(form.password, user["hashed_password"]):
             raise HTTPException(status_code=401, detail="Invalid credentials")
-        repo.update(
+        await repo.update(
             user["user_id"], {"last_login_at": datetime.now(timezone.utc)}
         )
-        repo.append_audit_event(
+        await repo.append_audit_event(
             "LOGIN",
             user["user_id"],
             user["user_id"],
@@ -218,7 +218,7 @@ def register(router: APIRouter) -> None:
         response_model=TokenResponse,
         tags=["auth"],
     )
-    def refresh_token(
+    async def refresh_token(
         request: Request,
         body: RefreshRequest | None = None,
         service: AuthService = Depends(get_auth_service),
@@ -264,7 +264,7 @@ def register(router: APIRouter) -> None:
         )
         user_id: str = payload["sub"]
         repo = _helpers._get_repo()
-        user = repo.get_by_id(user_id)
+        user = await repo.get_by_id(user_id)
         if user is None or not user.get("is_active", False):
             raise HTTPException(
                 status_code=401,
@@ -334,7 +334,7 @@ def register(router: APIRouter) -> None:
 
     @router.post("/auth/password-reset/request", tags=["auth"])
     @limiter.limit(register_limit)
-    def password_reset_request(
+    async def password_reset_request(
         request: Request,
         body: PasswordResetRequestBody,
         current_user: UserContext = Depends(get_current_user),
@@ -357,19 +357,19 @@ def register(router: APIRouter) -> None:
                 status_code=403, detail="You may only reset your own password."
             )
         repo = _helpers._get_repo()
-        user = repo.get_by_id(current_user.user_id)
+        user = await repo.get_by_id(current_user.user_id)
         if user is None:
             raise HTTPException(status_code=404, detail="User not found")
         reset_token = secrets.token_urlsafe(32)
         expiry = datetime.now(timezone.utc) + timedelta(minutes=30)
-        repo.update(
+        await repo.update(
             current_user.user_id,
             {
                 "password_reset_token": reset_token,
                 "password_reset_expiry": expiry,
             },
         )
-        repo.append_audit_event(
+        await repo.append_audit_event(
             "PASSWORD_RESET",
             actor_user_id=current_user.user_id,
             target_user_id=current_user.user_id,
@@ -393,7 +393,7 @@ def register(router: APIRouter) -> None:
         tags=["auth"],
     )
     @limiter.limit(register_limit)
-    def password_reset_confirm(
+    async def password_reset_confirm(
         request: Request,
         body: PasswordResetConfirmBody,
         current_user: UserContext = Depends(
@@ -416,7 +416,7 @@ def register(router: APIRouter) -> None:
         """
         AuthService.validate_password_strength(body.new_password)
         repo = _helpers._get_repo()
-        user = repo.get_by_id(current_user.user_id)
+        user = await repo.get_by_id(current_user.user_id)
         if user is None:
             raise HTTPException(status_code=404, detail="User not found")
         stored_token = user.get("password_reset_token")
@@ -434,7 +434,7 @@ def register(router: APIRouter) -> None:
                     status_code=400, detail="Reset token has expired"
                 )
         new_hash = service.hash_password(body.new_password)
-        repo.update(
+        await repo.update(
             current_user.user_id,
             {
                 "hashed_password": new_hash,
@@ -442,7 +442,7 @@ def register(router: APIRouter) -> None:
                 "password_reset_expiry": None,
             },
         )
-        repo.append_audit_event(
+        await repo.append_audit_event(
             "PASSWORD_RESET",
             actor_user_id=current_user.user_id,
             target_user_id=current_user.user_id,
