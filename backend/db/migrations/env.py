@@ -18,6 +18,7 @@ from backend.db.models import (  # noqa: F401
     ScheduledJob,
     StockRegistry,
     User,
+    UserMemory,
     UserTicker,
 )
 

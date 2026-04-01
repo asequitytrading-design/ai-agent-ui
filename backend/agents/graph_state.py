@@ -60,6 +60,8 @@ class AgentState(dict):
         "final_response": str,
         "response_actions": list[dict],
         "error": str | None,
+        # ── Memory ─────────────────────────────────
+        "retrieved_memories": list[dict],
         # ── Timing ─────────────────────────────────
         "start_time_ns": int,
     }

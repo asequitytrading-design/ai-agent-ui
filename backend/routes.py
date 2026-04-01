@@ -507,6 +507,7 @@ def create_app(
             "data_sources_used": [],
             "was_local_sufficient": True,
             "tool_events": [],
+            "retrieved_memories": [],
             "final_response": "",
             "error": None,
             "start_time_ns": 0,

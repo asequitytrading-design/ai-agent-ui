@@ -94,6 +94,13 @@ class Settings(BaseSettings):
     ollama_timeout: int = 120
     ollama_health_cache_ttl: int = 30
 
+    # ── Memory / embedding settings ──────────────
+    embedding_model: str = "nomic-embed-text"
+    embedding_dim: int = 768
+    memory_enabled: bool = True
+    memory_top_k: int = 5
+    memory_token_budget: int = 200
+
     # Groq model tiers — tried in order; cascade on budget
     # exhaustion or API error.  Comma-separated in env var.
     groq_model_tiers: str = (

@@ -276,6 +276,26 @@ def _make_sub_agent_node(
         messages: list = [
             SystemMessage(content=prompt),
         ]
+
+        # Inject retrieved memories from pgvector.
+        _mem_list = state.get(
+            "retrieved_memories", [],
+        )
+        if _mem_list:
+            from memory_retriever import (
+                format_memories_for_prompt,
+            )
+
+            _mem_block = format_memories_for_prompt(
+                _mem_list,
+            )
+            if _mem_block:
+                messages.append(
+                    SystemMessage(
+                        content=_mem_block,
+                    ),
+                )
+
         if ctx_summary:
             messages.append(
                 SystemMessage(

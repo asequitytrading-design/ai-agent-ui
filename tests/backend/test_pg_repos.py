@@ -19,7 +19,16 @@ async def pg_session():
     """In-memory SQLite async session for repo tests."""
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        # Exclude user_memories (requires pgvector
+        # + JSONB — not available in SQLite).
+        _tables = [
+            t for t in Base.metadata.sorted_tables
+            if t.name != "user_memories"
+        ]
+        await conn.run_sync(
+            Base.metadata.create_all,
+            tables=_tables,
+        )
     factory = async_sessionmaker(
         engine, class_=AsyncSession, expire_on_commit=False,
     )

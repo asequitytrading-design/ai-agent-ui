@@ -1,4 +1,5 @@
 """ORM models package."""
+from backend.db.models.memory import UserMemory
 from backend.db.models.payment import PaymentTransaction
 from backend.db.models.registry import StockRegistry
 from backend.db.models.scheduler import ScheduledJob
@@ -10,5 +11,6 @@ __all__ = [
     "ScheduledJob",
     "StockRegistry",
     "User",
+    "UserMemory",
     "UserTicker",
 ]

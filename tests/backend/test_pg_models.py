@@ -25,7 +25,14 @@ async def pg_session():
         "sqlite+aiosqlite:///:memory:",
     )
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        _tables = [
+            t for t in Base.metadata.sorted_tables
+            if t.name != "user_memories"
+        ]
+        await conn.run_sync(
+            Base.metadata.create_all,
+            tables=_tables,
+        )
 
     factory = async_sessionmaker(
         engine, class_=AsyncSession, expire_on_commit=False,
