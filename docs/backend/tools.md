@@ -279,6 +279,27 @@ it entirely.
 
 ---
 
+## suggest_sector_stocks
+
+**File:** `backend/tools/sector_discovery_tool.py`
+
+Queries Iceberg for stocks in a given sector, with freshness
+metadata. Falls back to a curated popular stocks list (8
+sectors, ~40 tickers) when Iceberg has no sector data.
+
+| Argument | Type | Description |
+|----------|------|-------------|
+| `sector` | `str` | Sector name (e.g., "Healthcare", "Financial Services") |
+
+Returns a numbered list with ticker, company name, freshness
+status (fresh/stale/no_data), and last analysis date. Used by
+portfolio and stock_analyst agents for sector-based discovery.
+
+Sector aliases are normalised: banking → Financial Services,
+pharma → Healthcare, IT → Technology, etc.
+
+---
+
 ## Adding a New Tool
 
 1. Create `backend/tools/my_tool.py`:

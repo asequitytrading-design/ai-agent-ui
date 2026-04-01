@@ -2,6 +2,54 @@
 
 ---
 
+# Session: Apr 1, 2026 — Round-Robin Cascade, Memory Layer, Observability Redesign
+
+## Branch: `feature/sprint4` | 7 commits | ~3,300 lines added | 755 tests
+
+### Bug Fixes (ASETPLTFRM-261 to 263)
+
+- **Forecast NaN (261):** inline backtest fallback + NaN/inf guard in `_forecast_accuracy.py`
+- **Auto-link ticker (262):** `set_current_user` moved into executor thread closures in `routes.py`
+- **Daily budget dashboard (263):** `GET /v1/admin/daily-budget` + `DailyTokenBudgetCard` component
+
+### Round-Robin Cascade (ASETPLTFRM-264)
+
+- `RoundRobinPool` class, pool-aware `FallbackLLM.invoke()`, `_try_model` extraction
+- `get_token_budget()` singleton (fixes 10+ fragmented instances)
+- Added qwen/qwen3-32b + openai/gpt-oss-20b (combined TPD ~2.3M)
+- Iceberg TPD/RPD seeding on restart via `seed_daily_from_iceberg()`
+- Critical fix: `bind_tools()` now rebuilds `_model_lookup` for pool routing
+
+### LLM Observability Redesign (ASETPLTFRM-265)
+
+- 5-card summary: Requests, Total Tokens, Input, Output, Cascades
+- Per-model cards: TPM, TPD, RPM, RPD bars + request count + In/Out split
+- `ObservabilityCollector` seeds per-model tokens from Iceberg on restart
+
+### Memory-Augmented Chat (ASETPLTFRM-266)
+
+- **pgvector:** `pgvector/pgvector:pg16` Docker image, `UserMemory` ORM, Alembic migration
+- **Embedding:** `EmbeddingService` wrapping Ollama `nomic-embed-text` (768 dim)
+- **Write path:** `memory_extractor.py` (summary upsert + LLM fact extraction), `audit_persistence.py` (per-answer Iceberg)
+- **Read path:** `memory_retriever.py` (cosine top-5, token-budgeted), `[Memory context]` block in sub-agent prompts
+- **Frontend:** "Start new session from this" button, violet "memory" indicator, `startFromSession()` in ChatProvider
+- **Synthesis pass:** final text re-invoked with synthesis-tier LLM after tool calls
+- **Graceful degradation:** falls back to ConversationContext.summary if Ollama/pgvector unavailable
+
+### Docker / Frontend
+
+- Frontend dev moved to native host (`native-frontend` Docker profile) — Turbopack lightningcss incompatibility
+- `ollama-profile embedding` command added (coexists with other models)
+- `pgvector` added to `backend/requirements.txt`
+
+### Live Test Results
+
+- 4-turn session: round-robin 7:4:4 across 3 models, 36,974 tokens, 12.2:1 I/O ratio
+- 29 memories in pgvector (3 summaries + 26 facts), retrieval scores 0.58-0.77
+- System prompt compression: 7-15% reduction, summary-based context saves ~90% per follow-up
+
+---
+
 # Session: Mar 31, 2026 — Stale Prices Fix, Intent Routing, Anti-Hallucination, Stock Discovery, Token Optimization
 
 ## Branch: `feature/sprint4`

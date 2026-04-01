@@ -14,6 +14,9 @@ A fullstack agentic chat application built with Next.js and FastAPI. The LLM run
 - **Real-time WebSocket streaming** — live `tool_start` / `tool_done` events give users visibility into the agentic loop as it runs
 - **Ollama local LLM support** — zero-cost inference as Tier 0 in the cascade; gracefully skipped when unavailable
 - **Docker Compose 5-service orchestration** — `docker compose up -d` starts backend (8181), frontend (3000), PostgreSQL (5432), Redis (6379), and docs (8000)
+- **Memory-augmented chat** — pgvector semantic memory retrieval across sessions; facts + summaries persist and auto-inject into sub-agent prompts
+- **Round-robin model pools** — load-balanced Groq daily token budgets across 6 models (~2.3M TPD combined)
+- **LLM Observability dashboard** — real-time token tracking, daily budget monitoring, per-model TPD/RPD bars
 - **Lighthouse performance monitoring** — 94/100 score; LHCI gate enforced pre-PR via `npm run perf:check`
 
 ---
@@ -24,7 +27,9 @@ A fullstack agentic chat application built with Next.js and FastAPI. The LLM run
 |-------|------------|
 | Frontend | Next.js 16, React 19, TypeScript, Tailwind CSS 4 |
 | Backend | Python 3.12, FastAPI, LangChain |
-| LLM | N-tier Groq cascade (4 models) + Anthropic Claude Sonnet 4.6 fallback |
+| LLM | Round-robin Groq cascade (6 models) + Anthropic Claude Sonnet 4.6 fallback |
+| Vector DB | pgvector (PostgreSQL extension, 768-dim embeddings) |
+| Embeddings | Ollama nomic-embed-text (local, zero API cost) |
 | Web search tool | SerpAPI via `langchain-community` |
 | Package management | npm (frontend), pip + virtualenv (backend) |
 

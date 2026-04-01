@@ -211,6 +211,46 @@ the new summary back in the session store.
 system prompt when a non-empty session summary exists, giving
 every sub-agent awareness of what was discussed earlier.
 
+### Memory Layer (pgvector)
+
+Per-user semantic memory persisted across sessions via pgvector.
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| `UserMemory` model | `db/models/memory.py` | ORM: vector(768), JSONB structured facts, IVFFlat index |
+| `EmbeddingService` | `embedding_service.py` | Ollama `nomic-embed-text` wrapper (768 dim, 2s timeout) |
+| `memory_extractor` | `memory_extractor.py` | Per-turn summary upsert + LLM fact extraction → pgvector |
+| `memory_retriever` | `memory_retriever.py` | Cosine similarity top-K retrieval, token-budgeted formatting |
+| `audit_persistence` | `audit_persistence.py` | Per-answer Iceberg write (supplements logout flush) |
+
+**Flow:** message arrives → retrieve top-5 memories → inject
+`[Memory context]` into sub-agent prompt (~200 tokens) → agent
+processes → post-response: extract facts + embed + upsert (async).
+
+**Graceful degradation:** if Ollama/pgvector unavailable, falls
+back to `ConversationContext.summary` (Phase 1 behavior).
+
+### Round-Robin Model Pools
+
+`RoundRobinPool` in `token_budget.py` spreads load across Groq
+models to avoid TPD exhaustion on any single model.
+
+| Profile | Pool 1 (primary) | Pool 2 (quality) | Pool 3 (fast) |
+|---------|-----------------|-------------------|---------------|
+| tool | llama-3.3-70b, kimi-k2, qwen3-32b | gpt-oss-120b, gpt-oss-20b | scout-17b |
+| synthesis | gpt-oss-120b, gpt-oss-20b, kimi-k2 | scout-17b | — |
+
+Per-pool atomic counter (thread-safe). `get_token_budget()`
+singleton seeded from Iceberg `llm_usage` on startup so
+TPD/RPD persist across restarts.
+
+### Synthesis Pass
+
+After the ReAct tool loop completes, the sub-agent re-invokes
+with a **synthesis-tier** FallbackLLM for higher quality final
+text. Synthesis tiers: `gpt-oss-120b → gpt-oss-20b → kimi-k2`.
+Falls back to the tool-tier response if synthesis fails.
+
 ---
 
 ## Recency-Aware News

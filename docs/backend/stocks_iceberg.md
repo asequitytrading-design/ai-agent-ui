@@ -60,6 +60,12 @@ are local backup only.
 | `auth.users` | `User` | CRUD via `UserRepository` |
 | `auth.user_tickers` | `UserTicker` | Upsert + delete |
 | `auth.payment_transactions` | `PaymentTransaction` | Insert + read |
+| `public.user_memories` | `UserMemory` | pgvector semantic memory (768-dim embeddings) |
+
+> **pgvector:** `user_memories` uses the `vector` extension
+> (`pgvector/pgvector:pg16` Docker image). Stores per-user
+> session summaries, structured facts (JSONB), and preferences
+> with cosine-similarity retrieval via IVFFlat index.
 
 ---
 

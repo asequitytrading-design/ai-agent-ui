@@ -5,6 +5,36 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.5.0] — 2026-04-01: Memory-Augmented Chat + Round-Robin + Observability
+
+### Added
+- Memory-augmented chat with pgvector semantic retrieval (ASETPLTFRM-266)
+- Round-robin model pool cascade for load-balanced daily budgets (ASETPLTFRM-264)
+- Synthesis pass in sub-agents — final response via gpt-oss-120b tier
+- LLM Observability: 5-card summary, TPD/RPD bars, daily budget card (ASETPLTFRM-265)
+- `suggest_sector_stocks` tool for sector-based stock discovery
+- `GET /v1/admin/daily-budget` endpoint
+- TokenBudget singleton + Iceberg TPD/RPD seeding on restart
+- Frontend: session resume button, memory indicator, `startFromSession()`
+- Docker: pgvector/pgvector:pg16 image, `ollama-profile embedding`
+- UserMemory ORM model + Alembic migration with IVFFlat index
+
+### Fixed
+- Forecast accuracy NaN on first Prophet forecast (ASETPLTFRM-261)
+- Auto-link ticker thread-local visibility in executor threads (ASETPLTFRM-262)
+- bind_tools model_lookup stale after binding (pool routing without tools)
+- UserMemory MetaData duplicate table error (extend_existing)
+- Frontend Docker lightningcss Turbopack native module resolution
+
+### Changed
+- groq_model_tiers: added qwen/qwen3-32b + openai/gpt-oss-20b (~2.3M combined TPD)
+- Docker postgres: postgres:16-alpine → pgvector/pgvector:pg16
+- Frontend dev: native host (Docker profile "native-frontend")
+- Est. queries: per-model sum instead of global average
+- ObservabilityCollector: seeds per-model token counts from Iceberg on restart
+
+---
+
 ## [Unreleased] — feature/sprint4
 
 ### Fixed — 2026-03-31: Stale Prices, Intent Routing, Anti-Hallucination (ASETPLTFRM-257, 259, 260)
