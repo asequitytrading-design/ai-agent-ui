@@ -133,11 +133,6 @@ def analyse_stock_price(ticker: str) -> str:
             exc,
         )
 
-    # Iceberg freshness gate: if another user (or session)
-    # already analysed this ticker today, return that result
-    # from the file cache it would have written.  We only
-    # need to check the Iceberg analysis_date; the file cache
-    # is always written alongside the Iceberg insert.
     try:
         df = _sh._load_ohlcv(ticker)
         if df is None:

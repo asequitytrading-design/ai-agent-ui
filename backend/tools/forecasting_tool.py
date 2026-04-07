@@ -193,8 +193,6 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
             exc,
         )
 
-    # 7-day cooldown: skip re-running Prophet if a forecast
-    # was generated within the last 7 days (in Iceberg).
     try:
         df = _sh._load_ohlcv(ticker)
         if df is None:
@@ -365,6 +363,20 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
             )
             acc_header = "MODEL ACCURACY"
 
+        # Low-data warning for recently listed stocks
+        _data_days = len(prophet_df)
+        _low_data_warn = ""
+        if _data_days < 500:
+            _low_data_warn = (
+                "\n⚠ LOW DATA WARNING: Only "
+                f"{_data_days} trading days "
+                "available (< 2 years). Forecast "
+                "reliability is significantly "
+                "reduced — treat targets as "
+                "directional only, not actionable."
+                "\n"
+            )
+
         report = (
             f"=== PRICE FORECAST: {ticker} "
             f"({months}-month horizon) ===\n\n"
@@ -376,6 +388,7 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
             f"{sentiment_emoji}\n\n"
             f"{acc_header}\n"
             f"{acc_line}\n"
+            f"{_low_data_warn}"
         )
 
         _logger.info("forecast_stock complete for %s", ticker)
