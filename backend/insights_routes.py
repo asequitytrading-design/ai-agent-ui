@@ -49,11 +49,7 @@ def _get_stock_repo():
     return _require_repo()
 
 
-def _market(ticker: str) -> str:
-    """Return 'india' or 'us' based on ticker suffix."""
-    if ticker.endswith(".NS") or ticker.endswith(".BO"):
-        return "india"
-    return "us"
+from market_utils import detect_market as _market  # noqa: E402
 
 
 def _safe(val) -> float | None:
@@ -84,10 +80,29 @@ def _safe_int(val) -> int | None:
         return None
 
 
-def _get_user_tickers(user: UserContext) -> list[str]:
-    """Fetch user's linked tickers."""
+async def _get_user_tickers(user: UserContext) -> list[str]:
+    """Fetch tickers visible to user.
+
+    Superusers see all registry tickers (full universe).
+    Other roles see only their linked watchlist tickers.
+    """
     repo = _helpers._get_repo()
-    return repo.get_user_tickers(user.user_id)
+    user_list = await repo.get_user_tickers(user.user_id)
+
+    if user.role != "superuser":
+        return user_list
+
+    # Superuser: merge with full registry
+    stock_repo = _get_stock_repo()
+    registry = stock_repo.get_all_registry()
+
+    seen = set(t.upper() for t in user_list)
+    merged = list(user_list)
+    for t in registry:
+        if t.upper() not in seen:
+            merged.append(t)
+            seen.add(t.upper())
+    return merged
 
 
 def _get_company_info_df(
@@ -184,7 +199,7 @@ def create_insights_router() -> APIRouter:
             )
 
         stock_repo = _get_stock_repo()
-        tickers = _get_user_tickers(user)
+        tickers = await _get_user_tickers(user)
         if not tickers:
             return ScreenerResponse()
 
@@ -311,7 +326,7 @@ def create_insights_router() -> APIRouter:
             )
 
         stock_repo = _get_stock_repo()
-        tickers = _get_user_tickers(user)
+        tickers = await _get_user_tickers(user)
         if not tickers:
             return TargetsResponse()
 
@@ -423,7 +438,7 @@ def create_insights_router() -> APIRouter:
             )
 
         stock_repo = _get_stock_repo()
-        tickers = _get_user_tickers(user)
+        tickers = await _get_user_tickers(user)
         if not tickers:
             return DividendsResponse()
 
@@ -509,7 +524,7 @@ def create_insights_router() -> APIRouter:
             )
 
         stock_repo = _get_stock_repo()
-        tickers = _get_user_tickers(user)
+        tickers = await _get_user_tickers(user)
         if not tickers:
             return RiskResponse()
 
@@ -609,7 +624,7 @@ def create_insights_router() -> APIRouter:
             )
 
         stock_repo = _get_stock_repo()
-        tickers = _get_user_tickers(user)
+        tickers = await _get_user_tickers(user)
         if not tickers:
             return SectorsResponse()
 
@@ -725,6 +740,12 @@ def create_insights_router() -> APIRouter:
             "all",
             description="'all', 'india', or 'us'",
         ),
+        source: str = Query(
+            "portfolio",
+            description=(
+                "'portfolio' or 'watchlist'"
+            ),
+        ),
         user: UserContext = Depends(get_current_user),
     ):
         """Pairwise daily-returns correlation matrix."""
@@ -732,6 +753,7 @@ def create_insights_router() -> APIRouter:
         ck = (
             f"cache:insights:correlation:"
             f"{user.user_id}:{period}:{market}"
+            f":{source}"
         )
         hit = cache.get(ck)
         if hit is not None:
@@ -741,20 +763,36 @@ def create_insights_router() -> APIRouter:
             )
 
         stock_repo = _get_stock_repo()
-        tickers = _get_user_tickers(user)
+
+        # Source: portfolio or watchlist
+        if source == "portfolio":
+            holdings_df = (
+                stock_repo.get_portfolio_holdings(
+                    user.user_id,
+                )
+            )
+            if holdings_df.empty:
+                tickers = []
+            else:
+                tickers = list(
+                    holdings_df["ticker"]
+                    .astype(str)
+                    .unique(),
+                )
+        else:
+            tickers = await _get_user_tickers(user)
+
         if not tickers:
             return CorrelationResponse(period=period)
 
-        # Market filter on tickers.
-        if market == "india":
+        # Market filter on tickers — check registry too.
+        if market in ("india", "us"):
+            reg = stock_repo.get_all_registry()
             tickers = [
                 t for t in tickers
-                if t.endswith((".NS", ".BO"))
-            ]
-        elif market == "us":
-            tickers = [
-                t for t in tickers
-                if not t.endswith((".NS", ".BO"))
+                if _market(
+                    t, reg.get(t, {}).get("market"),
+                ) == market
             ]
 
         if len(tickers) < 2:
@@ -860,7 +898,7 @@ def create_insights_router() -> APIRouter:
             )
 
         stock_repo = _get_stock_repo()
-        tickers = _get_user_tickers(user)
+        tickers = await _get_user_tickers(user)
         if not tickers:
             return QuarterlyResponse()
 

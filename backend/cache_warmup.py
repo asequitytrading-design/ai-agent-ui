@@ -26,14 +26,14 @@ import time
 _logger = logging.getLogger(__name__)
 
 
-def warm_shared() -> None:
+async def warm_shared() -> None:
     """Warm shared (non-user-scoped) cache keys.
 
     Currently warms:
     - ``cache:dash:registry`` — all registered tickers
     - ``cache:admin:audit`` — audit event log
 
-    Runs synchronously; typically completes in < 1 s.
+    Runs as a coroutine; typically completes in < 1 s.
     """
     from cache import get_cache, TTL_STABLE, TTL_VOLATILE
 
@@ -49,44 +49,15 @@ def warm_shared() -> None:
     warmed = 0
 
     # ── Registry ──────────────────────────────────
+    # Skip registry warmup — the real endpoint enriches
+    # with OHLCV sparkline, prices, and company names.
+    # Caching a bare version here poisons the cache for
+    # 300s with missing data.
     try:
-        from tools._stock_shared import _require_repo
-
-        stock_repo = _require_repo()
-        registry = stock_repo.get_all_registry()
-
-        if registry:
-            from dashboard_models import (
-                RegistryResponse,
-                RegistryTicker,
-            )
-
-            items = []
-            for ticker, meta in registry.items():
-                mkt = "india" if (
-                    ticker.endswith(".NS")
-                    or ticker.endswith(".BO")
-                ) else "us"
-                ccy = "INR" if mkt == "india" else "USD"
-                items.append(
-                    RegistryTicker(
-                        ticker=ticker,
-                        company_name=None,
-                        market=mkt,
-                        currency=ccy,
-                        current_price=None,
-                        last_fetch_date=(
-                            meta.get(
-                                "last_fetch_date", ""
-                            ) or None
-                        ),
-                    )
-                )
-            items.sort(key=lambda t: t.ticker)
-            result = RegistryResponse(tickers=items)
+        if False:  # disabled — let real endpoint cache
             cache.set(
                 "cache:dash:registry",
-                result.model_dump_json(),
+                "{}",
                 TTL_STABLE,
             )
             warmed += 1
@@ -101,7 +72,7 @@ def warm_shared() -> None:
         import auth.endpoints.helpers as _helpers
 
         repo = _helpers._get_repo()
-        raw = repo.list_audit_events()
+        raw = await repo.list_audit_events()
         events = []
         for ev in raw:
             d = dict(ev)
@@ -305,7 +276,7 @@ def warm_tickers() -> None:
     )
 
 
-def warm_frequent_users(
+async def warm_frequent_users(
     top_n: int = 5,
     days: int = 7,
 ) -> None:
@@ -394,7 +365,7 @@ def warm_frequent_users(
 
         for uid in active_users:
             try:
-                tickers = repo.get_user_tickers(uid)
+                tickers = await repo.get_user_tickers(uid)
                 if not tickers:
                     continue
 
