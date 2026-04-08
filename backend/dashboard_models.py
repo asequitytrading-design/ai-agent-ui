@@ -355,11 +355,19 @@ class BacktestPoint(BaseModel):
     actual: float
 
 
+class BacktestAccuracy(BaseModel):
+    directional_accuracy_pct: float = 0.0
+    max_error_pct: float = 0.0
+    p50_error_pct: float = 0.0
+    p90_error_pct: float = 0.0
+
+
 class ForecastBacktestResponse(BaseModel):
     ticker: str = ""
     data: list[BacktestPoint] = Field(
         default_factory=list,
     )
+    accuracy: BacktestAccuracy | None = None
 
 
 class PortfolioForecastPoint(BaseModel):

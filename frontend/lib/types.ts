@@ -551,9 +551,17 @@ export interface BacktestPoint {
   actual: number;
 }
 
+export interface BacktestAccuracy {
+  directional_accuracy_pct: number;
+  max_error_pct: number;
+  p50_error_pct: number;
+  p90_error_pct: number;
+}
+
 export interface ForecastBacktestResponse {
   ticker: string;
   data: BacktestPoint[];
+  accuracy: BacktestAccuracy | null;
 }
 
 export interface TierHealthResponse {

@@ -45,6 +45,7 @@ from dashboard_models import (
     WatchlistResponse,
     AllocationItem,
     AllocationResponse,
+    BacktestAccuracy,
     BacktestPoint,
     ForecastBacktestResponse,
     NewsHeadline,
@@ -1159,9 +1160,49 @@ def create_dashboard_router() -> APIRouter:
                 )
             )
 
+        # Compute accuracy metrics from points
+        accuracy = None
+        if len(points) > 1:
+            import numpy as np
+
+            actuals = np.array(
+                [p.actual for p in points],
+            )
+            preds = np.array(
+                [p.predicted for p in points],
+            )
+            err_pct = (
+                np.abs(preds - actuals)
+                / np.where(actuals != 0, actuals, 1)
+                * 100
+            )
+            # Directional accuracy
+            a_dir = np.sign(np.diff(actuals))
+            p_dir = np.sign(np.diff(preds))
+            dir_acc = float(
+                np.mean(a_dir == p_dir) * 100,
+            )
+
+            accuracy = BacktestAccuracy(
+                directional_accuracy_pct=round(
+                    dir_acc, 1,
+                ),
+                max_error_pct=round(
+                    float(np.max(err_pct)), 1,
+                ),
+                p50_error_pct=round(
+                    float(np.median(err_pct)), 1,
+                ),
+                p90_error_pct=round(
+                    float(np.percentile(err_pct, 90)),
+                    1,
+                ),
+            )
+
         result = ForecastBacktestResponse(
             ticker=t_upper,
             data=points,
+            accuracy=accuracy,
         )
         cache.set(
             cache_key,

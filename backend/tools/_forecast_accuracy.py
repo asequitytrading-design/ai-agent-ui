@@ -128,10 +128,43 @@ def _calculate_forecast_accuracy(
             .sort_values("ds")
         )
 
+        # Extended accuracy metrics from backtest
+        err_pct = (
+            ((bt["yhat"] - bt["y"]) / bt["y"]).abs()
+            * 100
+        )
+        max_err = float(err_pct.max())
+        p50_err = float(err_pct.median())
+        p90_err = float(err_pct.quantile(0.90))
+
+        # Directional accuracy: % of times model
+        # predicted same direction as actual movement
+        actual_dir = bt["y"].diff().apply(
+            lambda x: 1 if x > 0 else -1,
+        )
+        pred_dir = bt["yhat"].diff().apply(
+            lambda x: 1 if x > 0 else -1,
+        )
+        valid = actual_dir.iloc[1:].reset_index(
+            drop=True,
+        )
+        predicted = pred_dir.iloc[1:].reset_index(
+            drop=True,
+        )
+        dir_acc = float(
+            (valid == predicted).mean() * 100,
+        )
+
         return {
             "MAE": round(mae, 2),
             "RMSE": round(rmse, 2),
             "MAPE_pct": round(mape, 2),
+            "directional_accuracy_pct": round(
+                dir_acc, 1,
+            ),
+            "max_error_pct": round(max_err, 1),
+            "p50_error_pct": round(p50_err, 1),
+            "p90_error_pct": round(p90_err, 1),
             "backtest_df": bt,
         }
     except Exception as exc:

@@ -926,6 +926,50 @@ function ForecastTab({ ticker }: { ticker: string }) {
               </div>
             )}
           </div>
+
+          {/* Extended backtest metrics */}
+          {backtest?.accuracy && (
+            <div className="flex items-center gap-8 mt-3 pt-3 border-t border-gray-100 dark:border-gray-800">
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs text-gray-400 dark:text-gray-500">
+                  Direction
+                </span>
+                <span className={`font-mono text-sm font-medium ${
+                  backtest.accuracy.directional_accuracy_pct >= 55
+                    ? "text-emerald-600 dark:text-emerald-400"
+                    : backtest.accuracy.directional_accuracy_pct >= 50
+                      ? "text-amber-600 dark:text-amber-400"
+                      : "text-red-600 dark:text-red-400"
+                }`}>
+                  {backtest.accuracy.directional_accuracy_pct.toFixed(1)}%
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs text-gray-400 dark:text-gray-500">
+                  P50 Err
+                </span>
+                <span className="font-mono text-sm font-medium text-gray-900 dark:text-gray-100">
+                  {backtest.accuracy.p50_error_pct.toFixed(1)}%
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs text-gray-400 dark:text-gray-500">
+                  P90 Err
+                </span>
+                <span className="font-mono text-sm font-medium text-gray-900 dark:text-gray-100">
+                  {backtest.accuracy.p90_error_pct.toFixed(1)}%
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs text-gray-400 dark:text-gray-500">
+                  Max Err
+                </span>
+                <span className="font-mono text-sm font-medium text-red-600 dark:text-red-400">
+                  {backtest.accuracy.max_error_pct.toFixed(1)}%
+                </span>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
