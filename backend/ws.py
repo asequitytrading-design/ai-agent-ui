@@ -471,6 +471,9 @@ def _run_graph(
                 "current_agent", "",
             )
             ctx.last_intent = result.get("intent", "")
+            ctx.last_response = (
+                result.get("final_response", "")[:500]
+            )
             tickers = result.get("tickers", [])
             ctx.current_topic = (
                 f"{', '.join(tickers)} "

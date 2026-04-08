@@ -65,6 +65,28 @@ _EXTRA_FINANCIAL: set[str] = {
 
 _ALL_FINANCIAL = _STOCK_KEYWORDS | _EXTRA_FINANCIAL
 
+# Patterns indicating the bot asked a clarifying question
+# or offered numbered options.
+_CLARIFICATION_RE = re.compile(
+    r"which of the following"
+    r"|would you like"
+    r"|please choose"
+    r"|select.*option"
+    r"|1\uFE0F\u20E3|2\uFE0F\u20E3|3\uFE0F\u20E3"
+    r"|\n\d+[\.\)]\s",
+    re.IGNORECASE,
+)
+
+
+def _is_clarification(response: str) -> bool:
+    """True if the bot response asked the user to
+    choose or clarify."""
+    if not response:
+        return False
+    if response.rstrip().endswith("?"):
+        return True
+    return bool(_CLARIFICATION_RE.search(response))
+
 # Common uppercase words that look like tickers but
 # are not.  Extends the filter in router.py.
 _COMMON_WORDS: set[str] = {
@@ -222,6 +244,32 @@ def guardrail(state: dict) -> dict:
     )
 
     detected_intent = best_intent(user_input)
+
+    # ── Clarification follow-up detection ──────────
+    # If the bot's last response asked a question or
+    # offered numbered options, treat the next user
+    # message as a follow-up to the same agent.
+    if (
+        _ctx
+        and _ctx.last_agent
+        and _is_clarification(_ctx.last_response)
+    ):
+        _logger.info(
+            "Clarification follow-up → agent=%s"
+            " (last response was a question)",
+            _ctx.last_agent,
+        )
+        return {
+            "tickers": _merge_tickers(
+                _ctx.tickers_mentioned,
+                user_input,
+            ),
+            "next_agent": _ctx.last_agent,
+            "intent": (
+                _ctx.last_intent or "follow_up"
+            ),
+            "start_time_ns": start_ns,
+        }
 
     if _ctx and _ctx.last_agent:
         if detected_intent:

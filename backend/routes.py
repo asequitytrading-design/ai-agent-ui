@@ -580,6 +580,7 @@ def create_app(
 
             ctx.last_agent = agent
             ctx.last_intent = intent
+            ctx.last_response = response[:500]
             ctx.current_topic = (
                 f"{', '.join(tickers)} {intent}"
                 if tickers else intent

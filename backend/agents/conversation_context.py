@@ -23,6 +23,7 @@ class ConversationContext:
     last_agent: str = ""
     last_intent: str = ""
     summary: str = ""
+    last_response: str = ""
     tickers_mentioned: list[str] = field(
         default_factory=list,
     )
