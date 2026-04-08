@@ -39,6 +39,7 @@ interface ForecastChartProps {
     isForecast: boolean;
     lower?: number;
     upper?: number;
+    backtestPredicted?: number;
   } | null) => void;
 }
 
@@ -69,6 +70,9 @@ export function ForecastChart({
       { predicted: number; lower: number; upper: number }
     >(),
   );
+  const btMap = useRef(
+    new Map<string, number>(),
+  );
 
   useEffect(() => {
     const hm = new Map<string, number>();
@@ -89,6 +93,21 @@ export function ForecastChart({
       });
     }
     fcMap.current = fm;
+
+    const bm = new Map<string, number>();
+    if (backtestDates && backtestPredicted) {
+      for (
+        let i = 0;
+        i < backtestDates.length;
+        i++
+      ) {
+        bm.set(
+          backtestDates[i],
+          backtestPredicted[i],
+        );
+      }
+    }
+    btMap.current = bm;
   }, [
     historicalDates,
     historicalPrices,
@@ -96,6 +115,8 @@ export function ForecastChart({
     forecastPredicted,
     forecastLower,
     forecastUpper,
+    backtestDates,
+    backtestPredicted,
   ]);
 
   const handleCrosshair = useCallback(
@@ -113,6 +134,8 @@ export function ForecastChart({
           date: d,
           price: hp,
           isForecast: false,
+          backtestPredicted:
+            btMap.current.get(d),
         });
         return;
       }

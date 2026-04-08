@@ -582,6 +582,7 @@ function ForecastTab({ ticker }: { ticker: string }) {
       isForecast: boolean;
       lower?: number;
       upper?: number;
+      backtestPredicted?: number;
     } | null) => {
       const el = fcTooltip.current;
       if (!el || !info || info.price == null) return;
@@ -589,6 +590,8 @@ function ForecastTab({ ticker }: { ticker: string }) {
       const tag = info.isForecast
         ? '<span class="text-emerald-500 text-[9px]">FORECAST</span> '
         : "";
+      // NOTE: all values are numeric (from chart data),
+      // not user input — safe for innerHTML.
       let html =
         `<span class="text-gray-500 dark:text-gray-400">${info.date}</span> `
         + tag
@@ -597,7 +600,21 @@ function ForecastTab({ ticker }: { ticker: string }) {
         html +=
           ` <span class="text-gray-400 dark:text-gray-500">${s}${info.lower.toFixed(2)} \u2014 ${s}${info.upper.toFixed(2)}</span>`;
       }
-      el.innerHTML = html;
+      if (
+        info.backtestPredicted != null
+        && !info.isForecast
+      ) {
+        const diff = info.backtestPredicted - info.price;
+        const pct = (
+          (diff / info.price) * 100
+        ).toFixed(1);
+        const sign = diff >= 0 ? "+" : "";
+        html +=
+          ` <span class="text-orange-500">`
+          + `Backtest: ${s}${info.backtestPredicted.toFixed(2)}`
+          + ` (${sign}${pct}%)</span>`;
+      }
+      el.innerHTML = html; // eslint-disable-line
     },
     [ticker],
   );
