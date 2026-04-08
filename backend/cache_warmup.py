@@ -35,7 +35,7 @@ async def warm_shared() -> None:
 
     Runs as a coroutine; typically completes in < 1 s.
     """
-    from cache import get_cache, TTL_STABLE, TTL_VOLATILE
+    from cache import get_cache, TTL_VOLATILE
 
     cache = get_cache()
     if not cache.ping():
@@ -48,24 +48,9 @@ async def warm_shared() -> None:
     t0 = time.monotonic()
     warmed = 0
 
-    # ── Registry ──────────────────────────────────
-    # Skip registry warmup — the real endpoint enriches
-    # with OHLCV sparkline, prices, and company names.
-    # Caching a bare version here poisons the cache for
-    # 300s with missing data.
-    try:
-        if False:  # disabled — let real endpoint cache
-            cache.set(
-                "cache:dash:registry",
-                "{}",
-                TTL_STABLE,
-            )
-            warmed += 1
-    except Exception:
-        _logger.warning(
-            "cache_warmup: registry failed",
-            exc_info=True,
-        )
+    # Registry warmup intentionally skipped — the real
+    # endpoint enriches with OHLCV sparkline, prices,
+    # and company names. See gotchas in CLAUDE.md.
 
     # ── Audit log ─────────────────────────────────
     try:

@@ -23,6 +23,7 @@ import auth.endpoints.helpers as _helpers
 from auth.dependencies import get_current_user
 from auth.models import UserContext
 from cache import get_cache, TTL_STABLE
+from market_utils import detect_market as _market
 from insights_models import (
     CorrelationResponse,
     DividendRow,
@@ -47,9 +48,6 @@ def _get_stock_repo():
     from tools._stock_shared import _require_repo
 
     return _require_repo()
-
-
-from market_utils import detect_market as _market  # noqa: E402
 
 
 def _safe(val) -> float | None:

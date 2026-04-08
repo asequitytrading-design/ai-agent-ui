@@ -49,6 +49,7 @@ from fastapi import APIRouter, Depends, Query, Response
 import auth.endpoints.helpers as _helpers
 from auth.dependencies import get_current_user
 from auth.models import UserContext
+from market_utils import detect_market
 
 _logger = logging.getLogger(__name__)
 
@@ -617,7 +618,10 @@ def create_dashboard_router() -> APIRouter:
                     if it.current_price is None:
                         it.current_price = od["price"]
         except Exception:
-            pass
+            _logger.warning(
+                "OHLCV enrichment failed for registry",
+                exc_info=True,
+            )
 
         items.sort(key=lambda t: t.ticker)
         result = RegistryResponse(tickers=items)
@@ -1302,9 +1306,6 @@ _PERIOD_DAYS = {
     "6M": 180,
     "1Y": 365,
 }
-
-
-from market_utils import detect_currency, detect_market
 
 
 def _is_currency_match(

@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from datetime import datetime, timezone
 from functools import partial
 
 import pandas as pd
@@ -18,7 +19,6 @@ from backend.db.engine import get_session_factory
 from backend.db.models.stock_master import StockMaster
 from backend.pipeline.config import (
     DEFAULT_BATCH_SIZE,
-    MAX_CONCURRENCY,
     REQUEST_DELAY_S,
 )
 from backend.pipeline.cursor import (
@@ -231,7 +231,9 @@ async def _process_ticker(
                         sm.market_cap = int(new_mcap)
                         changed = True
                     if changed:
-                        sm.updated_at = func.now()
+                        sm.updated_at = datetime.now(
+                            timezone.utc,
+                        )
     except Exception as exc:
         _logger.warning(
             "stock_master update failed for %s: %s",

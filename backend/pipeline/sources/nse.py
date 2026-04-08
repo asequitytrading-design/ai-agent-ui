@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import types
 from datetime import date
 from functools import partial
 
@@ -21,7 +22,7 @@ _logger = logging.getLogger(__name__)
 # Column mapping from jugaad-data to standard names.
 # jugaad-data column names can vary; we handle both
 # uppercase and mixed-case variants defensively.
-_COLUMN_MAP: dict[str, str] = {
+_COLUMN_MAP = types.MappingProxyType({
     "DATE": "date",
     "OPEN": "open",
     "HIGH": "high",
@@ -45,7 +46,7 @@ _COLUMN_MAP: dict[str, str] = {
     "Close": "adj_close",
     "Ltp": "close",
     "Volume": "volume",
-}
+})
 
 _REQUIRED_COLS = [
     "date", "open", "high", "low",

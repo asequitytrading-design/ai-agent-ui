@@ -15,7 +15,6 @@ Typical usage::
 """
 
 import asyncio
-import concurrent.futures
 import json
 import logging
 from datetime import date, datetime, timedelta
@@ -100,15 +99,13 @@ def _lookup_stock_master(symbol: str) -> dict | None:
         except RuntimeError:
             loop = None
 
-        if loop is not None:
-            # Inside an async context — run in a thread
-            with concurrent.futures.ThreadPoolExecutor(
-                max_workers=1,
-            ) as pool:
-                return pool.submit(
-                    asyncio.run,
-                    _async_lookup(symbol),
-                ).result()
+        if loop is not None and loop.is_running():
+            # Inside an async context — schedule on the
+            # running loop instead of creating a new one
+            fut = asyncio.run_coroutine_threadsafe(
+                _async_lookup(symbol), loop,
+            )
+            return fut.result(timeout=5.0)
         return asyncio.run(_async_lookup(symbol))
     except Exception:
         _logger.debug(

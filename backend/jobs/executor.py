@@ -15,9 +15,10 @@ Example::
 from __future__ import annotations
 
 import logging
-import time
 from collections.abc import Callable
 from datetime import datetime, timezone
+
+from market_utils import is_indian_market
 
 _logger = logging.getLogger(__name__)
 
@@ -73,17 +74,17 @@ def execute_data_refresh(
     registry = repo.get_all_registry()
     tickers = list(registry.keys())
 
-    def _is_india(t: str) -> bool:
-        if t.endswith((".NS", ".BO")):
-            return True
-        mkt = registry.get(t, {}).get("market", "")
-        return mkt.upper() in ("NSE", "BSE", "INDIA")
-
     if scope == "india":
-        tickers = [t for t in tickers if _is_india(t)]
+        tickers = [
+            t for t in tickers
+            if is_indian_market(t, registry.get(t, {}).get("market"))
+        ]
     elif scope == "us":
         tickers = [
-            t for t in tickers if not _is_india(t)
+            t for t in tickers
+            if not is_indian_market(
+                t, registry.get(t, {}).get("market"),
+            )
         ]
 
     # Resolve canonical symbols to yfinance tickers.

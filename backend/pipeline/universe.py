@@ -1,7 +1,8 @@
 """Stock universe CRUD operations for stock_master + stock_tags."""
 import logging
+from datetime import datetime, timezone
 
-from sqlalchemy import select, func
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.models.stock_master import StockMaster
@@ -79,7 +80,7 @@ async def upsert_stock(
                 setattr(existing, field, new_val)
                 changed = True
         if changed:
-            existing.updated_at = func.now()
+            existing.updated_at = datetime.now(timezone.utc)
         return existing, False
 
     stock = StockMaster(
@@ -134,7 +135,7 @@ async def sync_tags(
     removed = []
     for tag_name in sorted(to_remove):
         tag_obj = tag_map[tag_name]
-        tag_obj.removed_at = func.now()
+        tag_obj.removed_at = datetime.now(timezone.utc)
         removed.append(tag_name)
 
     return {"added": added, "removed": removed}
