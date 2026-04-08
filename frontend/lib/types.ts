@@ -491,6 +491,56 @@ export interface HealthSummary {
   disabled: number;
 }
 
+// ---------------------------------------------------------------
+// Portfolio Analytics (Sprint 6 — W1–W5)
+// ---------------------------------------------------------------
+
+export interface AllocationItem {
+  sector: string;
+  value: number;
+  weight_pct: number;
+  stock_count: number;
+  tickers: string[];
+}
+
+export interface AllocationResponse {
+  sectors: AllocationItem[];
+  total_value: number;
+  currency: string;
+}
+
+export interface NewsHeadline {
+  title: string;
+  url: string;
+  source: string;
+  published_at: string;
+  ticker: string | null;
+  sentiment: number;
+}
+
+export interface PortfolioNewsResponse {
+  headlines: NewsHeadline[];
+  portfolio_sentiment: number;
+  portfolio_sentiment_label: string;
+  market_sentiment: number;
+  market_sentiment_label: string;
+}
+
+export interface Recommendation {
+  type: string;
+  severity: string;
+  title: string;
+  description: string;
+  ticker: string | null;
+  metric_value: number;
+  threshold: number;
+}
+
+export interface RecommendationsResponse {
+  recommendations: Recommendation[];
+  portfolio_health: string;
+}
+
 export interface TierHealthResponse {
   timestamp: number;
   health: {

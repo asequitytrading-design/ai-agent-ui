@@ -17,6 +17,10 @@ import type {
   LLMUsageResponse,
   RegistryResponse,
   DashboardHomeResponse,
+  AllocationResponse,
+  PortfolioNewsResponse,
+  PortfolioPerformanceResponse,
+  RecommendationsResponse,
 } from "@/lib/types";
 
 export interface DashboardData<T> {
@@ -79,6 +83,44 @@ export function useAnalysisLatest(): DashboardData<AnalysisResponse> {
 export function useLLMUsage(): DashboardData<LLMUsageResponse> {
   return useDashboardData<LLMUsageResponse>(
     "/dashboard/llm-usage",
+  );
+}
+
+// ---------------------------------------------------------------
+// Portfolio Analytics (Sprint 6)
+// ---------------------------------------------------------------
+
+export function usePortfolioPerformance(
+  market: string = "india",
+  period: string = "ALL",
+): DashboardData<PortfolioPerformanceResponse> {
+  const currency = market === "india" ? "INR" : "USD";
+  return useDashboardData<PortfolioPerformanceResponse>(
+    `/dashboard/portfolio/performance?currency=${currency}&period=${period}`,
+  );
+}
+
+export function useSectorAllocation(
+  market: string = "india",
+): DashboardData<AllocationResponse> {
+  return useDashboardData<AllocationResponse>(
+    `/dashboard/portfolio/allocation?market=${market}`,
+  );
+}
+
+export function usePortfolioNews(
+  market: string = "india",
+): DashboardData<PortfolioNewsResponse> {
+  return useDashboardData<PortfolioNewsResponse>(
+    `/dashboard/portfolio/news?market=${market}`,
+  );
+}
+
+export function useRecommendations(
+  market: string = "india",
+): DashboardData<RecommendationsResponse> {
+  return useDashboardData<RecommendationsResponse>(
+    `/dashboard/portfolio/recommendations?market=${market}`,
   );
 }
 

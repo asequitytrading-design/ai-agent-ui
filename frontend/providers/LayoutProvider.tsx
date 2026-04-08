@@ -34,8 +34,10 @@ const LayoutContext =
 const STORAGE_KEY = "sidebar_collapsed";
 
 function getStoredCollapsed(): boolean {
-  if (typeof window === "undefined") return false;
-  return localStorage.getItem(STORAGE_KEY) === "true";
+  if (typeof window === "undefined") return true;
+  const stored = localStorage.getItem(STORAGE_KEY);
+  // Default to collapsed if no preference saved
+  return stored === null ? true : stored === "true";
 }
 
 export function LayoutProvider({
@@ -44,7 +46,7 @@ export function LayoutProvider({
   children: ReactNode;
 }) {
   const [sidebarCollapsed, setSidebarCollapsedRaw] =
-    useState(false);
+    useState(true);
   const [mobileMenuOpen, setMobileMenuOpen] =
     useState(false);
   const hydrated = useRef(false);
