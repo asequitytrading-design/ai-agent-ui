@@ -49,23 +49,23 @@ All pages fully migrated from Dash to Next.js.
 
 ```bash
 # run.sh — Docker Compose wrapper (preferred)
-./run.sh start                              # docker compose up + native frontend
-./run.sh stop                               # docker compose down + kill frontend
+./run.sh start                              # all services via docker compose
+./run.sh stop                               # docker compose down
+./run.sh restart                            # stop + start all
+./run.sh restart frontend                   # restart only frontend
+./run.sh restart backend                    # restart only backend
+./run.sh stop redis                         # stop only redis
 ./run.sh status                             # service health table
 ./run.sh logs backend                       # Docker service logs
 ./run.sh logs backend -f                    # follow Docker logs
-./run.sh logs frontend                      # native frontend log
 ./run.sh logs --errors                      # errors across all services
 ./run.sh doctor                             # diagnostic checks
 
 # Direct Docker Compose (also works)
-docker compose up -d                        # all services (except frontend)
+docker compose up -d                        # all services
 docker compose build backend               # rebuild after requirements.txt changes
 docker compose ps                           # health check
 docker compose down                         # stop all
-
-# Frontend runs natively (Turbopack + lightningcss can't run in Alpine)
-cd frontend && npm run dev                  # started automatically by run.sh
 
 # Ollama (host-native, not containerized)
 ollama-profile coding                       # load Qwen for code gen
@@ -310,8 +310,8 @@ Load any memory with `read_memory` when you need the details.
 - **Frontend Docker**: `Dockerfile.frontend` uses `node:22-slim`
   (Debian), not Alpine — lightningcss native addons require glibc.
   Standalone server needs `HOSTNAME=0.0.0.0` to bind all interfaces.
-  Dev mode (`next dev`) still runs natively on host (Turbopack
-  hot-reload doesn't work through Docker volumes).
+  Restart with `./run.sh restart frontend` (doesn't touch other
+  services).
 - **Iceberg flush window**: `ObservabilityCollector` flushes every
   30s. Restarts within that window lose unflushed events.
   `seed_daily_from_iceberg()` on `TokenBudget` and

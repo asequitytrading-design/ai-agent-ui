@@ -2,28 +2,24 @@
 # run.sh — Docker Compose wrapper for AI Agent UI.
 #
 # Usage:
-#   ./run.sh start    — docker compose up + native frontend
-#   ./run.sh stop     — docker compose down + kill frontend
-#   ./run.sh status   — show service health table
-#   ./run.sh restart  — stop then start
-#   ./run.sh logs     — tail service logs
-#   ./run.sh doctor   — run diagnostic checks
+#   ./run.sh start   [service] — start all or one service
+#   ./run.sh stop    [service] — stop all or one service
+#   ./run.sh restart [service] — restart (no rebuild)
+#   ./run.sh build   [service] — build images only
+#   ./run.sh rebuild [service] — build + restart (after code changes)
+#   ./run.sh status            — show service health table
+#   ./run.sh logs              — tail service logs
+#   ./run.sh doctor            — run diagnostic checks
 #
-# Services (via Docker Compose):
+# Services (all via Docker Compose):
 #   postgres   PostgreSQL 16 + pgvector  localhost:5432
 #   redis      Redis 7 cache/sessions    localhost:6379
 #   backend    FastAPI + agentic loop    localhost:8181
+#   frontend   Next.js 16 (Debian slim)  localhost:3000
 #   docs       MkDocs Material site      localhost:8000
-#
-# Native (host):
-#   frontend   Next.js 16 + Turbopack    localhost:3000
-#              (Can't run in Docker — lightningcss .node
-#               addons fail in Alpine/Turbopack sandbox)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="${HOME}/.ai-agent-ui/logs"
-FRONTEND_PORT=3000
-NPM="$(command -v npm 2>/dev/null || echo 'npm')"
 
 # ANSI colours (disabled when not writing to a terminal)
 if [[ -t 1 ]]; then
@@ -37,41 +33,6 @@ mkdir -p "$LOG_DIR"
 
 # ── Helpers ──────────────────────────────────────────
 
-# PIDs listening on a port (newline-separated).
-_pids_on_port() {
-    local port="$1"
-    if command -v lsof &>/dev/null; then
-        lsof -ti:"$port" 2>/dev/null || true
-    elif command -v ss &>/dev/null; then
-        ss -tlnp "sport = :${port}" 2>/dev/null \
-            | grep -oP 'pid=\K[0-9]+' | sort -u || true
-    elif command -v fuser &>/dev/null; then
-        fuser "${port}/tcp" 2>/dev/null \
-            | tr -s ' ' '\n' | grep -E '^[0-9]+$' || true
-    fi
-}
-
-_port_up() { [[ -n "$(_pids_on_port "$1")" ]]; }
-
-_kill_port() {
-    local port="$1" label="$2"
-    local pids
-    pids=$(_pids_on_port "$port")
-    [[ -z "$pids" ]] && return 0
-    # shellcheck disable=SC2086
-    printf "  Stopping %-10s  port %-4s  PID %s\n" \
-        "$label" "$port" "$(echo $pids | tr '\n' ' ')"
-    # shellcheck disable=SC2086
-    kill $pids 2>/dev/null || true
-    local i=0
-    while _port_up "$port" && (( i < 15 )); do
-        sleep 0.3; (( i++ ))
-    done
-    pids=$(_pids_on_port "$port")
-    # shellcheck disable=SC2086
-    [[ -n "$pids" ]] && kill -9 $pids 2>/dev/null || true
-}
-
 # ── Docker Compose helpers ───────────────────────────
 
 # Run docker compose from the project directory
@@ -84,57 +45,27 @@ _dc_status() {
         2>/dev/null | grep "$1" | head -1
 }
 
-# ── Frontend (native) helpers ────────────────────────
-
-_frontend_running() { _port_up "$FRONTEND_PORT"; }
-
-_frontend_start() {
-    if _frontend_running; then
-        echo -e "  ${G}Frontend already running on port ${FRONTEND_PORT}${N}"
-        return 0
-    fi
-
-    # Ensure node_modules exist
-    if [[ ! -d "${SCRIPT_DIR}/frontend/node_modules" ]]; then
-        echo "  Installing frontend dependencies..."
-        (cd "${SCRIPT_DIR}/frontend" && "$NPM" install \
-            >> "${LOG_DIR}/frontend.log" 2>&1)
-    fi
-
-    echo "  Launching frontend (native — Turbopack)..."
-    (cd "${SCRIPT_DIR}/frontend" && exec "$NPM" run dev \
-        -- --port "$FRONTEND_PORT" \
-        >> "${LOG_DIR}/frontend.log" 2>&1) &
-    disown "$!" 2>/dev/null || true
-}
-
-_frontend_stop() {
-    if ! _frontend_running; then return 0; fi
-    _kill_port "$FRONTEND_PORT" "frontend"
-}
-
 # ── Status table ─────────────────────────────────────
 
-_DOCKER_SERVICES=(postgres redis backend docs)
-_DOCKER_PORTS=(5432 6379 8181 8000)
+_DOCKER_SERVICES=(postgres redis backend frontend docs)
+_DOCKER_PORTS=(5432 6379 8181 3000 8000)
 _DOCKER_URLS=(
     "postgresql://localhost:5432"
     "redis://localhost:6379"
     "http://localhost:8181"
+    "http://localhost:3000"
     "http://localhost:8000"
 )
 
 _print_table() {
     echo ""
-    printf "${B}  %-12s  %-8s  %-32s  %s${N}\n" \
-        "Service" "Mode" "URL" "Status"
+    printf "${B}  %-12s  %-32s  %s${N}\n" \
+        "Service" "URL" "Status"
     printf "  %s\n" \
-        "──────────────────────────────────────────────────────────────"
+        "──────────────────────────────────────────────────────────"
 
-    # Docker services
     for i in "${!_DOCKER_SERVICES[@]}"; do
         local svc="${_DOCKER_SERVICES[$i]}"
-        local port="${_DOCKER_PORTS[$i]}"
         local url="${_DOCKER_URLS[$i]}"
         local info state
 
@@ -148,9 +79,9 @@ _print_table() {
             if echo "$raw_status" | grep -q "Up"; then
                 if [[ "$health" == "healthy" ]] \
                     || [[ -z "$health" ]]; then
-                    state="${G}● up (docker)${N}"
+                    state="${G}● up${N}"
                 else
-                    state="${Y}◐ ${health} (docker)${N}"
+                    state="${Y}◐ ${health}${N}"
                 fi
             else
                 state="${R}○ down${N}"
@@ -158,26 +89,67 @@ _print_table() {
         else
             state="${R}○ not created${N}"
         fi
-        printf "  %-12s  %-8s  %-32s  " "$svc" "docker" "$url"
+        printf "  %-12s  %-32s  " "$svc" "$url"
         echo -e "$state"
     done
-
-    # Frontend (native)
-    local fe_state
-    if _frontend_running; then
-        fe_state="${G}● up (native)${N}"
-    else
-        fe_state="${R}○ down${N}"
-    fi
-    printf "  %-12s  %-8s  %-32s  " \
-        "frontend" "native" "http://localhost:${FRONTEND_PORT}"
-    echo -e "$fe_state"
     echo ""
+}
+
+# ── Per-service helpers ──────────────────────────────
+
+_validate_service() {
+    local svc="$1"
+    case "$svc" in
+        postgres|redis|backend|docs|frontend) return 0 ;;
+        *)
+            echo -e "${R}Unknown service: ${svc}${N}"
+            echo "  Valid: postgres redis backend docs frontend"
+            exit 1
+            ;;
+    esac
+}
+
+_start_service() {
+    local svc="$1"
+    _validate_service "$svc"
+    echo -e "${B}Starting ${svc}...${N}"
+    _dc start "$svc" 2>&1 | sed 's/^/    /'
+    echo -e "  ${G}${svc} started${N}"
+}
+
+_stop_service() {
+    local svc="$1"
+    _validate_service "$svc"
+    echo -e "${B}Stopping ${svc}...${N}"
+    _dc stop "$svc" 2>&1 | sed 's/^/    /'
+    echo -e "  ${G}${svc} stopped${N}"
+}
+
+_build_service() {
+    local svc="$1"
+    _validate_service "$svc"
+    echo -e "${B}Building ${svc}...${N}"
+    _dc build "$svc" 2>&1 | sed 's/^/    /'
+    echo -e "  ${G}${svc} built${N}"
+}
+
+_rebuild_service() {
+    local svc="$1"
+    _validate_service "$svc"
+    echo -e "${B}Rebuilding and restarting ${svc}...${N}"
+    _dc up -d --build "$svc" 2>&1 | sed 's/^/    /'
+    echo -e "  ${G}${svc} rebuilt and running${N}"
 }
 
 # ── Commands ─────────────────────────────────────────
 
 do_start() {
+    local svc="${1:-}"
+    if [[ -n "$svc" ]]; then
+        _start_service "$svc"
+        return
+    fi
+
     echo -e "${B}AI Agent UI — starting services${N}"
     echo ""
 
@@ -188,7 +160,7 @@ do_start() {
         exit 1
     fi
 
-    # Start Docker services (postgres, redis, backend, docs)
+    # Start all Docker services
     echo "  Starting Docker services..."
     _dc up -d --build 2>&1 | sed 's/^/    /'
     echo ""
@@ -212,10 +184,7 @@ do_start() {
         echo -e "  ${Y}Backend not responding after 60s — check logs${N}"
     fi
 
-    # Start frontend natively (can't run in Docker)
-    _frontend_start
-
-    # Wait for frontend
+    # Wait for frontend container
     sleep 3
 
     _print_table
@@ -227,13 +196,16 @@ do_start() {
 }
 
 do_stop() {
+    local svc="${1:-}"
+    if [[ -n "$svc" ]]; then
+        _stop_service "$svc"
+        return
+    fi
+
     echo -e "${B}AI Agent UI — stopping services${N}"
     echo ""
 
-    # Stop native frontend first
-    _frontend_stop
-
-    # Stop Docker services
+    # Stop all Docker services
     echo "  Stopping Docker services..."
     _dc down 2>&1 | sed 's/^/    /'
     echo ""
@@ -256,29 +228,17 @@ do_logs() {
     if [[ "$svc" == "--errors" ]]; then
         echo -e "${B}Errors across Docker service logs:${N}"
         echo ""
-        for s in postgres redis backend docs; do
+        for s in postgres redis backend frontend docs; do
             local errs
             errs=$(_dc logs --tail=200 "$s" 2>/dev/null \
                 | grep -E "ERROR|CRITICAL|Traceback" \
                 | tail -n 20)
             if [[ -n "$errs" ]]; then
-                echo -e "  ${R}── $s (docker) ──${N}"
+                echo -e "  ${R}── $s ──${N}"
                 echo "$errs" | sed 's/^/    /'
                 echo ""
             fi
         done
-        # Frontend native log
-        local fe_log="${LOG_DIR}/frontend.log"
-        if [[ -f "$fe_log" ]]; then
-            local fe_errs
-            fe_errs=$(grep -E "ERROR|error|Error" \
-                "$fe_log" 2>/dev/null | tail -n 20)
-            if [[ -n "$fe_errs" ]]; then
-                echo -e "  ${R}── frontend (native) ──${N}"
-                echo "$fe_errs" | sed 's/^/    /'
-                echo ""
-            fi
-        fi
         return
     fi
 
@@ -289,30 +249,16 @@ do_logs() {
             echo "  Valid: $all_services"
             return 1
         fi
-        if [[ "$svc" == "frontend" ]]; then
-            # Frontend logs are local files
-            if [[ "$flag" == "--errors" ]]; then
-                grep -E "ERROR|error|Error" \
-                    "${LOG_DIR}/frontend.log" 2>/dev/null \
-                    | tail -n 30 || echo "  No errors found."
-            else
-                tail -n 50 "${LOG_DIR}/frontend.log" \
-                    2>/dev/null \
-                    || echo "  No log: ${LOG_DIR}/frontend.log"
-            fi
+        if [[ "$flag" == "--errors" ]]; then
+            _dc logs --tail=200 "$svc" 2>/dev/null \
+                | grep -E "ERROR|CRITICAL|Traceback" \
+                | tail -n 30 \
+                || echo "  No errors found."
+        elif [[ "$flag" == "-f" ]] \
+            || [[ "$flag" == "--follow" ]]; then
+            _dc logs -f "$svc" 2>/dev/null
         else
-            # Docker service logs
-            if [[ "$flag" == "--errors" ]]; then
-                _dc logs --tail=200 "$svc" 2>/dev/null \
-                    | grep -E "ERROR|CRITICAL|Traceback" \
-                    | tail -n 30 \
-                    || echo "  No errors found."
-            elif [[ "$flag" == "-f" ]] \
-                || [[ "$flag" == "--follow" ]]; then
-                _dc logs -f "$svc" 2>/dev/null
-            else
-                _dc logs --tail=50 "$svc" 2>/dev/null
-            fi
+            _dc logs --tail=50 "$svc" 2>/dev/null
         fi
         return
     fi
@@ -320,16 +266,11 @@ do_logs() {
     # ./run.sh logs (all)
     echo -e "${B}Last 50 lines from all service logs:${N}"
     echo ""
-    for s in postgres redis backend docs; do
-        echo -e "  ${C}── $s (docker) ──${N}"
+    for s in postgres redis backend frontend docs; do
+        echo -e "  ${C}── $s ──${N}"
         _dc logs --tail=50 "$s" 2>/dev/null | sed 's/^/    /'
         echo ""
     done
-    echo -e "  ${C}── frontend (native) ──${N}"
-    tail -n 50 "${LOG_DIR}/frontend.log" 2>/dev/null \
-        | sed 's/^/    /' \
-        || echo "    No log file."
-    echo ""
 }
 
 # ── Doctor command ───────────────────────────────────
@@ -387,38 +328,7 @@ do_doctor() {
         fi
     done
 
-    # 3. Frontend (native)
-    if _frontend_running; then
-        _doc_pass "Frontend (native) responding on port $FRONTEND_PORT"
-    else
-        _doc_warn "Frontend not running"
-        echo "        Fix: ./run.sh start"
-    fi
-
-    # 4. Node.js
-    if command -v node &>/dev/null; then
-        local _nv
-        _nv="$(node --version)"
-        local _nm="${_nv#v}"; _nm="${_nm%%.*}"
-        if [[ "$_nm" -ge 18 ]]; then
-            _doc_pass "Node.js $_nv"
-        else
-            _doc_fail "Node.js $_nv too old (need 18+)"
-        fi
-    else
-        _doc_fail "Node.js not installed"
-        echo "        Fix: Install from https://nodejs.org"
-    fi
-
-    # 5. node_modules
-    if [[ -d "${SCRIPT_DIR}/frontend/node_modules" ]]; then
-        _doc_pass "frontend/node_modules exists"
-    else
-        _doc_fail "frontend/node_modules missing"
-        echo "        Fix: cd frontend && npm ci"
-    fi
-
-    # 6. .env file
+    # 3. .env file
     local _env="${SCRIPT_DIR}/.env"
     if [[ -f "$_env" ]] || [[ -L "$_env" ]]; then
         _doc_pass ".env file exists"
@@ -449,7 +359,7 @@ do_doctor() {
 
     # 9. Docker logs errors
     local _log_errs=0
-    for s in postgres redis backend docs; do
+    for s in postgres redis backend frontend docs; do
         local errs
         errs=$(_dc logs --tail=100 "$s" 2>/dev/null \
             | grep -E "ERROR|CRITICAL|Traceback" | tail -1)
@@ -475,21 +385,55 @@ do_doctor() {
 # ── Entry point ──────────────────────────────────────
 
 case "${1:-help}" in
-    start)   do_start ;;
-    stop)    do_stop ;;
+    start)   do_start "${2:-}" ;;
+    stop)    do_stop "${2:-}" ;;
     status)  do_status ;;
-    restart) do_stop; sleep 1; do_start ;;
+    restart)
+        if [[ -n "${2:-}" ]]; then
+            _stop_service "$2"; sleep 1; _start_service "$2"
+        else
+            do_stop; sleep 1; do_start
+        fi
+        ;;
+    build)
+        if [[ -n "${2:-}" ]]; then
+            _build_service "$2"
+        else
+            echo -e "${B}Building all services...${N}"
+            _dc build 2>&1 | sed 's/^/    /'
+            echo -e "  ${G}All services built${N}"
+        fi
+        ;;
+    rebuild)
+        if [[ -n "${2:-}" ]]; then
+            _rebuild_service "$2"
+        else
+            echo -e "${B}Rebuilding all services...${N}"
+            _dc up -d --build 2>&1 | sed 's/^/    /'
+            echo -e "  ${G}All services rebuilt and running${N}"
+        fi
+        ;;
     logs)    do_logs "${2:-}" "${3:-}" ;;
     doctor)  do_doctor ;;
     *)
-        echo -e "${B}Usage:${N} $(basename "$0") {start|stop|status|restart|logs|doctor}"
+        echo -e "${B}Usage:${N} $(basename "$0") {start|stop|restart|build|rebuild|status|logs|doctor} [service]"
         echo ""
-        echo "  start      Start all services (Docker + native frontend)"
-        echo "  stop       Stop all services"
-        echo "  status     Show health for each service"
-        echo "  restart    Stop then start"
-        echo "  logs       Tail service logs"
-        echo "  doctor     Run diagnostic checks"
+        echo "  start   [service]  Start all or one service"
+        echo "  stop    [service]  Stop all or one service"
+        echo "  restart [service]  Restart all or one service (no rebuild)"
+        echo "  build   [service]  Build images only (no restart)"
+        echo "  rebuild [service]  Build + restart (use after code changes)"
+        echo "  status             Show health for each service"
+        echo "  logs               Tail service logs"
+        echo "  doctor             Run diagnostic checks"
+        echo ""
+        echo "  Examples:"
+        echo "    ./run.sh start              Start all services"
+        echo "    ./run.sh restart frontend   Restart only frontend (no rebuild)"
+        echo "    ./run.sh rebuild frontend   Rebuild + restart frontend"
+        echo "    ./run.sh rebuild backend    Rebuild + restart backend"
+        echo "    ./run.sh build              Build all images"
+        echo "    ./run.sh stop redis         Stop only Redis"
         echo ""
         echo "  Logs usage:"
         echo "    ./run.sh logs              All service logs (last 50 lines)"
@@ -498,14 +442,12 @@ case "${1:-help}" in
         echo "    ./run.sh logs --errors     Errors across all logs"
         echo "    ./run.sh logs backend --errors  Errors for one service"
         echo ""
-        echo "  Services (Docker Compose):"
+        echo "  Services (all Docker Compose):"
         printf "    %-12s  %s\n" "postgres" "PostgreSQL 16 →  localhost:5432"
         printf "    %-12s  %s\n" "redis"    "Redis 7       →  localhost:6379"
         printf "    %-12s  %s\n" "backend"  "FastAPI       →  localhost:8181"
-        printf "    %-12s  %s\n" "docs"     "MkDocs        →  localhost:8000"
-        echo ""
-        echo "  Service (Native — Turbopack can't run in Docker):"
         printf "    %-12s  %s\n" "frontend" "Next.js 16    →  localhost:3000"
+        printf "    %-12s  %s\n" "docs"     "MkDocs        →  localhost:8000"
         exit 1
         ;;
 esac
