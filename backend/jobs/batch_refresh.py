@@ -185,12 +185,14 @@ def batch_data_refresh(
     ohlcv_starts: dict[str, str | None] = {}
     for t in tickers:
         latest = stock_repo.get_latest_ohlcv_date(t)
-        if latest and latest >= yesterday:
-            # Fresh — skip OHLCV, still fetch info/divs
-            ohlcv_starts[t] = "__skip__"
-        elif latest:
-            # Stale — delta from last date
-            ohlcv_starts[t] = str(latest)
+        if latest is not None:
+            # Normalize to date for comparison
+            if hasattr(latest, "date"):
+                latest = latest.date()
+            if latest >= yesterday:
+                ohlcv_starts[t] = "__skip__"
+            else:
+                ohlcv_starts[t] = str(latest)
         else:
             # New — full 10y
             ohlcv_starts[t] = None
