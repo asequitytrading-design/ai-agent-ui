@@ -15,10 +15,17 @@ Example::
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import Callable
+from concurrent.futures import (
+    ThreadPoolExecutor,
+    as_completed,
+)
 from datetime import datetime, timezone
 
 from market_utils import is_indian_market
+
+_iceberg_write_lock = threading.Lock()
 
 _logger = logging.getLogger(__name__)
 
@@ -41,6 +48,73 @@ def register_job(job_type: str):
         return fn
 
     return wrapper
+
+
+# ------------------------------------------------------------------
+# Parallel fetch infrastructure
+# ------------------------------------------------------------------
+
+
+def _parallel_fetch(
+    tickers: list[str],
+    fetch_fn,
+    repo,
+    run_id: str,
+    cancel_event=None,
+    max_workers: int = 5,
+) -> tuple[int, list[str], bool]:
+    """Fetch tickers in parallel with progress tracking.
+
+    Args:
+        tickers: List of ticker symbols.
+        fetch_fn: Callable(ticker) that does the work.
+            May raise on failure.
+        repo: StockRepository for progress updates.
+        run_id: Scheduler run ID.
+        cancel_event: Threading event for cancellation.
+        max_workers: Concurrent fetch threads.
+
+    Returns:
+        (done_count, error_list, cancelled) tuple.
+    """
+    done = 0
+    errors: list[str] = []
+    cancelled = False
+    lock = threading.Lock()
+
+    with ThreadPoolExecutor(
+        max_workers=max_workers,
+    ) as pool:
+        future_map = {pool.submit(fetch_fn, t): t for t in tickers}
+        for future in as_completed(future_map):
+            if cancel_event and cancel_event.is_set():
+                pool.shutdown(
+                    wait=False,
+                    cancel_futures=True,
+                )
+                cancelled = True
+                break
+            ticker = future_map[future]
+            try:
+                future.result()
+            except Exception as exc:
+                _logger.warning(
+                    "[scheduler] %s failed: %s",
+                    ticker,
+                    exc,
+                )
+                with lock:
+                    errors.append(
+                        f"{ticker}: {exc}",
+                    )
+            with lock:
+                done += 1
+            repo.update_scheduler_run(
+                run_id,
+                {"tickers_done": done},
+            )
+
+    return done, errors, cancelled
 
 
 # ------------------------------------------------------------------
@@ -107,48 +181,24 @@ def execute_data_refresh(
         {"tickers_total": total},
     )
 
-    done = 0
-    errors: list[str] = []
-
-    cancelled = False
-    for ticker in tickers:
-        # Check for cancellation before each ticker
-        if cancel_event and cancel_event.is_set():
-            _logger.info(
-                "[scheduler] Run %s cancelled at %d/%d",
-                run_id,
-                done,
-                total,
-            )
-            cancelled = True
-            break
-
-        # Use yf_ticker for yfinance-based refresh
+    def _refresh_one(ticker):
         refresh_ticker = yf_map.get(ticker, ticker)
-        try:
-            _logger.info(
-                "[scheduler] Refreshing %s (%d/%d)",
-                refresh_ticker,
-                done + 1,
-                total,
-            )
-            result = run_full_refresh(refresh_ticker)
-            if not result.success:
-                errors.append(
-                    f"{refresh_ticker}: {result.error}",
-                )
-        except Exception as exc:
-            _logger.warning(
-                "[scheduler] %s refresh failed: %s",
-                refresh_ticker,
-                exc,
-            )
-            errors.append(f"{refresh_ticker}: {exc}")
-        done += 1
-        repo.update_scheduler_run(
-            run_id,
-            {"tickers_done": done},
+        _logger.info(
+            "[scheduler] Refreshing %s",
+            refresh_ticker,
         )
+        result = run_full_refresh(refresh_ticker)
+        if not result.success:
+            raise RuntimeError(result.error)
+
+    done, errors, cancelled = _parallel_fetch(
+        tickers,
+        _refresh_one,
+        repo,
+        run_id,
+        cancel_event,
+        max_workers=5,
+    )
 
     # Final status
     if cancelled:
@@ -239,50 +289,29 @@ def execute_fetch_quarterly(
         {"tickers_total": total},
     )
 
-    done = 0
-    errors: list[str] = []
-
-    cancelled = False
-    for ticker in tickers:
-        if cancel_event and cancel_event.is_set():
-            _logger.info(
-                "[scheduler] Run %s cancelled" " at %d/%d",
-                run_id,
-                done,
-                total,
-            )
-            cancelled = True
-            break
-
+    def _quarterly_one(ticker):
         yf_ticker = yf_map.get(ticker, ticker)
-        try:
-            _logger.info(
-                "[scheduler] Quarterly fetch" " %s (%d/%d)",
-                yf_ticker,
-                done + 1,
-                total,
-            )
+        _logger.info(
+            "[scheduler] Quarterly fetch %s",
+            yf_ticker,
+        )
+        with _iceberg_write_lock:
             result = _fetch_and_store_quarterly(
                 yf_ticker,
                 stock_repo,
                 force=True,
             )
-            if result.startswith("Error"):
-                errors.append(
-                    f"{yf_ticker}: {result}",
-                )
-        except Exception as exc:
-            _logger.warning(
-                "[scheduler] %s quarterly" " fetch failed: %s",
-                yf_ticker,
-                exc,
-            )
-            errors.append(f"{yf_ticker}: {exc}")
-        done += 1
-        repo.update_scheduler_run(
-            run_id,
-            {"tickers_done": done},
-        )
+        if result.startswith("Error"):
+            raise RuntimeError(result)
+
+    done, errors, cancelled = _parallel_fetch(
+        tickers,
+        _quarterly_one,
+        repo,
+        run_id,
+        cancel_event,
+        max_workers=5,
+    )
 
     # Final status
     if cancelled:
