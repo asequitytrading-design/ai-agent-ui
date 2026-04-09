@@ -179,22 +179,40 @@ def batch_data_refresh(
         {"tickers_total": total},
     )
 
-    # ── Pre-filter: check OHLCV freshness ──────────────
+    # ── Pre-filter: check OHLCV freshness (single query) ─
     today = date.today()
     yesterday = today - timedelta(days=1)
     ohlcv_starts: dict[str, str | None] = {}
+    try:
+        from backend.db.duckdb_engine import (
+            query_iceberg_df,
+        )
+
+        latest_df = query_iceberg_df(
+            "stocks.ohlcv",
+            "SELECT ticker, MAX(date) AS latest " "FROM ohlcv GROUP BY ticker",
+        )
+        latest_map: dict = {}
+        if not latest_df.empty:
+            for _, row in latest_df.iterrows():
+                d = row["latest"]
+                if hasattr(d, "date"):
+                    d = d.date()
+                latest_map[row["ticker"]] = d
+    except Exception:
+        _logger.warning(
+            "[batch] DuckDB freshness query failed; " "treating all as new",
+            exc_info=True,
+        )
+        latest_map = {}
+
     for t in tickers:
-        latest = stock_repo.get_latest_ohlcv_date(t)
-        if latest is not None:
-            # Normalize to date for comparison
-            if hasattr(latest, "date"):
-                latest = latest.date()
-            if latest >= yesterday:
-                ohlcv_starts[t] = "__skip__"
-            else:
-                ohlcv_starts[t] = str(latest)
+        latest = latest_map.get(t)
+        if latest is not None and latest >= yesterday:
+            ohlcv_starts[t] = "__skip__"
+        elif latest is not None:
+            ohlcv_starts[t] = str(latest)
         else:
-            # New — full 10y
             ohlcv_starts[t] = None
 
     fresh_count = sum(1 for v in ohlcv_starts.values() if v == "__skip__")
