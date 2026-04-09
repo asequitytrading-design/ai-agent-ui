@@ -249,7 +249,7 @@ def batch_data_refresh(
         latest_map = {}
 
     # Check quarterly freshness (7-day threshold)
-    qtr_cutoff = today - timedelta(days=7)
+    qtr_cutoff = today - timedelta(days=30)
     qtr_fresh: set[str] = set()
     try:
         qtr_df = query_iceberg_df(
