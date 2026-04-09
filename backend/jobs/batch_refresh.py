@@ -33,6 +33,7 @@ _logger = logging.getLogger(__name__)
 def _fetch_one_ticker(
     ticker: str,
     ohlcv_start: str | None = None,
+    skip_quarterly: bool = False,
 ) -> dict:
     """Fetch yfinance data for a single ticker.
 
@@ -115,55 +116,59 @@ def _fetch_one_ticker(
                 dtype=float,
             )
 
-        # Quarterly statements
+        # Quarterly statements (skip if fresh < 7d)
+        if skip_quarterly:
+            result["quarterly_rows"] = []
+            result["timings"]["quarterly"] = 0.0
         try:
-            t1 = time.monotonic()
-            from tools.stock_data_tool import (
-                _BALANCE_MAP,
-                _CASHFLOW_MAP,
-                _INCOME_MAP,
-                _extract_statement,
-            )
+            if not skip_quarterly:
+                t1 = time.monotonic()
+                from tools.stock_data_tool import (
+                    _BALANCE_MAP,
+                    _CASHFLOW_MAP,
+                    _INCOME_MAP,
+                    _extract_statement,
+                )
 
-            all_rows: list[dict] = []
-            inc = _extract_statement(
-                yt.quarterly_income_stmt,
-                _INCOME_MAP,
-                "income",
-                ticker,
-            )
-            all_rows.extend(inc)
-            bs = _extract_statement(
-                yt.quarterly_balance_sheet,
-                _BALANCE_MAP,
-                "balance",
-                ticker,
-            )
-            all_rows.extend(bs)
-            cf = _extract_statement(
-                yt.quarterly_cashflow,
-                _CASHFLOW_MAP,
-                "cashflow",
-                ticker,
-            )
-            if cf:
-                all_rows.extend(cf)
-            else:
-                annual_cf = _extract_statement(
-                    yt.cashflow,
+                all_rows: list[dict] = []
+                inc = _extract_statement(
+                    yt.quarterly_income_stmt,
+                    _INCOME_MAP,
+                    "income",
+                    ticker,
+                )
+                all_rows.extend(inc)
+                bs = _extract_statement(
+                    yt.quarterly_balance_sheet,
+                    _BALANCE_MAP,
+                    "balance",
+                    ticker,
+                )
+                all_rows.extend(bs)
+                cf = _extract_statement(
+                    yt.quarterly_cashflow,
                     _CASHFLOW_MAP,
                     "cashflow",
                     ticker,
                 )
-                if annual_cf:
-                    for r in annual_cf:
-                        r["fiscal_quarter"] = "FY"
-                    all_rows.extend(annual_cf)
-            result["quarterly_rows"] = all_rows
-            result["timings"]["quarterly"] = round(
-                time.monotonic() - t1,
-                2,
-            )
+                if cf:
+                    all_rows.extend(cf)
+                else:
+                    annual_cf = _extract_statement(
+                        yt.cashflow,
+                        _CASHFLOW_MAP,
+                        "cashflow",
+                        ticker,
+                    )
+                    if annual_cf:
+                        for r in annual_cf:
+                            r["fiscal_quarter"] = "FY"
+                        all_rows.extend(annual_cf)
+                result["quarterly_rows"] = all_rows
+                result["timings"]["quarterly"] = round(
+                    time.monotonic() - t1,
+                    2,
+                )
         except Exception:
             result["quarterly_rows"] = []
 
@@ -236,6 +241,30 @@ def batch_data_refresh(
         )
         latest_map = {}
 
+    # Check quarterly freshness (7-day threshold)
+    qtr_cutoff = today - timedelta(days=7)
+    qtr_fresh: set[str] = set()
+    try:
+        qtr_df = query_iceberg_df(
+            "stocks.quarterly_results",
+            "SELECT ticker, MAX(updated_at) AS latest "
+            "FROM quarterly_results GROUP BY ticker",
+        )
+        if not qtr_df.empty:
+            for _, row in qtr_df.iterrows():
+                d = row["latest"]
+                if hasattr(d, "date"):
+                    d = d.date()
+                if d >= qtr_cutoff:
+                    qtr_fresh.add(row["ticker"])
+    except Exception:
+        pass
+    _logger.info(
+        "[batch] Quarterly freshness: %d fresh " "(skip), %d need fetch",
+        len(qtr_fresh),
+        total - len(qtr_fresh),
+    )
+
     for t in tickers:
         latest = latest_map.get(t)
         if latest is not None and latest >= yesterday:
@@ -266,9 +295,18 @@ def batch_data_refresh(
 
     def _submit_fetch(t):
         start = ohlcv_starts.get(t)
+        skip_qtr = t in qtr_fresh
         if start == "__skip__":
-            return _fetch_one_ticker(t, "__skip__")
-        return _fetch_one_ticker(t, start)
+            return _fetch_one_ticker(
+                t,
+                "__skip__",
+                skip_qtr,
+            )
+        return _fetch_one_ticker(
+            t,
+            start,
+            skip_qtr,
+        )
 
     with ThreadPoolExecutor(
         max_workers=max_workers,
@@ -317,16 +355,16 @@ def batch_data_refresh(
                     errors.append(f"{t}: {exc}")
             with lock:
                 done += 1
-            if done % 50 == 0 or done == total:
+            if done % 25 == 0 or done == total:
                 _logger.info(
                     "[batch] Phase 1 progress: " "%d/%d fetched",
                     done,
                     total,
                 )
-            repo.update_scheduler_run(
-                run_id,
-                {"tickers_done": done},
-            )
+                repo.update_scheduler_run(
+                    run_id,
+                    {"tickers_done": done},
+                )
 
     # Phase 1 timing summary
     if results:
