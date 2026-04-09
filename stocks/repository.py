@@ -2247,13 +2247,7 @@ class StockRepository:
                 ),
                 "current_assets": pa.array(
                     (
-                        [
-                            _safe_float(v)
-                            for v in combined.get(
-                                "current_assets",
-                                [None] * len(combined),
-                            )
-                        ]
+                        [_safe_float(v) for v in combined["current_assets"]]
                         if "current_assets" in combined.columns
                         else [None] * len(combined)
                     ),
@@ -2263,10 +2257,7 @@ class StockRepository:
                     (
                         [
                             _safe_float(v)
-                            for v in combined.get(
-                                "current_liabilities",
-                                [None] * len(combined),
-                            )
+                            for v in combined["current_liabilities"]
                         ]
                         if "current_liabilities" in combined.columns
                         else [None] * len(combined)
@@ -2277,10 +2268,7 @@ class StockRepository:
                     (
                         [
                             _safe_float(v)
-                            for v in combined.get(
-                                "shares_outstanding",
-                                [None] * len(combined),
-                            )
+                            for v in combined["shares_outstanding"]
                         ]
                         if "shares_outstanding" in combined.columns
                         else [None] * len(combined)
@@ -2388,8 +2376,14 @@ class StockRepository:
         """
         if not scores:
             return 0
+        dates = {s.get("score_date") for s in scores}
+        if len(dates) > 1:
+            raise ValueError(
+                "insert_piotroski_scores requires "
+                "single-date batch; got %d dates" % len(dates)
+            )
         now = _now_utc()
-        score_date = scores[0].get("score_date")
+        score_date = next(iter(dates))
         arrow = pa.table(
             {
                 "score_id": pa.array(
