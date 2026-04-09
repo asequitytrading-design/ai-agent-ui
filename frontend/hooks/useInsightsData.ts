@@ -18,6 +18,7 @@ import type {
   SectorsResponse,
   CorrelationResponse,
   QuarterlyResponse,
+  PiotroskiResponse,
 } from "@/lib/types";
 
 export interface InsightsData<T> {
@@ -106,5 +107,20 @@ export function useQuarterly(
 ): InsightsData<QuarterlyResponse> {
   return useInsightsFetch<QuarterlyResponse>(
     `/insights/quarterly?statement_type=${statementType}`,
+  );
+}
+
+export function usePiotroski(
+  minScore: number = 0,
+  sector: string = "all",
+): InsightsData<PiotroskiResponse> {
+  const params = new URLSearchParams();
+  if (minScore > 0)
+    params.set("min_score", String(minScore));
+  if (sector !== "all")
+    params.set("sector", sector);
+  const qs = params.toString();
+  return useInsightsFetch<PiotroskiResponse>(
+    `/insights/piotroski${qs ? `?${qs}` : ""}`,
   );
 }

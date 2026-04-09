@@ -19,6 +19,7 @@ import {
   useSectors,
   useCorrelation,
   useQuarterly,
+  usePiotroski,
 } from "@/hooks/useInsightsData";
 import {
   InsightsTable,
@@ -27,6 +28,7 @@ import {
 import { InsightsFilters } from "@/components/insights/InsightsFilters";
 import { PlotlyChart } from "@/components/charts/PlotlyChart";
 import { CorrelationHeatmap } from "@/components/charts/CorrelationHeatmap";
+import { PiotroskiBadge } from "@/components/insights/PiotroskiBadge";
 import { usePortfolio } from "@/hooks/usePortfolio";
 import { WidgetSkeleton } from "@/components/widgets/WidgetSkeleton";
 import { WidgetError } from "@/components/widgets/WidgetError";
@@ -37,6 +39,7 @@ import type {
   RiskRow,
   SectorRow,
   QuarterlyRow,
+  PiotroskiRow,
 } from "@/lib/types";
 
 // ---------------------------------------------------------------
@@ -50,7 +53,8 @@ type TabId =
   | "risk"
   | "sectors"
   | "correlation"
-  | "quarterly";
+  | "quarterly"
+  | "piotroski";
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "screener", label: "Screener" },
@@ -60,6 +64,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "dividends", label: "Dividends" },
   { id: "correlation", label: "Correlation" },
   { id: "quarterly", label: "Quarterly" },
+  { id: "piotroski", label: "Piotroski F-Score" },
 ];
 
 // ---------------------------------------------------------------
@@ -553,6 +558,97 @@ const sectorCols: Column<SectorRow>[] = [
     label: "Avg Vol %",
     numeric: true,
     render: (r) => fmtNum(r.avg_volatility_pct),
+  },
+];
+
+const piotroskiCols: Column<PiotroskiRow>[] = [
+  { key: "ticker", label: "Ticker" },
+  {
+    key: "company_name",
+    label: "Company",
+    render: (r) => r.company_name ?? "\u2014",
+  },
+  {
+    key: "total_score",
+    label: "Score",
+    numeric: true,
+    render: (r) => (
+      <PiotroskiBadge
+        score={r.total_score}
+        label={r.label}
+      />
+    ),
+  },
+  {
+    key: "label",
+    label: "Rating",
+    render: (r) => r.label,
+  },
+  {
+    key: "sector",
+    label: "Sector",
+    render: (r) => r.sector ?? "\u2014",
+  },
+  {
+    key: "market_cap",
+    label: "MCap (Cr)",
+    numeric: true,
+    render: (r) =>
+      r.market_cap != null
+        ? (r.market_cap / 1e7).toFixed(0)
+        : "\u2014",
+  },
+  {
+    key: "revenue",
+    label: "Rev (Cr)",
+    numeric: true,
+    render: (r) =>
+      r.revenue != null
+        ? (r.revenue / 1e7).toFixed(0)
+        : "\u2014",
+  },
+  {
+    key: "avg_volume",
+    label: "Avg Vol",
+    numeric: true,
+    render: (r) =>
+      r.avg_volume != null
+        ? r.avg_volume.toLocaleString()
+        : "\u2014",
+  },
+  {
+    key: "action",
+    label: "Action",
+    sortable: false,
+    render: (r) => (
+      <button
+        title="Stock Analysis"
+        onClick={() =>
+          window.open(
+            `/analytics/analysis?ticker=${encodeURIComponent(r.ticker)}&tab=analysis`,
+            "_blank",
+          )
+        }
+        className="flex h-7 w-7 items-center
+          justify-center rounded-md border
+          border-gray-200 text-gray-400
+          transition-all hover:border-indigo-400
+          hover:bg-indigo-50 hover:text-indigo-600
+          dark:border-gray-700 dark:text-gray-500
+          dark:hover:border-indigo-500
+          dark:hover:bg-indigo-500/10
+          dark:hover:text-indigo-400"
+      >
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 20 20"
+          fill="currentColor"
+          className="h-3.5 w-3.5"
+        >
+          <path d="M15.5 2A1.5 1.5 0 0014 3.5v13a1.5 1.5 0 001.5 1.5h1a1.5 1.5 0 001.5-1.5v-13A1.5 1.5 0 0016.5 2h-1zM9.5 6A1.5 1.5 0 008 7.5v9A1.5 1.5 0 009.5 18h1a1.5 1.5 0 001.5-1.5v-9A1.5 1.5 0 0010.5 6h-1zM3.5 10A1.5 1.5 0 002 11.5v5A1.5 1.5 0 003.5 18h1A1.5 1.5 0 006 16.5v-5A1.5 1.5 0 004.5 10h-1z" />
+        </svg>
+      </button>
+    ),
   },
 ];
 
@@ -1200,6 +1296,87 @@ function QuarterlyTab() {
   );
 }
 
+function PiotroskiTab() {
+  const [sector, setSector] = useState("all");
+  const [minScore, setMinScore] = useState(0);
+  const data = usePiotroski(minScore, sector);
+
+  const filtered = useMemo(() => {
+    if (!data.value?.rows) return [];
+    return data.value.rows;
+  }, [data.value]);
+
+  if (data.loading) return <WidgetSkeleton />;
+  if (data.error)
+    return (
+      <WidgetError
+        message={data.error}
+        data-testid="insights-error"
+      />
+    );
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        {/* Sector filter */}
+        {(data.value?.sectors ?? []).length > 0 && (
+          <select
+            data-testid="piotroski-sector-filter"
+            value={sector}
+            onChange={(e) =>
+              setSector(e.target.value)
+            }
+            className="rounded-lg border border-gray-300
+              dark:border-gray-600 bg-white dark:bg-gray-800
+              px-2.5 py-1.5 text-sm
+              text-gray-700 dark:text-gray-200
+              focus:outline-none focus:ring-2
+              focus:ring-indigo-500/40"
+          >
+            <option value="all">All Sectors</option>
+            {(data.value?.sectors ?? []).map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+        )}
+        {/* Min score filter */}
+        <select
+          data-testid="piotroski-score-filter"
+          value={minScore}
+          onChange={(e) =>
+            setMinScore(Number(e.target.value))
+          }
+          className="rounded-lg border border-gray-300
+            dark:border-gray-600 bg-white dark:bg-gray-800
+            px-2.5 py-1.5 text-sm
+            text-gray-700 dark:text-gray-200
+            focus:outline-none focus:ring-2
+            focus:ring-indigo-500/40"
+        >
+          <option value={0}>All Scores</option>
+          <option value={8}>Strong (8-9)</option>
+          <option value={5}>Moderate+ (5-9)</option>
+        </select>
+        {data.value?.score_date && (
+          <span className="text-xs text-gray-400 dark:text-gray-500 ml-auto">
+            Scored: {data.value.score_date}
+          </span>
+        )}
+      </div>
+      <InsightsTable<PiotroskiRow>
+        columns={piotroskiCols}
+        rows={filtered}
+        defaultSort={{
+          col: "total_score",
+          dir: "desc",
+        }}
+      />
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------
@@ -1224,6 +1401,8 @@ export default function InsightsPage() {
         return <CorrelationTab />;
       case "quarterly":
         return <QuarterlyTab />;
+      case "piotroski":
+        return <PiotroskiTab />;
     }
   }, [activeTab]);
 

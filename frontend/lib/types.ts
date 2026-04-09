@@ -571,3 +571,35 @@ export interface TierHealthResponse {
     summary: HealthSummary;
   };
 }
+
+// ---------------------------------------------------------------
+// Piotroski F-Score
+// ---------------------------------------------------------------
+
+export interface PiotroskiRow {
+  ticker: string;
+  company_name: string | null;
+  total_score: number;
+  label: string;
+  roa_positive: boolean;
+  operating_cf_positive: boolean;
+  roa_increasing: boolean;
+  cf_gt_net_income: boolean;
+  leverage_decreasing: boolean;
+  current_ratio_increasing: boolean;
+  no_dilution: boolean;
+  gross_margin_increasing: boolean;
+  asset_turnover_increasing: boolean;
+  market_cap: number | null;
+  revenue: number | null;
+  avg_volume: number | null;
+  sector: string | null;
+  industry: string | null;
+  score_date: string | null;
+}
+
+export interface PiotroskiResponse {
+  rows: PiotroskiRow[];
+  sectors: string[];
+  score_date: string | null;
+}
