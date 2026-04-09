@@ -28,6 +28,8 @@ from insights_models import (
     CorrelationResponse,
     DividendRow,
     DividendsResponse,
+    PiotroskiResponse,
+    PiotroskiRow,
     QuarterlyResponse,
     QuarterlyRow,
     RiskResponse,
@@ -144,24 +146,15 @@ def _collect_sectors(
     """Unique sorted sector names for given tickers."""
     if company_df.empty or "sector" not in company_df:
         return []
-    filtered = company_df[
-        company_df["ticker"].isin(tickers)
-    ]
-    sectors = (
-        filtered["sector"]
-        .dropna()
-        .unique()
-        .tolist()
-    )
+    filtered = company_df[company_df["ticker"].isin(tickers)]
+    sectors = filtered["sector"].dropna().unique().tolist()
     return sorted(str(s) for s in sectors if s)
 
 
 def _set_cache_header(response: Response):
     """Router dependency: set Cache-Control on all."""
     yield
-    response.headers["Cache-Control"] = (
-        "private, max-age=300"
-    )
+    response.headers["Cache-Control"] = "private, max-age=300"
 
 
 def create_insights_router() -> APIRouter:
@@ -185,10 +178,7 @@ def create_insights_router() -> APIRouter:
     ):
         """Screener: analysis summary per ticker."""
         cache = get_cache()
-        ck = (
-            f"cache:insights:screener:"
-            f"{user.user_id}"
-        )
+        ck = f"cache:insights:screener:" f"{user.user_id}"
         hit = cache.get(ck)
         if hit is not None:
             return Response(
@@ -203,10 +193,7 @@ def create_insights_router() -> APIRouter:
 
         # Batch reads — 3 queries instead of 2N+1.
         try:
-            df = (
-                stock_repo
-                .get_analysis_summary_batch(tickers)
-            )
+            df = stock_repo.get_analysis_summary_batch(tickers)
         except Exception as exc:
             _logger.error("screener read: %s", exc)
             return ScreenerResponse()
@@ -221,33 +208,30 @@ def create_insights_router() -> APIRouter:
         price_map: dict[str, float | None] = {}
         if not ohlcv_df.empty:
             latest = ohlcv_df.drop_duplicates(
-                subset=["ticker"], keep="last",
+                subset=["ticker"],
+                keep="last",
             )
             for _, r in latest.iterrows():
-                price_map[str(r["ticker"])] = (
-                    _safe(r["close"])
-                )
+                price_map[str(r["ticker"])] = _safe(r["close"])
 
         # Batch TI for RSI.
-        ti_df = (
-            stock_repo
-            .get_technical_indicators_batch(tickers)
-        )
+        ti_df = stock_repo.get_technical_indicators_batch(tickers)
         rsi_map: dict[str, float | None] = {}
         if not ti_df.empty:
             latest_ti = ti_df.drop_duplicates(
-                subset=["ticker"], keep="last",
+                subset=["ticker"],
+                keep="last",
             )
             for _, r in latest_ti.iterrows():
-                rsi_map[str(r["ticker"])] = (
-                    _safe(r.get("rsi_14"))
-                )
+                rsi_map[str(r["ticker"])] = _safe(r.get("rsi_14"))
 
         company_df = _get_company_info_df(
-            stock_repo, tickers,
+            stock_repo,
+            tickers,
         )
         sectors = _collect_sectors(
-            company_df, tickers,
+            company_df,
+            tickers,
         )
 
         rows: list[ScreenerRow] = []
@@ -258,44 +242,32 @@ def create_insights_router() -> APIRouter:
                     ticker=t,
                     price=price_map.get(t),
                     rsi_14=rsi_map.get(t),
-                    rsi_signal=str(
-                        row.get("rsi_signal", "")
-                    ) or None,
-                    macd_signal=str(
-                        row.get(
-                            "macd_signal_text", ""
-                        )
-                    ) or None,
-                    sma_200_signal=str(
-                        row.get(
-                            "sma_200_signal", ""
-                        )
-                    ) or None,
+                    rsi_signal=str(row.get("rsi_signal", "")) or None,
+                    macd_signal=str(row.get("macd_signal_text", "")) or None,
+                    sma_200_signal=str(row.get("sma_200_signal", "")) or None,
                     annualized_return_pct=_safe(
-                        row.get(
-                            "annualized_return_pct"
-                        )
+                        row.get("annualized_return_pct")
                     ),
                     annualized_volatility_pct=_safe(
-                        row.get(
-                            "annualized_volatility_pct"
-                        )
+                        row.get("annualized_volatility_pct")
                     ),
-                    sharpe_ratio=_safe(
-                        row.get("sharpe_ratio")
-                    ),
+                    sharpe_ratio=_safe(row.get("sharpe_ratio")),
                     sector=_sector_for_ticker(
-                        t, company_df,
+                        t,
+                        company_df,
                     ),
                     market=_market(t),
                 )
             )
 
         result = ScreenerResponse(
-            rows=rows, sectors=sectors,
+            rows=rows,
+            sectors=sectors,
         )
         cache.set(
-            ck, result.model_dump_json(), TTL_STABLE,
+            ck,
+            result.model_dump_json(),
+            TTL_STABLE,
         )
         return result
 
@@ -312,10 +284,7 @@ def create_insights_router() -> APIRouter:
     ):
         """Price targets from forecast runs."""
         cache = get_cache()
-        ck = (
-            f"cache:insights:targets:"
-            f"{user.user_id}"
-        )
+        ck = f"cache:insights:targets:" f"{user.user_id}"
         hit = cache.get(ck)
         if hit is not None:
             return Response(
@@ -330,7 +299,8 @@ def create_insights_router() -> APIRouter:
 
         try:
             df = stock_repo._scan_tickers(
-                "stocks.forecast_runs", tickers,
+                "stocks.forecast_runs",
+                tickers,
             )
         except Exception as exc:
             _logger.error("targets read: %s", exc)
@@ -346,14 +316,17 @@ def create_insights_router() -> APIRouter:
         if "horizon_months" in df.columns:
             dedup_cols.append("horizon_months")
         df = df.drop_duplicates(
-            subset=dedup_cols, keep="last",
+            subset=dedup_cols,
+            keep="last",
         )
 
         company_df = _get_company_info_df(
-            stock_repo, tickers,
+            stock_repo,
+            tickers,
         )
         sectors = _collect_sectors(
-            company_df, tickers,
+            company_df,
+            tickers,
         )
 
         rows: list[TargetRow] = []
@@ -362,52 +335,33 @@ def create_insights_router() -> APIRouter:
             rows.append(
                 TargetRow(
                     ticker=t,
-                    horizon_months=_safe_int(
-                        row.get("horizon_months")
-                    ),
-                    run_date=str(
-                        row.get("run_date", "")
-                    ) or None,
-                    current_price=_safe(
-                        row.get("current_price_at_run")
-                    ),
-                    target_3m_price=_safe(
-                        row.get("target_3m_price")
-                    ),
-                    target_3m_pct=_safe(
-                        row.get("target_3m_pct_change")
-                    ),
-                    target_6m_price=_safe(
-                        row.get("target_6m_price")
-                    ),
-                    target_6m_pct=_safe(
-                        row.get("target_6m_pct_change")
-                    ),
-                    target_9m_price=_safe(
-                        row.get("target_9m_price")
-                    ),
-                    target_9m_pct=_safe(
-                        row.get("target_9m_pct_change")
-                    ),
-                    sentiment=str(
-                        row.get("sentiment", "")
-                    ) or None,
+                    horizon_months=_safe_int(row.get("horizon_months")),
+                    run_date=str(row.get("run_date", "")) or None,
+                    current_price=_safe(row.get("current_price_at_run")),
+                    target_3m_price=_safe(row.get("target_3m_price")),
+                    target_3m_pct=_safe(row.get("target_3m_pct_change")),
+                    target_6m_price=_safe(row.get("target_6m_price")),
+                    target_6m_pct=_safe(row.get("target_6m_pct_change")),
+                    target_9m_price=_safe(row.get("target_9m_price")),
+                    target_9m_pct=_safe(row.get("target_9m_pct_change")),
+                    sentiment=str(row.get("sentiment", "")) or None,
                     market=_market(t),
                     sector=_sector_for_ticker(
-                        t, company_df,
+                        t,
+                        company_df,
                     ),
                 )
             )
 
         result = TargetsResponse(
             rows=rows,
-            tickers=sorted(
-                df["ticker"].unique().tolist()
-            ),
+            tickers=sorted(df["ticker"].unique().tolist()),
             sectors=sectors,
         )
         cache.set(
-            ck, result.model_dump_json(), TTL_STABLE,
+            ck,
+            result.model_dump_json(),
+            TTL_STABLE,
         )
         return result
 
@@ -424,10 +378,7 @@ def create_insights_router() -> APIRouter:
     ):
         """Dividend history for user's tickers."""
         cache = get_cache()
-        ck = (
-            f"cache:insights:dividends:"
-            f"{user.user_id}"
-        )
+        ck = f"cache:insights:dividends:" f"{user.user_id}"
         hit = cache.get(ck)
         if hit is not None:
             return Response(
@@ -442,7 +393,8 @@ def create_insights_router() -> APIRouter:
 
         try:
             df = stock_repo._scan_tickers(
-                "stocks.dividends", tickers,
+                "stocks.dividends",
+                tickers,
             )
         except Exception as exc:
             _logger.error("dividends read: %s", exc)
@@ -454,14 +406,17 @@ def create_insights_router() -> APIRouter:
         # Sort by ex_date descending.
         if "ex_date" in df.columns:
             df = df.sort_values(
-                "ex_date", ascending=False,
+                "ex_date",
+                ascending=False,
             )
 
         company_df = _get_company_info_df(
-            stock_repo, tickers,
+            stock_repo,
+            tickers,
         )
         sectors = _collect_sectors(
-            company_df, tickers,
+            company_df,
+            tickers,
         )
 
         rows: list[DividendRow] = []
@@ -470,31 +425,26 @@ def create_insights_router() -> APIRouter:
             rows.append(
                 DividendRow(
                     ticker=t,
-                    ex_date=str(
-                        row.get("ex_date", "")
-                    ) or None,
-                    amount=_safe(
-                        row.get("dividend_amount")
-                    ),
-                    currency=str(
-                        row.get("currency", "USD")
-                    ) or "USD",
+                    ex_date=str(row.get("ex_date", "")) or None,
+                    amount=_safe(row.get("dividend_amount")),
+                    currency=str(row.get("currency", "USD")) or "USD",
                     market=_market(t),
                     sector=_sector_for_ticker(
-                        t, company_df,
+                        t,
+                        company_df,
                     ),
                 )
             )
 
         result = DividendsResponse(
             rows=rows,
-            tickers=sorted(
-                df["ticker"].unique().tolist()
-            ),
+            tickers=sorted(df["ticker"].unique().tolist()),
             sectors=sectors,
         )
         cache.set(
-            ck, result.model_dump_json(), TTL_STABLE,
+            ck,
+            result.model_dump_json(),
+            TTL_STABLE,
         )
         return result
 
@@ -511,9 +461,7 @@ def create_insights_router() -> APIRouter:
     ):
         """Risk metrics from analysis summary."""
         cache = get_cache()
-        ck = (
-            f"cache:insights:risk:{user.user_id}"
-        )
+        ck = f"cache:insights:risk:{user.user_id}"
         hit = cache.get(ck)
         if hit is not None:
             return Response(
@@ -527,10 +475,7 @@ def create_insights_router() -> APIRouter:
             return RiskResponse()
 
         try:
-            df = (
-                stock_repo
-                .get_analysis_summary_batch(tickers)
-            )
+            df = stock_repo.get_analysis_summary_batch(tickers)
         except Exception as exc:
             _logger.error("risk read: %s", exc)
             return RiskResponse()
@@ -539,10 +484,12 @@ def create_insights_router() -> APIRouter:
             return RiskResponse()
 
         company_df = _get_company_info_df(
-            stock_repo, tickers,
+            stock_repo,
+            tickers,
         )
         sectors = _collect_sectors(
-            company_df, tickers,
+            company_df,
+            tickers,
         )
 
         rows: list[RiskRow] = []
@@ -552,44 +499,34 @@ def create_insights_router() -> APIRouter:
                 RiskRow(
                     ticker=t,
                     annualized_return_pct=_safe(
-                        row.get(
-                            "annualized_return_pct"
-                        )
+                        row.get("annualized_return_pct")
                     ),
                     annualized_volatility_pct=_safe(
-                        row.get(
-                            "annualized_volatility_pct"
-                        )
+                        row.get("annualized_volatility_pct")
                     ),
-                    sharpe_ratio=_safe(
-                        row.get("sharpe_ratio")
-                    ),
-                    max_drawdown_pct=_safe(
-                        row.get("max_drawdown_pct")
-                    ),
+                    sharpe_ratio=_safe(row.get("sharpe_ratio")),
+                    max_drawdown_pct=_safe(row.get("max_drawdown_pct")),
                     max_drawdown_days=_safe_int(
-                        row.get(
-                            "max_drawdown_duration_days"
-                        )
+                        row.get("max_drawdown_duration_days")
                     ),
-                    bull_phase_pct=_safe(
-                        row.get("bull_phase_pct")
-                    ),
-                    bear_phase_pct=_safe(
-                        row.get("bear_phase_pct")
-                    ),
+                    bull_phase_pct=_safe(row.get("bull_phase_pct")),
+                    bear_phase_pct=_safe(row.get("bear_phase_pct")),
                     market=_market(t),
                     sector=_sector_for_ticker(
-                        t, company_df,
+                        t,
+                        company_df,
                     ),
                 )
             )
 
         result = RiskResponse(
-            rows=rows, sectors=sectors,
+            rows=rows,
+            sectors=sectors,
         )
         cache.set(
-            ck, result.model_dump_json(), TTL_STABLE,
+            ck,
+            result.model_dump_json(),
+            TTL_STABLE,
         )
         return result
 
@@ -610,10 +547,7 @@ def create_insights_router() -> APIRouter:
     ):
         """Sector-level aggregated metrics."""
         cache = get_cache()
-        ck = (
-            f"cache:insights:sectors:"
-            f"{user.user_id}:{market}"
-        )
+        ck = f"cache:insights:sectors:" f"{user.user_id}:{market}"
         hit = cache.get(ck)
         if hit is not None:
             return Response(
@@ -627,12 +561,10 @@ def create_insights_router() -> APIRouter:
             return SectorsResponse()
 
         try:
-            analysis_df = (
-                stock_repo
-                .get_analysis_summary_batch(tickers)
-            )
+            analysis_df = stock_repo.get_analysis_summary_batch(tickers)
             company_df = _get_company_info_df(
-                stock_repo, tickers,
+                stock_repo,
+                tickers,
             )
         except Exception as exc:
             _logger.error("sectors read: %s", exc)
@@ -644,15 +576,11 @@ def create_insights_router() -> APIRouter:
         # Market filter.
         if market == "india":
             analysis_df = analysis_df[
-                analysis_df["ticker"].str.endswith(
-                    (".NS", ".BO")
-                )
+                analysis_df["ticker"].str.endswith((".NS", ".BO"))
             ]
         elif market == "us":
             analysis_df = analysis_df[
-                ~analysis_df["ticker"].str.endswith(
-                    (".NS", ".BO")
-                )
+                ~analysis_df["ticker"].str.endswith((".NS", ".BO"))
             ]
 
         if analysis_df.empty:
@@ -664,16 +592,13 @@ def create_insights_router() -> APIRouter:
                 "fetched_at",
             )
         company_df = company_df.drop_duplicates(
-            subset=["ticker"], keep="last",
+            subset=["ticker"],
+            keep="last",
         )
-        sector_map = company_df.set_index("ticker")[
-            "sector"
-        ].to_dict()
+        sector_map = company_df.set_index("ticker")["sector"].to_dict()
 
         # Join sector onto analysis.
-        analysis_df["sector"] = (
-            analysis_df["ticker"].map(sector_map)
-        )
+        analysis_df["sector"] = analysis_df["ticker"].map(sector_map)
         analysis_df = analysis_df.dropna(
             subset=["sector"],
         )
@@ -683,16 +608,13 @@ def create_insights_router() -> APIRouter:
         # Aggregate per sector.
         grouped = analysis_df.groupby("sector").agg(
             stock_count=("ticker", "count"),
-            avg_return=(
-                "annualized_return_pct", "mean"
-            ),
+            avg_return=("annualized_return_pct", "mean"),
             avg_sharpe=("sharpe_ratio", "mean"),
-            avg_vol=(
-                "annualized_volatility_pct", "mean"
-            ),
+            avg_vol=("annualized_volatility_pct", "mean"),
         )
         grouped = grouped.sort_values(
-            "avg_return", ascending=False,
+            "avg_return",
+            ascending=False,
         )
 
         rows: list[SectorRow] = []
@@ -700,24 +622,18 @@ def create_insights_router() -> APIRouter:
             rows.append(
                 SectorRow(
                     sector=str(sector),
-                    stock_count=int(
-                        agg["stock_count"]
-                    ),
-                    avg_return_pct=_safe(
-                        agg["avg_return"]
-                    ),
-                    avg_sharpe=_safe(
-                        agg["avg_sharpe"]
-                    ),
-                    avg_volatility_pct=_safe(
-                        agg["avg_vol"]
-                    ),
+                    stock_count=int(agg["stock_count"]),
+                    avg_return_pct=_safe(agg["avg_return"]),
+                    avg_sharpe=_safe(agg["avg_sharpe"]),
+                    avg_volatility_pct=_safe(agg["avg_vol"]),
                 )
             )
 
         result = SectorsResponse(rows=rows)
         cache.set(
-            ck, result.model_dump_json(), TTL_STABLE,
+            ck,
+            result.model_dump_json(),
+            TTL_STABLE,
         )
         return result
 
@@ -740,9 +656,7 @@ def create_insights_router() -> APIRouter:
         ),
         source: str = Query(
             "portfolio",
-            description=(
-                "'portfolio' or 'watchlist'"
-            ),
+            description=("'portfolio' or 'watchlist'"),
         ),
         user: UserContext = Depends(get_current_user),
     ):
@@ -764,18 +678,14 @@ def create_insights_router() -> APIRouter:
 
         # Source: portfolio or watchlist
         if source == "portfolio":
-            holdings_df = (
-                stock_repo.get_portfolio_holdings(
-                    user.user_id,
-                )
+            holdings_df = stock_repo.get_portfolio_holdings(
+                user.user_id,
             )
             if holdings_df.empty:
                 tickers = []
             else:
                 tickers = list(
-                    holdings_df["ticker"]
-                    .astype(str)
-                    .unique(),
+                    holdings_df["ticker"].astype(str).unique(),
                 )
         else:
             tickers = await _get_user_tickers(user)
@@ -787,10 +697,13 @@ def create_insights_router() -> APIRouter:
         if market in ("india", "us"):
             reg = stock_repo.get_all_registry()
             tickers = [
-                t for t in tickers
+                t
+                for t in tickers
                 if _market(
-                    t, reg.get(t, {}).get("market"),
-                ) == market
+                    t,
+                    reg.get(t, {}).get("market"),
+                )
+                == market
             ]
 
         if len(tickers) < 2:
@@ -823,8 +736,7 @@ def create_insights_router() -> APIRouter:
             )
             if cutoff:
                 all_ohlcv = all_ohlcv[
-                    all_ohlcv["date"]
-                    >= pd.Timestamp(cutoff)
+                    all_ohlcv["date"] >= pd.Timestamp(cutoff)
                 ]
 
         returns: dict[str, pd.Series] = {}
@@ -839,19 +751,15 @@ def create_insights_router() -> APIRouter:
         valid = sorted(returns.keys())
         if len(valid) < 2:
             return CorrelationResponse(
-                tickers=valid, period=period,
+                tickers=valid,
+                period=period,
             )
 
         # Align on common length.
         ret_df = pd.DataFrame(returns)
         corr = ret_df.corr().values
         matrix = [
-            [
-                round(float(v), 4)
-                if not np.isnan(v)
-                else 0.0
-                for v in row
-            ]
+            [round(float(v), 4) if not np.isnan(v) else 0.0 for v in row]
             for row in corr
         ]
 
@@ -861,7 +769,9 @@ def create_insights_router() -> APIRouter:
             period=period,
         )
         cache.set(
-            ck, result.model_dump_json(), TTL_STABLE,
+            ck,
+            result.model_dump_json(),
+            TTL_STABLE,
         )
         return result
 
@@ -876,18 +786,13 @@ def create_insights_router() -> APIRouter:
     async def get_quarterly(
         statement_type: str = Query(
             "income",
-            description=(
-                "'income', 'balance', or 'cashflow'"
-            ),
+            description=("'income', 'balance', or 'cashflow'"),
         ),
         user: UserContext = Depends(get_current_user),
     ):
         """Quarterly financial results."""
         cache = get_cache()
-        ck = (
-            f"cache:insights:quarterly:"
-            f"{user.user_id}:{statement_type}"
-        )
+        ck = f"cache:insights:quarterly:" f"{user.user_id}:{statement_type}"
         hit = cache.get(ck)
         if hit is not None:
             return Response(
@@ -913,13 +818,8 @@ def create_insights_router() -> APIRouter:
             return QuarterlyResponse()
 
         # Filter by statement type if column exists.
-        if (
-            "statement_type" in df.columns
-            and statement_type != "all"
-        ):
-            df = df[
-                df["statement_type"] == statement_type
-            ]
+        if "statement_type" in df.columns and statement_type != "all":
+            df = df[df["statement_type"] == statement_type]
 
         # Deduplicate per (ticker, quarter_end).
         if "quarter_end" in df.columns:
@@ -928,14 +828,17 @@ def create_insights_router() -> APIRouter:
         if "quarter_end" in df.columns:
             dedup.append("quarter_end")
         df = df.drop_duplicates(
-            subset=dedup, keep="last",
+            subset=dedup,
+            keep="last",
         )
 
         company_df = _get_company_info_df(
-            stock_repo, tickers,
+            stock_repo,
+            tickers,
         )
         sectors = _collect_sectors(
-            company_df, tickers,
+            company_df,
+            tickers,
         )
 
         rows: list[QuarterlyRow] = []
@@ -952,47 +855,146 @@ def create_insights_router() -> APIRouter:
                 QuarterlyRow(
                     ticker=t,
                     quarter_label=label,
-                    quarter_end=str(
-                        row.get("quarter_end", "")
-                    ) or None,
-                    statement_type=str(
-                        row.get("statement_type", "")
-                    ) or None,
-                    revenue=_safe(
-                        row.get("revenue")
-                    ),
-                    net_income=_safe(
-                        row.get("net_income")
-                    ),
+                    quarter_end=str(row.get("quarter_end", "")) or None,
+                    statement_type=str(row.get("statement_type", "")) or None,
+                    revenue=_safe(row.get("revenue")),
+                    net_income=_safe(row.get("net_income")),
                     eps=_safe(row.get("eps")),
-                    total_assets=_safe(
-                        row.get("total_assets")
-                    ),
-                    total_equity=_safe(
-                        row.get("total_equity")
-                    ),
-                    operating_cashflow=_safe(
-                        row.get("operating_cashflow")
-                    ),
-                    free_cashflow=_safe(
-                        row.get("free_cashflow")
-                    ),
+                    total_assets=_safe(row.get("total_assets")),
+                    total_equity=_safe(row.get("total_equity")),
+                    operating_cashflow=_safe(row.get("operating_cashflow")),
+                    free_cashflow=_safe(row.get("free_cashflow")),
                     market=_market(t),
                     sector=_sector_for_ticker(
-                        t, company_df,
+                        t,
+                        company_df,
                     ),
                 )
             )
 
         result = QuarterlyResponse(
             rows=rows,
-            tickers=sorted(
-                df["ticker"].unique().tolist()
-            ),
+            tickers=sorted(df["ticker"].unique().tolist()),
             sectors=sectors,
         )
         cache.set(
-            ck, result.model_dump_json(), TTL_STABLE,
+            ck,
+            result.model_dump_json(),
+            TTL_STABLE,
+        )
+        return result
+
+    # -----------------------------------------------------------
+    # Tab 8: Piotroski F-Score
+    # -----------------------------------------------------------
+
+    @router.get(
+        "/piotroski",
+        response_model=PiotroskiResponse,
+    )
+    async def get_piotroski(
+        min_score: int = Query(0, ge=0, le=9),
+        sector: str = Query("all"),
+        user: UserContext = Depends(
+            get_current_user,
+        ),
+    ):
+        """Return latest Piotroski F-Score results."""
+        cache = get_cache()
+        ck = f"cache:insights:piotroski:" f"{min_score}:{sector}"
+        hit = cache.get(ck)
+        if hit is not None:
+            return Response(
+                content=hit,
+                media_type="application/json",
+            )
+
+        repo = _get_stock_repo()
+        df = repo.get_piotroski_scores()
+
+        if df.empty:
+            return PiotroskiResponse()
+
+        # Filter to latest score_date.
+        latest_date = df["score_date"].max()
+        df = df[df["score_date"] == latest_date]
+
+        # Apply filters.
+        if min_score > 0:
+            df = df[df["total_score"] >= min_score]
+        if sector != "all":
+            df = df[df["sector"] == sector]
+
+        rows: list[PiotroskiRow] = []
+        for _, r in df.iterrows():
+            rows.append(
+                PiotroskiRow(
+                    ticker=r["ticker"],
+                    company_name=r.get(
+                        "company_name",
+                    ),
+                    total_score=int(r.get("total_score", 0)),
+                    label=r.get("label", "Weak"),
+                    roa_positive=bool(r.get("roa_positive", False)),
+                    operating_cf_positive=bool(
+                        r.get(
+                            "operating_cf_positive",
+                            False,
+                        )
+                    ),
+                    roa_increasing=bool(r.get("roa_increasing", False)),
+                    cf_gt_net_income=bool(
+                        r.get(
+                            "cf_gt_net_income",
+                            False,
+                        )
+                    ),
+                    leverage_decreasing=bool(
+                        r.get(
+                            "leverage_decreasing",
+                            False,
+                        )
+                    ),
+                    current_ratio_increasing=bool(
+                        r.get(
+                            "current_ratio_" "increasing",
+                            False,
+                        )
+                    ),
+                    no_dilution=bool(r.get("no_dilution", False)),
+                    gross_margin_increasing=bool(
+                        r.get(
+                            "gross_margin_" "increasing",
+                            False,
+                        )
+                    ),
+                    asset_turnover_increasing=bool(
+                        r.get(
+                            "asset_turnover_" "increasing",
+                            False,
+                        )
+                    ),
+                    market_cap=_safe_int(r.get("market_cap")),
+                    revenue=_safe(r.get("revenue")),
+                    avg_volume=_safe_int(r.get("avg_volume")),
+                    sector=r.get("sector"),
+                    industry=r.get("industry"),
+                    score_date=str(latest_date),
+                )
+            )
+
+        # Unique sectors for filter dropdown.
+        all_sectors = sorted({r.sector for r in rows if r.sector})
+
+        result = PiotroskiResponse(
+            rows=rows,
+            sectors=all_sectors,
+            score_date=str(latest_date),
+        )
+        cache.set(
+            ck,
+            result.model_dump_json(),
+            TTL_STABLE,
         )
         return result
 
