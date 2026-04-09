@@ -51,6 +51,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import threading
 import time
 import uuid
 from datetime import date, datetime, timedelta, timezone
@@ -771,8 +772,14 @@ class StockRepository:
     _MAX_RETRIES = 3
     _BACKOFF_SECONDS = (0.5, 1.0, 2.0)
 
+    _commit_lock = threading.Lock()
+
     def _retry_commit(self, identifier, operation, *args, **kwargs):
         """Retry an Iceberg write on CommitFailedException.
+
+        Serializes commits via ``_commit_lock`` to prevent
+        SQLite catalog conflicts when multiple threads write
+        concurrently (e.g. parallel scheduler fetch).
 
         Reloads the table object on each retry so the
         snapshot is fresh.
@@ -791,29 +798,34 @@ class StockRepository:
             CommitFailedException: If all retries are
                 exhausted.
         """
-        last_exc = None
-        for attempt in range(self._MAX_RETRIES + 1):
-            tbl = self._load_table(identifier)
-            try:
-                getattr(tbl, operation)(*args, **kwargs)
-                self._dirty_tables.add(identifier)
-                self._invalidate_cache(identifier)
-                return
-            except CommitFailedException as exc:
-                last_exc = exc
-                if attempt < self._MAX_RETRIES:
-                    delay = self._BACKOFF_SECONDS[attempt]
-                    _logger.warning(
-                        "Iceberg commit conflict on %s "
-                        "(%s), retry %d/%d in %.1fs",
-                        identifier,
-                        operation,
-                        attempt + 1,
-                        self._MAX_RETRIES,
-                        delay,
+        with self._commit_lock:
+            last_exc = None
+            for attempt in range(self._MAX_RETRIES + 1):
+                tbl = self._load_table(identifier)
+                try:
+                    getattr(tbl, operation)(
+                        *args,
+                        **kwargs,
                     )
-                    time.sleep(delay)
-        raise last_exc  # type: ignore[misc]
+                    self._dirty_tables.add(identifier)
+                    self._invalidate_cache(identifier)
+                    return
+                except CommitFailedException as exc:
+                    last_exc = exc
+                    if attempt < self._MAX_RETRIES:
+                        delay = self._BACKOFF_SECONDS[attempt]
+                        _logger.warning(
+                            "Iceberg commit conflict on "
+                            "%s (%s), retry %d/%d "
+                            "in %.1fs",
+                            identifier,
+                            operation,
+                            attempt + 1,
+                            self._MAX_RETRIES,
+                            delay,
+                        )
+                        time.sleep(delay)
+            raise last_exc  # type: ignore[misc]
 
     # Table → cache key patterns that must be
     # invalidated when the table is written to.
