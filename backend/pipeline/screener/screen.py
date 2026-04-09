@@ -109,12 +109,15 @@ async def run_screen(
 
     # Get tickers from stock_master if not provided
     if tickers is None:
-        from backend.db.engine import session_factory
+        from backend.db.engine import (
+            get_session_factory,
+        )
         from backend.pipeline.universe import (
             get_all_stocks,
         )
 
-        async with session_factory() as session:
+        factory = get_session_factory()
+        async with factory() as session:
             stocks = await get_all_stocks(
                 session,
                 active_only=True,
