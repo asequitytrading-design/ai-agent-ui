@@ -21,7 +21,7 @@ from concurrent.futures import (
     ThreadPoolExecutor,
     as_completed,
 )
-from datetime import timezone
+from datetime import date, timedelta, timezone
 from datetime import datetime as dt
 
 import pandas as pd
@@ -30,8 +30,16 @@ import yfinance as yf
 _logger = logging.getLogger(__name__)
 
 
-def _fetch_one_ticker(ticker: str) -> dict:
+def _fetch_one_ticker(
+    ticker: str,
+    ohlcv_start: str | None = None,
+) -> dict:
     """Fetch yfinance data for a single ticker.
+
+    Args:
+        ticker: Ticker symbol (e.g. RELIANCE.NS).
+        ohlcv_start: If set, fetch OHLCV from this
+            date (delta). If None, fetch full 10y.
 
     Returns dict with raw data (no Iceberg writes).
     Keys: ticker, ohlcv_df, info, dividends_df,
@@ -41,17 +49,30 @@ def _fetch_one_ticker(ticker: str) -> dict:
     try:
         yt = yf.Ticker(ticker)
 
-        # OHLCV (full history)
+        # OHLCV (skip / delta / full)
         try:
-            ohlcv = yt.history(
-                period="10y",
-                auto_adjust=False,
-            )
-            if not ohlcv.empty:
-                ohlcv.index = pd.to_datetime(
-                    ohlcv.index,
-                ).tz_localize(None)
-            result["ohlcv_df"] = ohlcv
+            if ohlcv_start == "__skip__":
+                result["ohlcv_df"] = pd.DataFrame()
+            elif ohlcv_start:
+                ohlcv = yt.history(
+                    start=ohlcv_start,
+                    auto_adjust=False,
+                )
+                if not ohlcv.empty:
+                    ohlcv.index = pd.to_datetime(
+                        ohlcv.index,
+                    ).tz_localize(None)
+                result["ohlcv_df"] = ohlcv
+            else:
+                ohlcv = yt.history(
+                    period="10y",
+                    auto_adjust=False,
+                )
+                if not ohlcv.empty:
+                    ohlcv.index = pd.to_datetime(
+                        ohlcv.index,
+                    ).tz_localize(None)
+                result["ohlcv_df"] = ohlcv
         except Exception:
             result["ohlcv_df"] = pd.DataFrame()
 
@@ -158,6 +179,29 @@ def batch_data_refresh(
         {"tickers_total": total},
     )
 
+    # ── Pre-filter: check OHLCV freshness ──────────────
+    today = date.today()
+    yesterday = today - timedelta(days=1)
+    ohlcv_starts: dict[str, str | None] = {}
+    for t in tickers:
+        latest = stock_repo.get_latest_ohlcv_date(t)
+        if latest and latest >= yesterday:
+            # Fresh — skip OHLCV, still fetch info/divs
+            ohlcv_starts[t] = "__skip__"
+        elif latest:
+            # Stale — delta from last date
+            ohlcv_starts[t] = str(latest)
+        else:
+            # New — full 10y
+            ohlcv_starts[t] = None
+
+    fresh_count = sum(1 for v in ohlcv_starts.values() if v == "__skip__")
+    _logger.info(
+        "[batch] OHLCV freshness: %d fresh (skip), " "%d need fetch",
+        fresh_count,
+        total - fresh_count,
+    )
+
     # ── Phase 1: Parallel yfinance fetch ──────────────
     _logger.info(
         "[batch] Phase 1: fetching %d tickers " "(%d workers)",
@@ -170,10 +214,16 @@ def batch_data_refresh(
     cancelled = False
     lock = threading.Lock()
 
+    def _submit_fetch(t):
+        start = ohlcv_starts.get(t)
+        if start == "__skip__":
+            return _fetch_one_ticker(t, "__skip__")
+        return _fetch_one_ticker(t, start)
+
     with ThreadPoolExecutor(
         max_workers=max_workers,
     ) as pool:
-        future_map = {pool.submit(_fetch_one_ticker, t): t for t in tickers}
+        future_map = {pool.submit(_submit_fetch, t): t for t in tickers}
         for future in as_completed(future_map):
             if cancel_event and cancel_event.is_set():
                 pool.shutdown(
