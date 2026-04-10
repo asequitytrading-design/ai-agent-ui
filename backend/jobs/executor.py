@@ -1075,6 +1075,31 @@ def execute_run_sentiment(
                         ),
                     }
                 )
+                # Upsert: delete old rows for these
+                # tickers on today, then bulk append.
+                from pyiceberg.expressions import (
+                    And,
+                    EqualTo,
+                    In,
+                )
+
+                try:
+                    stock_repo._delete_rows(
+                        "stocks.sentiment_scores",
+                        And(
+                            In(
+                                "ticker",
+                                [t.upper()
+                                 for t in unscored],
+                            ),
+                            EqualTo(
+                                "score_date",
+                                today,
+                            ),
+                        ),
+                    )
+                except Exception:
+                    pass
                 stock_repo._append_rows(
                     "stocks.sentiment_scores",
                     fallback_tbl,
