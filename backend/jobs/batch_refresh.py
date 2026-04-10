@@ -965,6 +965,25 @@ def batch_data_refresh(
     ci_count = 0
     if ci_tables:
         ci_arrow = pa.concat_tables(ci_tables)
+        # Delete existing rows for affected tickers
+        # before appending (one row per ticker).
+        try:
+            ci_tbl = stock_repo._load_table(
+                "stocks.company_info",
+            )
+            affected = set(
+                ci_arrow.column("ticker").to_pylist(),
+            )
+            pred = " OR ".join(
+                f"ticker = '{t}'" for t in affected
+            )
+            ci_tbl.delete(pred)
+        except Exception:
+            _logger.debug(
+                "[batch] company_info pre-delete "
+                "failed",
+                exc_info=True,
+            )
         stock_repo._append_rows(
             "stocks.company_info",
             ci_arrow,

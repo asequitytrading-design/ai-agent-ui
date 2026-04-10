@@ -1099,13 +1099,20 @@ class StockRepository:
     # ------------------------------------------------------------------
 
     def insert_company_info(self, ticker: str, info: dict[str, Any]) -> None:
-        """Append a company metadata snapshot for *ticker*.
+        """Upsert company metadata for *ticker*.
 
-        Args:
-            ticker: Stock ticker symbol (already uppercased).
-            info: Dict from ``yf.Ticker(ticker).info``
-                plus optional extra fields.
+        Deletes existing row(s) for the ticker then
+        appends the new snapshot (one row per ticker).
         """
+        try:
+            tbl = self._load_table(_COMPANY_INFO)
+            tbl.delete(f"ticker = '{ticker}'")
+        except Exception:
+            _logger.debug(
+                "company_info delete before upsert"
+                " failed for %s",
+                ticker,
+            )
         row = pa.table(
             {
                 "info_id": pa.array([str(uuid.uuid4())], pa.string()),
