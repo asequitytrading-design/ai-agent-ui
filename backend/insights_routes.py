@@ -123,18 +123,22 @@ def _get_company_info_df(
     stock_repo,
     tickers: list[str] | None = None,
 ) -> pd.DataFrame:
-    """Load company_info with optional ticker filter.
-
-    Uses batch predicate push-down when *tickers*
-    is provided, avoiding a full table scan.
-    """
+    """Load company_info via DuckDB with ticker filter."""
     try:
+        from backend.db.duckdb_engine import (
+            query_iceberg_df,
+        )
+
         if tickers:
-            return stock_repo.get_company_info_batch(
-                tickers,
+            ph = ",".join(f"'{t}'" for t in tickers)
+            return query_iceberg_df(
+                "stocks.company_info",
+                "SELECT * FROM company_info "
+                f"WHERE ticker IN ({ph})",
             )
-        return stock_repo._table_to_df(
+        return query_iceberg_df(
             "stocks.company_info",
+            "SELECT * FROM company_info",
         )
     except Exception:
         return pd.DataFrame()
@@ -205,9 +209,18 @@ def create_insights_router() -> APIRouter:
         if not tickers:
             return ScreenerResponse()
 
-        # Batch reads — 3 queries instead of 2N+1.
+        # Batch reads via DuckDB.
         try:
-            df = stock_repo.get_analysis_summary_batch(tickers)
+            from backend.db.duckdb_engine import (
+                query_iceberg_df,
+            )
+
+            ph = ",".join(f"'{t}'" for t in tickers)
+            df = query_iceberg_df(
+                "stocks.analysis_summary",
+                "SELECT * FROM analysis_summary "
+                f"WHERE ticker IN ({ph})",
+            )
         except Exception as exc:
             _logger.error("screener read: %s", exc)
             return ScreenerResponse()
@@ -215,10 +228,17 @@ def create_insights_router() -> APIRouter:
         if df.empty:
             return ScreenerResponse()
 
-        # Batch OHLCV for prices.
-        ohlcv_df = stock_repo.get_ohlcv_batch(
-            tickers,
-        )
+        # Batch OHLCV for prices via DuckDB.
+        try:
+            ohlcv_df = query_iceberg_df(
+                "stocks.ohlcv",
+                "SELECT ticker, date, close "
+                "FROM ohlcv "
+                f"WHERE ticker IN ({ph}) "
+                "ORDER BY ticker, date",
+            )
+        except Exception:
+            ohlcv_df = pd.DataFrame()
         price_map: dict[str, float | None] = {}
         if not ohlcv_df.empty:
             # Drop rows with NaN close before picking
@@ -323,9 +343,15 @@ def create_insights_router() -> APIRouter:
             return TargetsResponse()
 
         try:
-            df = stock_repo._scan_tickers(
+            from backend.db.duckdb_engine import (
+                query_iceberg_df,
+            )
+
+            ph = ",".join(f"'{t}'" for t in tickers)
+            df = query_iceberg_df(
                 "stocks.forecast_runs",
-                tickers,
+                "SELECT * FROM forecast_runs "
+                f"WHERE ticker IN ({ph})",
             )
         except Exception as exc:
             _logger.error("targets read: %s", exc)
@@ -417,9 +443,23 @@ def create_insights_router() -> APIRouter:
             return DividendsResponse()
 
         try:
-            df = stock_repo._scan_tickers(
+            from backend.db.duckdb_engine import (
+                query_iceberg_df,
+            )
+
+            placeholders = ",".join(
+                f"'{t}'" for t in tickers
+            )
+            cutoff = (
+                pd.Timestamp.now()
+                - pd.DateOffset(years=2)
+            ).strftime("%Y-%m-%d")
+            df = query_iceberg_df(
                 "stocks.dividends",
-                tickers,
+                "SELECT * FROM dividends "
+                f"WHERE ticker IN ({placeholders}) "
+                f"AND ex_date >= '{cutoff}' "
+                "ORDER BY ex_date DESC",
             )
         except Exception as exc:
             _logger.error("dividends read: %s", exc)
@@ -427,23 +467,6 @@ def create_insights_router() -> APIRouter:
 
         if df.empty:
             return DividendsResponse()
-
-        # Sort by ex_date descending, limit to 2 years.
-        if "ex_date" in df.columns:
-            df["ex_date"] = pd.to_datetime(
-                df["ex_date"], errors="coerce",
-            )
-            cutoff = pd.Timestamp.now() - pd.DateOffset(
-                years=2,
-            )
-            df = df[
-                df["ex_date"].notna()
-                & (df["ex_date"] >= cutoff)
-            ]
-            df = df.sort_values(
-                "ex_date",
-                ascending=False,
-            )
 
         company_df = _get_company_info_df(
             stock_repo,
@@ -510,7 +533,16 @@ def create_insights_router() -> APIRouter:
             return RiskResponse()
 
         try:
-            df = stock_repo.get_analysis_summary_batch(tickers)
+            from backend.db.duckdb_engine import (
+                query_iceberg_df,
+            )
+
+            ph = ",".join(f"'{t}'" for t in tickers)
+            df = query_iceberg_df(
+                "stocks.analysis_summary",
+                "SELECT * FROM analysis_summary "
+                f"WHERE ticker IN ({ph})",
+            )
         except Exception as exc:
             _logger.error("risk read: %s", exc)
             return RiskResponse()
@@ -596,7 +628,16 @@ def create_insights_router() -> APIRouter:
             return SectorsResponse()
 
         try:
-            analysis_df = stock_repo.get_analysis_summary_batch(tickers)
+            from backend.db.duckdb_engine import (
+                query_iceberg_df,
+            )
+
+            ph = ",".join(f"'{t}'" for t in tickers)
+            analysis_df = query_iceberg_df(
+                "stocks.analysis_summary",
+                "SELECT * FROM analysis_summary "
+                f"WHERE ticker IN ({ph})",
+            )
             company_df = _get_company_info_df(
                 stock_repo,
                 tickers,
@@ -755,10 +796,27 @@ def create_insights_router() -> APIRouter:
         elif period == "3y":
             cutoff = now - timedelta(days=1095)
 
-        # Batch OHLCV — 1 query instead of N.
-        all_ohlcv = stock_repo.get_ohlcv_batch(
-            tickers,
-        )
+        # Batch OHLCV via DuckDB.
+        try:
+            from backend.db.duckdb_engine import (
+                query_iceberg_df,
+            )
+
+            ph = ",".join(f"'{t}'" for t in tickers)
+            cutoff_sql = (
+                f"AND date >= '{cutoff.strftime('%Y-%m-%d')}'"
+                if cutoff else ""
+            )
+            all_ohlcv = query_iceberg_df(
+                "stocks.ohlcv",
+                "SELECT ticker, date, close "
+                "FROM ohlcv "
+                f"WHERE ticker IN ({ph}) "
+                f"{cutoff_sql} "
+                "ORDER BY ticker, date",
+            )
+        except Exception:
+            all_ohlcv = pd.DataFrame()
         if all_ohlcv.empty:
             return CorrelationResponse(
                 tickers=sorted(tickers),
@@ -841,9 +899,15 @@ def create_insights_router() -> APIRouter:
             return QuarterlyResponse()
 
         try:
-            df = stock_repo._scan_tickers(
+            from backend.db.duckdb_engine import (
+                query_iceberg_df,
+            )
+
+            ph = ",".join(f"'{t}'" for t in tickers)
+            df = query_iceberg_df(
                 "stocks.quarterly_results",
-                tickers,
+                "SELECT * FROM quarterly_results "
+                f"WHERE ticker IN ({ph})",
             )
         except Exception as exc:
             _logger.error("quarterly read: %s", exc)
@@ -944,15 +1008,31 @@ def create_insights_router() -> APIRouter:
                 media_type="application/json",
             )
 
-        repo = _get_stock_repo()
-        df = repo.get_piotroski_scores()
+        try:
+            from backend.db.duckdb_engine import (
+                query_iceberg_df,
+            )
+
+            df = query_iceberg_df(
+                "stocks.piotroski_scores",
+                "SELECT * FROM piotroski_scores "
+                "WHERE score_date = ("
+                "  SELECT MAX(score_date) "
+                "  FROM piotroski_scores"
+                ")",
+            )
+        except Exception:
+            repo = _get_stock_repo()
+            df = repo.get_piotroski_scores()
 
         if df.empty:
             return PiotroskiResponse()
 
-        # Filter to latest score_date.
-        latest_date = df["score_date"].max()
-        df = df[df["score_date"] == latest_date]
+        latest_date = (
+            df["score_date"].max()
+            if "score_date" in df.columns
+            else ""
+        )
 
         # Apply filters.
         if min_score > 0:
