@@ -376,7 +376,17 @@ def create_dashboard_router() -> APIRouter:
         if not tickers:
             return AnalysisResponse()
 
-        df = stock_repo.get_dashboard_analysis(tickers)
+        import pandas as _pdal
+
+        ph = ",".join(f"'{t}'" for t in tickers)
+        try:
+            df = _duckdb_read(
+                "stocks.analysis_summary",
+                "SELECT * FROM analysis_summary "
+                f"WHERE ticker IN ({ph})",
+            )
+        except Exception:
+            df = _pdal.DataFrame()
         if df.empty:
             return AnalysisResponse()
 
@@ -703,12 +713,39 @@ def create_dashboard_router() -> APIRouter:
                 media_type="application/json",
             )
 
-        # Batch fetch: 3 queries instead of 3N
-        ohlcv_df = stock_repo.get_ohlcv_batch(symbols)
-        summary_df = stock_repo.get_analysis_summary_batch(symbols)
-        info_df = stock_repo.get_company_info_batch(
-            symbols,
-        )
+        # Batch fetch via DuckDB.
+        import pandas as _pdc
+
+        ph = ",".join(f"'{t}'" for t in symbols)
+        try:
+            ohlcv_df = _duckdb_read(
+                "stocks.ohlcv",
+                "SELECT ticker, date, open, high, "
+                "low, close, volume "
+                "FROM ohlcv "
+                f"WHERE ticker IN ({ph}) "
+                "ORDER BY ticker, date",
+            )
+        except Exception:
+            ohlcv_df = _pdc.DataFrame()
+        try:
+            summary_df = _duckdb_read(
+                "stocks.analysis_summary",
+                "SELECT * FROM analysis_summary "
+                f"WHERE ticker IN ({ph})",
+            )
+        except Exception:
+            summary_df = _pdc.DataFrame()
+        try:
+            info_df = _duckdb_read(
+                "stocks.company_info",
+                "SELECT ticker, company_name, "
+                "sector, industry "
+                "FROM company_info "
+                f"WHERE ticker IN ({ph})",
+            )
+        except Exception:
+            info_df = _pdc.DataFrame()
 
         # Compute TI on-the-fly for compare tickers
         # (2-5 tickers, ~200ms each).
@@ -1493,10 +1530,29 @@ def create_dashboard_router() -> APIRouter:
             return AllocationResponse()
 
         tickers = holdings["ticker"].unique().tolist()
-        info_df = stock_repo.get_company_info_batch(
-            tickers,
-        )
-        ohlcv_df = stock_repo.get_ohlcv_batch(tickers)
+        import pandas as _pda
+
+        ph = ",".join(f"'{t}'" for t in tickers)
+        try:
+            info_df = _duckdb_read(
+                "stocks.company_info",
+                "SELECT ticker, company_name, "
+                "sector, current_price "
+                "FROM company_info "
+                f"WHERE ticker IN ({ph})",
+            )
+        except Exception:
+            info_df = _pda.DataFrame()
+        try:
+            ohlcv_df = _duckdb_read(
+                "stocks.ohlcv",
+                "SELECT ticker, date, close "
+                "FROM ohlcv "
+                f"WHERE ticker IN ({ph}) "
+                "ORDER BY ticker, date",
+            )
+        except Exception:
+            ohlcv_df = _pda.DataFrame()
 
         info_map: dict = {}
         if not info_df.empty:
@@ -2081,7 +2137,19 @@ def _build_portfolio_performance(
         )
 
     tickers = buys["ticker"].unique().tolist()
-    ohlcv_df = stock_repo.get_ohlcv_batch(tickers)
+    import pandas as _pdp
+
+    ph = ",".join(f"'{t}'" for t in tickers)
+    try:
+        ohlcv_df = _duckdb_read(
+            "stocks.ohlcv",
+            "SELECT ticker, date, close "
+            "FROM ohlcv "
+            f"WHERE ticker IN ({ph}) "
+            "ORDER BY ticker, date",
+        )
+    except Exception:
+        ohlcv_df = _pdp.DataFrame()
     if ohlcv_df.empty:
         return PortfolioPerformanceResponse(
             currency=currency,
@@ -2320,18 +2388,37 @@ def _build_portfolio_forecast(
     # 2*N per-holding scans.
     import pandas as pd
 
-    holding_tickers = [str(r["ticker"]) for _, r in holdings_df.iterrows()]
-    ohlcv_all = stock_repo.get_ohlcv_batch(
-        holding_tickers,
+    holding_tickers = [
+        str(r["ticker"])
+        for _, r in holdings_df.iterrows()
+    ]
+    ph = ",".join(
+        f"'{t}'" for t in holding_tickers
     )
+    try:
+        ohlcv_all = _duckdb_read(
+            "stocks.ohlcv",
+            "SELECT ticker, date, close "
+            "FROM ohlcv "
+            f"WHERE ticker IN ({ph}) "
+            "ORDER BY ticker, date",
+        )
+    except Exception:
+        ohlcv_all = pd.DataFrame()
     ohlcv_grouped: dict[str, pd.DataFrame] = {}
     if not ohlcv_all.empty:
-        ohlcv_grouped = dict(tuple(ohlcv_all.groupby("ticker")))
+        ohlcv_grouped = dict(
+            tuple(ohlcv_all.groupby("ticker")),
+        )
 
-    fc_all = stock_repo._scan_tickers(
-        "stocks.forecasts",
-        holding_tickers,
-    )
+    try:
+        fc_all = _duckdb_read(
+            "stocks.forecasts",
+            "SELECT * FROM forecasts "
+            f"WHERE ticker IN ({ph})",
+        )
+    except Exception:
+        fc_all = pd.DataFrame()
     # Filter to horizon_months=9 once for all tickers
     if not fc_all.empty and "horizon_months" in (fc_all.columns):
         fc_all = fc_all[fc_all["horizon_months"] == 9]
