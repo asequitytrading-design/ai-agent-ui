@@ -4,8 +4,12 @@ Usage::
 
     python -m backend.pipeline.runner <command> [args]
 
-Commands: seed, bulk, fundamentals, daily, status, skipped,
-retry, reset.
+Data commands: seed, bulk, fundamentals, daily,
+    quarterly, bulk-download, fill-gaps, correct.
+Compute commands: analytics, sentiment, forecast,
+    screen, indices.
+Pipeline: refresh (full chain with --scope/--force).
+Utility: status, skipped, retry, reset, download.
 """
 
 import argparse
@@ -54,6 +58,16 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
     )
+    p_bulk.add_argument(
+        "--scope",
+        default="all",
+        choices=["all", "india", "us"],
+    )
+    p_bulk.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-fetch even if OHLCV is fresh",
+    )
 
     # fundamentals -------------------------------------------------
     p_fund = sub.add_parser(
@@ -69,11 +83,31 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
     )
+    p_fund.add_argument(
+        "--scope",
+        default="all",
+        choices=["all", "india", "us"],
+    )
+    p_fund.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-fetch company info + dividends",
+    )
 
     # daily --------------------------------------------------------
-    sub.add_parser(
+    p_daily = sub.add_parser(
         "daily",
         help="Run daily OHLCV delta",
+    )
+    p_daily.add_argument(
+        "--scope",
+        default="all",
+        choices=["all", "india", "us"],
+    )
+    p_daily.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-fetch even if OHLCV is fresh",
     )
 
     # status -------------------------------------------------------
@@ -151,9 +185,14 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     # fill-gaps ----------------------------------------------------
-    sub.add_parser(
+    p_fill = sub.add_parser(
         "fill-gaps",
         help="Patch empty company_info from stock_master",
+    )
+    p_fill.add_argument(
+        "--scope",
+        default="all",
+        choices=["all", "india", "us"],
     )
 
     # correct ------------------------------------------------------
@@ -201,6 +240,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip 7-day freshness check",
     )
+    p_qtr.add_argument(
+        "--scope",
+        default="all",
+        choices=["all", "india", "us"],
+    )
 
     # screen -------------------------------------------------------
     p_screen = sub.add_parser(
@@ -211,6 +255,87 @@ def _build_parser() -> argparse.ArgumentParser:
         "--tickers",
         default=None,
         help=("Comma-separated tickers (default: all)"),
+    )
+    p_screen.add_argument(
+        "--scope",
+        default="all",
+        choices=["all", "india", "us"],
+    )
+
+    # analytics ----------------------------------------------------
+    p_analytics = sub.add_parser(
+        "analytics",
+        help="Compute analysis summary (indicators)",
+    )
+    p_analytics.add_argument(
+        "--scope",
+        default="all",
+        choices=["all", "india", "us"],
+    )
+    p_analytics.add_argument(
+        "--force",
+        action="store_true",
+        help="Recompute even if analysed today",
+    )
+
+    # sentiment ----------------------------------------------------
+    p_sentiment = sub.add_parser(
+        "sentiment",
+        help="Run LLM sentiment scoring",
+    )
+    p_sentiment.add_argument(
+        "--scope",
+        default="all",
+        choices=["all", "india", "us"],
+    )
+    p_sentiment.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-score even if scored today",
+    )
+
+    # forecast -----------------------------------------------------
+    p_forecast = sub.add_parser(
+        "forecast",
+        help="Run Prophet price forecasts",
+    )
+    p_forecast.add_argument(
+        "--scope",
+        default="all",
+        choices=["all", "india", "us"],
+    )
+    p_forecast.add_argument(
+        "--force",
+        action="store_true",
+        help="Skip 7-day freshness check",
+    )
+
+    # indices ------------------------------------------------------
+    sub.add_parser(
+        "indices",
+        help="Refresh market indices (VIX, etc.)",
+    )
+
+    # refresh (full pipeline) --------------------------------------
+    p_refresh = sub.add_parser(
+        "refresh",
+        help="Full pipeline: data → analytics "
+        "→ sentiment → piotroski",
+    )
+    p_refresh.add_argument(
+        "--scope",
+        default="all",
+        choices=["all", "india", "us"],
+    )
+    p_refresh.add_argument(
+        "--force",
+        action="store_true",
+        help="Force all steps (bypass freshness)",
+    )
+    p_refresh.add_argument(
+        "--skip-forecast",
+        action="store_true",
+        help="Exclude Prophet forecasts",
     )
 
     return parser
@@ -238,6 +363,11 @@ async def _dispatch(args: argparse.Namespace) -> None:
         "reset": _cmd_reset,
         "quarterly": _cmd_quarterly,
         "screen": _cmd_screen,
+        "analytics": _cmd_analytics,
+        "sentiment": _cmd_sentiment,
+        "forecast": _cmd_forecast,
+        "indices": _cmd_indices,
+        "refresh": _cmd_refresh,
     }
     handler = handlers.get(args.command)
     if handler is None:
@@ -789,6 +919,278 @@ async def _cmd_screen(
         result["weak"],
         result["elapsed_s"],
     )
+
+
+# ------------------------------------------------------------------
+# Scheduler-backed commands (reuse executor functions)
+# ------------------------------------------------------------------
+
+
+def _make_cli_repo():
+    """Create a StockRepository for CLI use."""
+    from tools._stock_shared import _require_repo
+
+    return _require_repo()
+
+
+async def _cmd_analytics(
+    args: argparse.Namespace,
+) -> None:
+    """Compute analysis summary for tickers."""
+    import uuid
+
+    from jobs.executor import execute_compute_analytics
+
+    repo = _make_cli_repo()
+    run_id = str(uuid.uuid4())
+    scope = getattr(args, "scope", "all")
+    force = getattr(args, "force", False)
+    _logger.info(
+        "Analytics: scope=%s force=%s run=%s",
+        scope,
+        force,
+        run_id,
+    )
+    repo.append_scheduler_run({
+        "run_id": run_id,
+        "job_id": "cli",
+        "job_name": f"CLI analytics ({scope})",
+        "job_type": "compute_analytics",
+        "scope": scope,
+        "status": "running",
+        "started_at": __import__(
+            "datetime",
+        ).datetime.now(
+            __import__("datetime").timezone.utc,
+        ),
+        "completed_at": None,
+        "duration_secs": None,
+        "tickers_total": 0,
+        "tickers_done": 0,
+        "error_message": None,
+        "trigger_type": "cli",
+        "pipeline_run_id": None,
+    })
+    execute_compute_analytics(
+        scope, run_id, repo, force=force,
+    )
+    _logger.info("Analytics complete: run=%s", run_id)
+
+
+async def _cmd_sentiment(
+    args: argparse.Namespace,
+) -> None:
+    """Run LLM sentiment scoring."""
+    import uuid
+
+    from jobs.executor import execute_run_sentiment
+
+    repo = _make_cli_repo()
+    run_id = str(uuid.uuid4())
+    scope = getattr(args, "scope", "all")
+    force = getattr(args, "force", False)
+    _logger.info(
+        "Sentiment: scope=%s force=%s run=%s",
+        scope,
+        force,
+        run_id,
+    )
+    repo.append_scheduler_run({
+        "run_id": run_id,
+        "job_id": "cli",
+        "job_name": f"CLI sentiment ({scope})",
+        "job_type": "run_sentiment",
+        "scope": scope,
+        "status": "running",
+        "started_at": __import__(
+            "datetime",
+        ).datetime.now(
+            __import__("datetime").timezone.utc,
+        ),
+        "completed_at": None,
+        "duration_secs": None,
+        "tickers_total": 0,
+        "tickers_done": 0,
+        "error_message": None,
+        "trigger_type": "cli",
+        "pipeline_run_id": None,
+    })
+    execute_run_sentiment(
+        scope, run_id, repo, force=force,
+    )
+    _logger.info("Sentiment complete: run=%s", run_id)
+
+
+async def _cmd_forecast(
+    args: argparse.Namespace,
+) -> None:
+    """Run Prophet price forecasts."""
+    import uuid
+
+    from jobs.executor import execute_run_forecasts
+
+    repo = _make_cli_repo()
+    run_id = str(uuid.uuid4())
+    scope = getattr(args, "scope", "all")
+    force = getattr(args, "force", False)
+    _logger.info(
+        "Forecast: scope=%s force=%s run=%s",
+        scope,
+        force,
+        run_id,
+    )
+    repo.append_scheduler_run({
+        "run_id": run_id,
+        "job_id": "cli",
+        "job_name": f"CLI forecast ({scope})",
+        "job_type": "run_forecasts",
+        "scope": scope,
+        "status": "running",
+        "started_at": __import__(
+            "datetime",
+        ).datetime.now(
+            __import__("datetime").timezone.utc,
+        ),
+        "completed_at": None,
+        "duration_secs": None,
+        "tickers_total": 0,
+        "tickers_done": 0,
+        "error_message": None,
+        "trigger_type": "cli",
+        "pipeline_run_id": None,
+    })
+    execute_run_forecasts(
+        scope, run_id, repo, force=force,
+    )
+    _logger.info("Forecast complete: run=%s", run_id)
+
+
+async def _cmd_indices(
+    args: argparse.Namespace,
+) -> None:
+    """Refresh market indices."""
+    from jobs.gap_filler import refresh_market_indices
+
+    count = refresh_market_indices()
+    _logger.info("Market indices: %d rows", count)
+
+
+async def _cmd_refresh(
+    args: argparse.Namespace,
+) -> None:
+    """Full pipeline: data → analytics → sentiment → piotroski.
+
+    Mirrors the scheduler pipeline chain but runs
+    from the CLI sequentially.
+    """
+    import uuid
+
+    from jobs.executor import (
+        execute_compute_analytics,
+        execute_data_refresh,
+        execute_run_forecasts,
+        execute_run_sentiment,
+    )
+
+    repo = _make_cli_repo()
+    scope = getattr(args, "scope", "all")
+    force = getattr(args, "force", False)
+    skip_fc = getattr(args, "skip_forecast", False)
+
+    steps = [
+        ("data_refresh", execute_data_refresh),
+        (
+            "compute_analytics",
+            execute_compute_analytics,
+        ),
+        ("run_sentiment", execute_run_sentiment),
+    ]
+    if not skip_fc:
+        steps.append(
+            ("run_forecasts", execute_run_forecasts),
+        )
+
+    pipeline_run_id = str(uuid.uuid4())
+    _logger.info(
+        "Refresh pipeline: scope=%s force=%s "
+        "steps=%d run=%s",
+        scope,
+        force,
+        len(steps),
+        pipeline_run_id,
+    )
+
+    for i, (job_type, executor_fn) in enumerate(
+        steps, 1,
+    ):
+        run_id = str(uuid.uuid4())
+        _logger.info(
+            "Step %d/%d: %s (run=%s)",
+            i,
+            len(steps),
+            job_type,
+            run_id,
+        )
+        repo.append_scheduler_run({
+            "run_id": run_id,
+            "job_id": "cli",
+            "job_name": f"CLI {job_type} ({scope})",
+            "job_type": job_type,
+            "scope": scope,
+            "status": "running",
+            "started_at": __import__(
+                "datetime",
+            ).datetime.now(
+                __import__("datetime").timezone.utc,
+            ),
+            "completed_at": None,
+            "duration_secs": None,
+            "tickers_total": 0,
+            "tickers_done": 0,
+            "error_message": None,
+            "trigger_type": "cli",
+            "pipeline_run_id": pipeline_run_id,
+        })
+        try:
+            executor_fn(
+                scope, run_id, repo, force=force,
+            )
+            _logger.info(
+                "Step %d/%d: %s complete",
+                i,
+                len(steps),
+                job_type,
+            )
+        except Exception as exc:
+            _logger.error(
+                "Step %d/%d: %s failed: %s",
+                i,
+                len(steps),
+                job_type,
+                exc,
+            )
+            _logger.info(
+                "Pipeline aborted at step %d", i,
+            )
+            return
+
+    # Piotroski (async, always runs)
+    from backend.pipeline.screener.screen import (
+        run_screen,
+    )
+
+    _logger.info("Step final: Piotroski F-Score")
+    result = await run_screen()
+    _logger.info(
+        "Piotroski: scored=%d strong=%d "
+        "moderate=%d weak=%d (%.1fs)",
+        result["scored"],
+        result["strong"],
+        result["moderate"],
+        result["weak"],
+        result["elapsed_s"],
+    )
+    _logger.info("Refresh pipeline complete")
 
 
 # ------------------------------------------------------------------

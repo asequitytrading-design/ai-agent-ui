@@ -220,6 +220,7 @@ def execute_data_refresh(
     run_id: str,
     repo,  # StockRepository
     cancel_event=None,
+    force: bool = False,
 ) -> None:
     """Batch refresh all tickers matching *scope*.
 
@@ -283,6 +284,7 @@ def execute_data_refresh(
         run_id,
         cancel_event=cancel_event,
         max_workers=5,
+        force=force,
     )
 
 
@@ -297,6 +299,7 @@ def execute_compute_analytics(
     run_id: str,
     repo,  # StockRepository
     cancel_event=None,
+    force: bool = False,
 ) -> None:
     """Compute analysis summary for all tickers.
 
@@ -344,25 +347,29 @@ def execute_compute_analytics(
     # ── Pre-query: skip tickers analysed today ──────────
     today = datetime.now(timezone.utc).date()
     analysis_fresh: set[str] = set()
-    try:
-        adf = query_iceberg_df(
-            "stocks.analysis_summary",
-            "SELECT ticker, MAX(analysis_date) AS latest "
-            "FROM analysis_summary GROUP BY ticker",
-        )
-        if not adf.empty:
-            for _, row in adf.iterrows():
-                d = row["latest"]
-                if hasattr(d, "date"):
-                    d = d.date()
-                if d >= today:
-                    analysis_fresh.add(row["ticker"])
-    except Exception as exc:
-        _logger.warning(
-            "[scheduler] Analysis freshness query "
-            "failed: %s",
-            exc,
-        )
+    if not force:
+        try:
+            adf = query_iceberg_df(
+                "stocks.analysis_summary",
+                "SELECT ticker, MAX(analysis_date) "
+                "AS latest "
+                "FROM analysis_summary GROUP BY ticker",
+            )
+            if not adf.empty:
+                for _, row in adf.iterrows():
+                    d = row["latest"]
+                    if hasattr(d, "date"):
+                        d = d.date()
+                    if d >= today:
+                        analysis_fresh.add(
+                            row["ticker"],
+                        )
+        except Exception as exc:
+            _logger.warning(
+                "[scheduler] Analysis freshness query"
+                " failed: %s",
+                exc,
+            )
 
     total = len(tickers)
     repo.update_scheduler_run(
@@ -774,6 +781,7 @@ def execute_run_sentiment(
     run_id: str,
     repo,  # StockRepository
     cancel_event=None,
+    force: bool = False,
 ) -> None:
     """Score sentiment for all tickers via LLM.
 
@@ -864,18 +872,23 @@ def execute_run_sentiment(
 
     try:
         # Tickers scored today (skip entirely).
-        sdf = query_iceberg_df(
-            "stocks.sentiment_scores",
-            "SELECT ticker, MAX(score_date) AS latest "
-            "FROM sentiment_scores GROUP BY ticker",
-        )
-        if not sdf.empty:
-            for _, row in sdf.iterrows():
-                d = row["latest"]
-                if hasattr(d, "date"):
-                    d = d.date()
-                if d >= today:
-                    sentiment_fresh.add(row["ticker"])
+        if not force:
+            sdf = query_iceberg_df(
+                "stocks.sentiment_scores",
+                "SELECT ticker, "
+                "MAX(score_date) AS latest "
+                "FROM sentiment_scores "
+                "GROUP BY ticker",
+            )
+            if not sdf.empty:
+                for _, row in sdf.iterrows():
+                    d = row["latest"]
+                    if hasattr(d, "date"):
+                        d = d.date()
+                    if d >= today:
+                        sentiment_fresh.add(
+                            row["ticker"],
+                        )
 
         # Hot tickers: had real headlines in last 10d.
         hot_df = query_iceberg_df(
@@ -1153,6 +1166,7 @@ def execute_run_forecasts(
     run_id: str,
     repo,  # StockRepository
     cancel_event=None,
+    force: bool = False,
 ) -> None:
     """Run Prophet forecasts for all tickers.
 
@@ -1197,29 +1211,36 @@ def execute_run_forecasts(
         )
 
         # Skip if forecast is <7 days old
-        fc_run = stock_repo.get_latest_forecast_run(
-            yf_ticker,
-            horizon_months,
-        )
-        if fc_run:
-            from datetime import timedelta
-
-            rd = fc_run.get("run_date")
-            if rd is not None:
-                if hasattr(rd, "date"):
-                    rd = rd.date()
-                cutoff = (
-                    datetime.now(timezone.utc).date()
-                    - timedelta(days=7)
+        if not force:
+            fc_run = (
+                stock_repo.get_latest_forecast_run(
+                    yf_ticker,
+                    horizon_months,
                 )
-                if rd >= cutoff:
-                    _logger.info(
-                        "[scheduler] Forecast %s fresh "
-                        "(run_date=%s). Skipped.",
-                        yf_ticker,
-                        rd,
+            )
+            if fc_run:
+                from datetime import timedelta
+
+                rd = fc_run.get("run_date")
+                if rd is not None:
+                    if hasattr(rd, "date"):
+                        rd = rd.date()
+                    cutoff = (
+                        datetime.now(
+                            timezone.utc,
+                        ).date()
+                        - timedelta(days=7)
                     )
-                    return
+                    if rd >= cutoff:
+                        _logger.info(
+                            "[scheduler] Forecast"
+                            " %s fresh "
+                            "(run_date=%s)."
+                            " Skipped.",
+                            yf_ticker,
+                            rd,
+                        )
+                        return
 
         df = _load_ohlcv(yf_ticker)
         if df is None:

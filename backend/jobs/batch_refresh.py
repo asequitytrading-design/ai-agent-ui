@@ -280,6 +280,7 @@ def batch_data_refresh(
     run_id: str,
     cancel_event=None,
     max_workers: int = 5,
+    force: bool = False,
 ) -> dict:
     """Batch refresh: parallel fetch, bulk write.
 
@@ -407,6 +408,17 @@ def batch_data_refresh(
         total - len(info_fresh),
     )
 
+    # Force mode: clear all freshness gates
+    if force:
+        latest_map.clear()
+        qtr_fresh.clear()
+        div_fresh.clear()
+        info_fresh.clear()
+        _logger.info(
+            "[batch] Force mode: all freshness "
+            "checks bypassed",
+        )
+
     for t in tickers:
         latest = latest_map.get(t)
         if latest is not None and latest >= yesterday:
@@ -416,7 +428,10 @@ def batch_data_refresh(
         else:
             ohlcv_starts[t] = None
 
-    fresh_count = sum(1 for v in ohlcv_starts.values() if v == "__skip__")
+    fresh_count = sum(
+        1 for v in ohlcv_starts.values()
+        if v == "__skip__"
+    )
     _logger.info(
         "[batch] OHLCV freshness: %d fresh (skip), " "%d need fetch",
         fresh_count,
