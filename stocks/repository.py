@@ -4447,6 +4447,70 @@ class StockRepository:
                 exc_info=True,
             )
 
+    # -- Pipeline CRUD (PostgreSQL) --
+
+    def get_pipelines(self) -> list[dict]:
+        """Return all pipeline definitions + steps."""
+        from backend.db.pg_stocks import (
+            get_pipelines as pg_pipelines,
+        )
+
+        async def _call():
+            async with _pg_session() as s:
+                return await pg_pipelines(s)
+
+        try:
+            return _run_pg(_call)
+        except Exception:
+            _logger.warning(
+                "get_pipelines failed",
+                exc_info=True,
+            )
+            return []
+
+    def upsert_pipeline(
+        self,
+        data: dict,
+    ) -> None:
+        """Insert or update a pipeline + steps."""
+        from backend.db.pg_stocks import (
+            upsert_pipeline as pg_upsert,
+        )
+
+        async def _call():
+            async with _pg_session() as s:
+                await pg_upsert(s, data)
+
+        try:
+            _run_pg(_call)
+        except Exception:
+            _logger.warning(
+                "upsert_pipeline failed",
+                exc_info=True,
+            )
+
+    def delete_pipeline(
+        self,
+        pipeline_id: str,
+    ) -> None:
+        """Delete a pipeline by ID."""
+        from backend.db.pg_stocks import (
+            delete_pipeline as pg_del,
+        )
+
+        async def _call():
+            async with _pg_session() as s:
+                await pg_del(s, pipeline_id)
+
+        try:
+            _run_pg(_call)
+        except Exception:
+            _logger.warning(
+                "delete_pipeline %s failed",
+                pipeline_id,
+                exc_info=True,
+            )
+
     # -- Iceberg scheduler_runs (append-only) --
 
     def append_scheduler_run(
@@ -4468,6 +4532,21 @@ class StockRepository:
                 with tbl.update_schema() as upd:
                     upd.add_column(
                         "trigger_type",
+                        StringType(),
+                    )
+                tbl = self._load_table(
+                    _SCHEDULER_RUNS,
+                )
+                col_names = [
+                    f.name
+                    for f in tbl.schema().fields
+                ]
+            if "pipeline_run_id" not in col_names:
+                from pyiceberg.types import StringType
+
+                with tbl.update_schema() as upd:
+                    upd.add_column(
+                        "pipeline_run_id",
                         StringType(),
                     )
                 tbl = self._load_table(
@@ -4528,8 +4607,14 @@ class StockRepository:
     def get_scheduler_runs(
         self,
         days: int = 7,
+        *,
+        job_type: str | None = None,
+        status: str | None = None,
+        pipeline_run_id: str | None = None,
+        offset: int = 0,
+        limit: int | None = None,
     ) -> list[dict]:
-        """Return scheduler runs from last N days."""
+        """Return scheduler runs with filters."""
         try:
             df = self._table_to_df(_SCHEDULER_RUNS)
             if df.empty:
@@ -4544,7 +4629,8 @@ class StockRepository:
                     tz="UTC",
                 ) - pd.Timedelta(days=days)
                 df = df[
-                    df["started_at"].notna() & (df["started_at"] >= cutoff)
+                    df["started_at"].notna()
+                    & (df["started_at"] >= cutoff)
                 ]
                 df = df.sort_values(
                     "started_at",
@@ -4556,13 +4642,33 @@ class StockRepository:
                     utc=True,
                     errors="coerce",
                 )
+            if job_type and "job_type" in df.columns:
+                df = df[df["job_type"] == job_type]
+            if status and "status" in df.columns:
+                df = df[df["status"] == status]
+            if (
+                pipeline_run_id
+                and "pipeline_run_id" in df.columns
+            ):
+                df = df[
+                    df["pipeline_run_id"]
+                    == pipeline_run_id
+                ]
+            total = len(df)
+            if offset:
+                df = df.iloc[offset:]
+            if limit:
+                df = df.iloc[:limit]
             df = df.where(df.notna(), None)
             records = df.to_dict(orient="records")
             for r in records:
+                r["_total"] = total
                 for k, v in list(r.items()):
                     if hasattr(v, "isoformat"):
                         r[k] = v.isoformat()
-                    elif isinstance(v, float) and (v != v):
+                    elif isinstance(v, float) and (
+                        v != v
+                    ):
                         r[k] = None
             return records
         except Exception:
@@ -4597,6 +4703,89 @@ class StockRepository:
                 "runs_today_failed": 0,
                 "runs_today_running": 0,
             }
+
+    def get_pipeline_run_status(
+        self,
+        pipeline_run_id: str,
+    ) -> list[dict]:
+        """Return all runs for a pipeline_run_id."""
+        try:
+            df = self._table_to_df(_SCHEDULER_RUNS)
+            if df.empty:
+                return []
+            if "pipeline_run_id" not in df.columns:
+                return []
+            df = df[
+                df["pipeline_run_id"] == pipeline_run_id
+            ]
+            if df.empty:
+                return []
+            if "started_at" in df.columns:
+                df["started_at"] = pd.to_datetime(
+                    df["started_at"],
+                    utc=True,
+                    errors="coerce",
+                )
+                df = df.sort_values("started_at")
+            df = df.where(df.notna(), None)
+            records = df.to_dict(orient="records")
+            for r in records:
+                for k, v in list(r.items()):
+                    if hasattr(v, "isoformat"):
+                        r[k] = v.isoformat()
+                    elif isinstance(v, float) and (
+                        v != v
+                    ):
+                        r[k] = None
+            return records
+        except Exception:
+            _logger.error(
+                "get_pipeline_run_status failed",
+                exc_info=True,
+            )
+            return []
+
+    def get_last_pipeline_run_id(
+        self,
+        pipeline_id: str,
+    ) -> str | None:
+        """Get latest pipeline_run_id for a pipeline.
+
+        Looks for runs whose job_name starts with a
+        pattern matching the pipeline, filtering by
+        pipeline_run_id presence.
+        """
+        try:
+            df = self._table_to_df(_SCHEDULER_RUNS)
+            if df.empty:
+                return None
+            if "pipeline_run_id" not in df.columns:
+                return None
+            df = df[df["pipeline_run_id"].notna()]
+            if df.empty:
+                return None
+            # Filter by job_id == pipeline_id (we
+            # store pipeline_id in job_id for pipeline
+            # runs)
+            df = df[df["job_id"] == pipeline_id]
+            if df.empty:
+                return None
+            if "started_at" in df.columns:
+                df["started_at"] = pd.to_datetime(
+                    df["started_at"],
+                    utc=True,
+                    errors="coerce",
+                )
+                df = df.sort_values(
+                    "started_at", ascending=False,
+                )
+            return str(df.iloc[0]["pipeline_run_id"])
+        except Exception:
+            _logger.error(
+                "get_last_pipeline_run_id failed",
+                exc_info=True,
+            )
+            return None
 
     def get_last_run_for_job(
         self,

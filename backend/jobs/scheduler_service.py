@@ -22,6 +22,7 @@ import schedule
 
 from config import get_settings
 from jobs.executor import JOB_EXECUTORS
+from jobs.pipeline_executor import PipelineExecutor
 
 _logger = logging.getLogger(__name__)
 
@@ -170,6 +171,8 @@ class SchedulerService:
         self._cancel_events: dict[str, threading.Event] = {}
         self._lock = threading.Lock()
         self._jobs: dict[str, dict] = {}
+        self._pipelines: dict[str, dict] = {}
+        self._pipeline_exec = PipelineExecutor(repo)
         self._scheduler = schedule.Scheduler()
         self._thread: threading.Thread | None = None
 
@@ -178,7 +181,7 @@ class SchedulerService:
     # ----------------------------------------------------------
 
     def start(self) -> None:
-        """Load jobs from Iceberg and start the daemon."""
+        """Load jobs + pipelines and start daemon."""
         self._cleanup_stale_runs()
         self.reload_jobs()
         if get_settings().scheduler_catchup_enabled:
@@ -190,8 +193,9 @@ class SchedulerService:
         )
         self._thread.start()
         _logger.info(
-            "Scheduler service started (%d jobs)",
+            "Scheduler started (%d jobs, %d pipelines)",
             len(self._jobs),
+            len(self._pipelines),
         )
 
     def _cleanup_stale_runs(self) -> None:
@@ -336,18 +340,29 @@ class SchedulerService:
     # ----------------------------------------------------------
 
     def reload_jobs(self) -> None:
-        """Reload all jobs from Iceberg into schedule."""
+        """Reload jobs + pipelines into schedule."""
         self._scheduler.clear()
         self._jobs.clear()
+        self._pipelines.clear()
+
         rows = self._repo.get_scheduled_jobs()
         for row in rows:
             jid = row.get("job_id", "")
             self._jobs[jid] = row
             if row.get("enabled"):
                 self._register_schedule(row)
+
+        pipelines = self._repo.get_pipelines()
+        for p in pipelines:
+            pid = p.get("pipeline_id", "")
+            self._pipelines[pid] = p
+            if p.get("enabled"):
+                self._register_pipeline_schedule(p)
+
         _logger.info(
-            "Loaded %d scheduler jobs from Iceberg",
+            "Loaded %d jobs, %d pipelines",
             len(self._jobs),
+            len(self._pipelines),
         )
 
     def _register_schedule(self, job: dict) -> None:
@@ -382,6 +397,289 @@ class SchedulerService:
                 sched_day.at(cron_time).do(
                     self._trigger_job, job_id,
                 ).tag(job_id)
+
+    def _register_pipeline_schedule(
+        self, pipeline: dict,
+    ) -> None:
+        """Register a pipeline with the schedule lib."""
+        cron_dates = (
+            pipeline.get("cron_dates", "") or ""
+        ).strip()
+        cron_days = (
+            pipeline.get("cron_days", "") or ""
+        ).split(",")
+        cron_time = pipeline.get("cron_time", "18:00")
+        pid = pipeline["pipeline_id"]
+        tag = f"pipeline:{pid}"
+
+        if cron_dates:
+            self._scheduler.every().day.at(
+                cron_time,
+            ).do(
+                self._trigger_pipeline, pid,
+            ).tag(tag)
+        else:
+            for day_abbr in cron_days:
+                day_abbr = day_abbr.strip().lower()
+                day_full = _DAY_MAP.get(day_abbr)
+                if not day_full:
+                    continue
+                sched_day = getattr(
+                    self._scheduler.every(), day_full,
+                )
+                sched_day.at(cron_time).do(
+                    self._trigger_pipeline, pid,
+                ).tag(tag)
+
+    def _trigger_pipeline(
+        self, pipeline_id: str,
+    ) -> None:
+        """Called by schedule lib for a pipeline."""
+        pipeline = self._pipelines.get(pipeline_id)
+        if not pipeline or not pipeline.get("enabled"):
+            return
+
+        cron_dates = (
+            pipeline.get("cron_dates", "") or ""
+        ).strip()
+        if cron_dates:
+            today_dom = datetime.now(IST).day
+            allowed = [
+                int(d.strip())
+                for d in cron_dates.split(",")
+                if d.strip().isdigit()
+            ]
+            if today_dom not in allowed:
+                return
+
+        tag = f"pipeline:{pipeline_id}"
+        with self._lock:
+            existing = self._futures.get(tag)
+            if existing and not existing.done():
+                _logger.info(
+                    "Pipeline %s already running",
+                    pipeline_id,
+                )
+                return
+
+        run_id = self.trigger_pipeline_now(
+            pipeline_id, trigger_type="scheduled",
+        )
+        if run_id:
+            _logger.info(
+                "Scheduled pipeline: %s run=%s",
+                pipeline_id, run_id,
+            )
+
+    def trigger_pipeline_now(
+        self,
+        pipeline_id: str,
+        trigger_type: str = "manual",
+    ) -> str | None:
+        """Trigger a pipeline. Returns pipeline_run_id."""
+        pipeline = self._pipelines.get(pipeline_id)
+        if not pipeline:
+            return None
+
+        cancel_event = threading.Event()
+        tag = f"pipeline:{pipeline_id}"
+
+        def _run():
+            try:
+                self._pipeline_exec.trigger_pipeline(
+                    pipeline,
+                    trigger_type=trigger_type,
+                    cancel_event=cancel_event,
+                )
+            finally:
+                self._cancel_events.pop(tag, None)
+
+        with self._lock:
+            future = self._pool.submit(_run)
+            self._futures[tag] = future
+        self._cancel_events[tag] = cancel_event
+
+        return tag
+
+    def resume_pipeline_now(
+        self,
+        pipeline_id: str,
+        from_step: int,
+    ) -> str | None:
+        """Resume a pipeline from a step."""
+        pipeline = self._pipelines.get(pipeline_id)
+        if not pipeline:
+            return None
+
+        cancel_event = threading.Event()
+        tag = f"pipeline:{pipeline_id}"
+
+        def _run():
+            try:
+                self._pipeline_exec.resume_pipeline(
+                    pipeline,
+                    from_step=from_step,
+                    cancel_event=cancel_event,
+                )
+            finally:
+                self._cancel_events.pop(tag, None)
+
+        with self._lock:
+            future = self._pool.submit(_run)
+            self._futures[tag] = future
+        self._cancel_events[tag] = cancel_event
+
+        return tag
+
+    # ----------------------------------------------------------
+    # Pipeline management
+    # ----------------------------------------------------------
+
+    def add_pipeline(self, data: dict) -> str:
+        """Create a pipeline. Returns pipeline_id."""
+        pid = str(uuid.uuid4())
+        data["pipeline_id"] = pid
+        self._repo.upsert_pipeline(data)
+        self._pipelines[pid] = data
+        if data.get("enabled", True):
+            self._register_pipeline_schedule(data)
+        _logger.info("Added pipeline %s", pid)
+        return pid
+
+    def update_pipeline(
+        self, pipeline_id: str, updates: dict,
+    ) -> None:
+        """Update pipeline fields."""
+        p = self._pipelines.get(pipeline_id)
+        if not p:
+            return
+        p.update(updates)
+        self._repo.upsert_pipeline(p)
+        tag = f"pipeline:{pipeline_id}"
+        self._scheduler.clear(tag)
+        if p.get("enabled"):
+            self._register_pipeline_schedule(p)
+
+    def remove_pipeline(
+        self, pipeline_id: str,
+    ) -> None:
+        """Delete a pipeline."""
+        tag = f"pipeline:{pipeline_id}"
+        self._scheduler.clear(tag)
+        self._pipelines.pop(pipeline_id, None)
+        self._repo.delete_pipeline(pipeline_id)
+        _logger.info(
+            "Removed pipeline %s", pipeline_id,
+        )
+
+    def list_pipelines(self) -> list[dict]:
+        """Return pipelines with run status per step."""
+        result = []
+        for p in self._pipelines.values():
+            pid = p["pipeline_id"]
+            tag = f"pipeline:{pid}"
+
+            with self._lock:
+                fut = self._futures.get(tag)
+                is_running = (
+                    fut is not None
+                    and not fut.done()
+                )
+
+            last_prid = (
+                self._repo.get_last_pipeline_run_id(pid)
+            )
+            step_statuses = []
+            if last_prid:
+                runs = (
+                    self._repo
+                    .get_pipeline_run_status(last_prid)
+                )
+                for s in p.get("steps", []):
+                    match = next(
+                        (
+                            r for r in runs
+                            if r.get("job_type")
+                            == s["job_type"]
+                        ),
+                        None,
+                    )
+                    step_statuses.append({
+                        "step_order": s["step_order"],
+                        "job_type": s["job_type"],
+                        "job_name": s["job_name"],
+                        "last_status": (
+                            match.get("status")
+                            if match else None
+                        ),
+                        "last_run_id": (
+                            match.get("run_id")
+                            if match else None
+                        ),
+                        "last_duration": (
+                            match.get("duration_secs")
+                            if match else None
+                        ),
+                        "error_message": (
+                            match.get("error_message")
+                            if match else None
+                        ),
+                    })
+            else:
+                for s in p.get("steps", []):
+                    step_statuses.append({
+                        "step_order": s["step_order"],
+                        "job_type": s["job_type"],
+                        "job_name": s["job_name"],
+                        "last_status": None,
+                        "last_run_id": None,
+                        "last_duration": None,
+                        "error_message": None,
+                    })
+
+            cron_dates = (
+                p.get("cron_dates", "") or ""
+            ).strip()
+            cron_days = (
+                p.get("cron_days", "") or ""
+            ).split(",")
+            cron_time = p.get("cron_time", "18:00")
+            if cron_dates:
+                nxt = _next_run_ist_dates(
+                    cron_dates, cron_time,
+                )
+            else:
+                nxt = _next_run_ist(
+                    cron_days, cron_time,
+                )
+
+            result.append({
+                "pipeline_id": pid,
+                "name": p.get("name", ""),
+                "scope": p.get("scope", "all"),
+                "enabled": bool(p.get("enabled")),
+                "cron_days": cron_days,
+                "cron_time": cron_time,
+                "steps": step_statuses,
+                "is_running": is_running,
+                "last_pipeline_run_id": last_prid,
+                "next_run": (
+                    nxt.strftime(
+                        "%Y-%m-%d %H:%M IST",
+                    )
+                    if nxt and p.get("enabled")
+                    else None
+                ),
+                "next_run_seconds": (
+                    int(
+                        (nxt - datetime.now(IST))
+                        .total_seconds(),
+                    )
+                    if nxt and p.get("enabled")
+                    else None
+                ),
+            })
+        return result
 
     def add_job(self, job: dict) -> str:
         """Create and persist a new job. Returns job_id."""

@@ -3,6 +3,7 @@ from backend.db.models.ingestion_cursor import IngestionCursor
 from backend.db.models.ingestion_skipped import IngestionSkipped
 from backend.db.models.memory import UserMemory
 from backend.db.models.payment import PaymentTransaction
+from backend.db.models.pipeline import Pipeline, PipelineStep
 from backend.db.models.registry import StockRegistry
 from backend.db.models.scheduler import ScheduledJob
 from backend.db.models.stock_master import StockMaster
@@ -14,6 +15,8 @@ __all__ = [
     "IngestionCursor",
     "IngestionSkipped",
     "PaymentTransaction",
+    "Pipeline",
+    "PipelineStep",
     "ScheduledJob",
     "StockMaster",
     "StockRegistry",

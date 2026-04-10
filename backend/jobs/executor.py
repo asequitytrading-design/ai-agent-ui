@@ -1339,3 +1339,98 @@ def execute_run_forecasts(
     _finalize_run(
         repo, run_id, done, total, errors, cancelled,
     )
+
+
+# ------------------------------------------------------------------
+# Built-in: run_piotroski
+# ------------------------------------------------------------------
+
+
+@register_job("run_piotroski")
+def execute_run_piotroski(
+    scope: str,
+    run_id: str,
+    repo,  # StockRepository
+    cancel_event=None,
+) -> None:
+    """Compute Piotroski F-Score for all tickers.
+
+    Reads quarterly_results via DuckDB, aggregates to
+    annual, scores, and writes to piotroski_scores
+    Iceberg table.  Schedule monthly (aligns with 30-day
+    quarterly data refresh cycle).
+    """
+    import asyncio
+
+    registry = repo.get_all_registry()
+    tickers = _scope_filter(registry, scope)
+    yf_map = _yf_ticker_map(registry, tickers)
+
+    # Build yf-ticker list for run_screen
+    yf_tickers = []
+    for t in tickers:
+        yf_tickers.append(yf_map.get(t, t))
+
+    total = len(yf_tickers)
+    repo.update_scheduler_run(
+        run_id, {"tickers_total": total},
+    )
+    _logger.info(
+        "[batch-piotroski] Scoring %d tickers "
+        "(scope=%s)",
+        total,
+        scope,
+    )
+
+    if cancel_event and cancel_event.is_set():
+        _finalize_run(
+            repo, run_id, 0, total, [], True,
+        )
+        return
+
+    try:
+        from backend.pipeline.screener.screen import (
+            run_screen,
+        )
+
+        result = asyncio.run(
+            run_screen(tickers=yf_tickers),
+        )
+        scored = result.get("scored", 0)
+        failed = result.get("failed", 0)
+        errors = []
+        if failed > 0:
+            errors.append(
+                f"{failed} tickers failed scoring",
+            )
+
+        _logger.info(
+            "[batch-piotroski] Done: %d scored, "
+            "%d failed, %d strong, %d moderate, "
+            "%d weak in %.1fs",
+            scored,
+            failed,
+            result.get("strong", 0),
+            result.get("moderate", 0),
+            result.get("weak", 0),
+            result.get("elapsed_s", 0),
+        )
+
+        _finalize_run(
+            repo,
+            run_id,
+            scored,
+            total,
+            errors,
+            False,
+        )
+    except Exception as exc:
+        _logger.error(
+            "[batch-piotroski] Failed: %s",
+            exc,
+            exc_info=True,
+        )
+        _finalize_run(
+            repo, run_id, 0, total,
+            [str(exc)[:500]], False,
+        )

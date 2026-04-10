@@ -17,6 +17,8 @@ from backend.db.models import (  # noqa: F401
     IngestionCursor,
     IngestionSkipped,
     PaymentTransaction,
+    Pipeline,
+    PipelineStep,
     ScheduledJob,
     StockMaster,
     StockRegistry,

@@ -5,11 +5,14 @@ import { apiFetch } from "@/lib/apiFetch";
 import { API_URL } from "@/lib/config";
 import {
   useSchedulerJobs,
+  useSchedulerPipelines,
   useSchedulerRuns,
+  useSchedulerRunsFiltered,
   useSchedulerStats,
   type SchedulerJob,
   type SchedulerRun,
 } from "@/hooks/useSchedulerData";
+import PipelineDAG from "./PipelineDAG";
 
 // ---------------------------------------------------------------
 // Helpers
@@ -716,6 +719,7 @@ function NewScheduleForm({
         data_refresh: "Data Refresh",
         compute_analytics: "Compute Analytics",
         run_sentiment: "Run Sentiment",
+        run_piotroski: "Piotroski F-Score",
         run_forecasts: "Run Forecasts",
       };
       const typeLabel = typeLabelMap[jobType]
@@ -934,6 +938,35 @@ function NewScheduleForm({
                 </p>
               </div>
             </button>
+            <button
+              type="button"
+              onClick={() => setJobType("run_piotroski")}
+              className={`flex items-center gap-2.5
+                rounded-xl border p-3 text-left
+                transition-all ${
+                  jobType === "run_piotroski"
+                    ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-500/12"
+                    : "border-gray-200 dark:border-gray-700"
+                }`}
+            >
+              <div
+                className="flex h-9 w-9 items-center
+                  justify-center rounded-[10px]
+                  bg-amber-100 text-amber-700
+                  dark:bg-amber-500/15
+                  dark:text-amber-400"
+              >
+                <ActivityIcon />
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-gray-900 dark:text-gray-100">
+                  Piotroski F-Score
+                </p>
+                <p className="text-[10px] text-gray-400 dark:text-gray-500">
+                  Fundamental scoring
+                </p>
+              </div>
+            </button>
           </div>
         </div>
 
@@ -1145,7 +1178,23 @@ function NewScheduleForm({
 // ---------------------------------------------------------------
 
 function RunTimeline() {
-  const { runs, mutate } = useSchedulerRuns();
+  const [filterStatus, setFilterStatus] = useState("");
+  const [filterJobType, setFilterJobType] = useState("");
+  const [filterDays, setFilterDays] = useState(7);
+  const [page, setPage] = useState(0);
+  const pageSize = 20;
+
+  const {
+    runs,
+    total,
+    mutate,
+  } = useSchedulerRunsFiltered({
+    status: filterStatus || undefined,
+    job_type: filterJobType || undefined,
+    days: filterDays,
+    offset: page * pageSize,
+    limit: pageSize,
+  });
 
   const handleCancel = useCallback(
     async (runId: string) => {
@@ -1158,26 +1207,85 @@ function RunTimeline() {
     [mutate],
   );
 
-  if (runs.length === 0) {
-    return (
-      <div
-        className="rounded-2xl border border-gray-200
-          bg-white p-8 text-center text-sm
-          text-gray-400
-          dark:border-gray-800 dark:bg-gray-900/80
-          dark:text-gray-500"
-      >
-        No run history yet.
-      </div>
-    );
-  }
+  // Compute metrics from visible runs
+  const successCount = runs.filter(
+    (r: SchedulerRun) => r.status === "success",
+  ).length;
+  const avgDuration =
+    runs.length > 0
+      ? runs.reduce(
+          (sum: number, r: SchedulerRun) =>
+            sum + (r.duration_secs ?? 0),
+          0,
+        ) / runs.length
+      : 0;
 
   const dotColor: Record<string, string> = {
     success: "bg-emerald-500",
     running: "bg-indigo-500 animate-pulse",
     failed: "bg-red-500",
     cancelled: "bg-orange-500",
+    skipped: "bg-zinc-400",
   };
+
+  // Group pipeline runs, keep standalone runs flat
+  type RunEntry =
+    | { type: "solo"; run: SchedulerRun }
+    | {
+        type: "pipeline";
+        id: string;
+        steps: SchedulerRun[];
+        started_at: string;
+      };
+
+  const grouped: RunEntry[] = [];
+  const pipelineMap = new Map<string, SchedulerRun[]>();
+  const soloRuns: SchedulerRun[] = [];
+
+  for (const r of runs) {
+    if (r.pipeline_run_id) {
+      const list = pipelineMap.get(r.pipeline_run_id) ?? [];
+      list.push(r);
+      pipelineMap.set(r.pipeline_run_id, list);
+    } else {
+      soloRuns.push(r);
+    }
+  }
+
+  // Build ordered list: insert pipeline groups at
+  // the position of their earliest run
+  const allEntries: {
+    sortKey: string;
+    entry: RunEntry;
+  }[] = [];
+  for (const [pid, steps] of pipelineMap) {
+    steps.sort(
+      (a, b) =>
+        new Date(a.started_at).getTime() -
+        new Date(b.started_at).getTime(),
+    );
+    allEntries.push({
+      sortKey: steps[0].started_at,
+      entry: {
+        type: "pipeline",
+        id: pid,
+        steps,
+        started_at: steps[0].started_at,
+      },
+    });
+  }
+  for (const r of soloRuns) {
+    allEntries.push({
+      sortKey: r.started_at,
+      entry: { type: "solo", run: r },
+    });
+  }
+  allEntries.sort(
+    (a, b) =>
+      new Date(b.sortKey).getTime() -
+      new Date(a.sortKey).getTime(),
+  );
+  for (const { entry } of allEntries) grouped.push(entry);
 
   return (
     <div
@@ -1189,84 +1297,324 @@ function RunTimeline() {
         className="border-b border-gray-200 px-5
           py-3.5 dark:border-gray-800"
       >
-        <h3 className="text-[15px] font-bold">
-          Run History
-        </h3>
-      </div>
-      <div className="relative px-5 py-5 pl-10">
-        {/* Vertical line */}
-        <div
-          className="absolute bottom-5 left-[26px]
-            top-5 w-0.5 rounded-full bg-gray-200
-            dark:bg-gray-700"
-        />
+        <div className="flex items-center justify-between">
+          <h3 className="text-[15px] font-bold">
+            Run History
+          </h3>
+          <div className="flex items-center gap-3 text-[11px]">
+            <span className="text-zinc-500 dark:text-zinc-400">
+              Total: {total}
+            </span>
+            {total > 0 && (
+              <>
+                <span className="text-emerald-600 dark:text-emerald-400">
+                  {Math.round(
+                    (successCount / Math.max(runs.length, 1)) * 100,
+                  )}% success
+                </span>
+                <span className="text-zinc-500 dark:text-zinc-400">
+                  Avg: {fmtDuration(avgDuration)}
+                </span>
+              </>
+            )}
+          </div>
+        </div>
 
-        <div className="space-y-5">
-          {runs.slice(0, 10).map(
-            (r: SchedulerRun) => (
-              <div
-                key={r.run_id}
-                className="relative pl-7"
+        {/* Filters */}
+        <div className="mt-2.5 flex flex-wrap items-center gap-2">
+          <select
+            value={filterStatus}
+            onChange={(e) => {
+              setFilterStatus(e.target.value);
+              setPage(0);
+            }}
+            className="rounded-md border border-gray-200
+              bg-white px-2 py-1 text-[11px]
+              dark:border-gray-700 dark:bg-gray-800
+              dark:text-gray-300"
+          >
+            <option value="">All statuses</option>
+            <option value="success">Success</option>
+            <option value="failed">Failed</option>
+            <option value="running">Running</option>
+            <option value="cancelled">Cancelled</option>
+            <option value="skipped">Skipped</option>
+          </select>
+          <select
+            value={filterJobType}
+            onChange={(e) => {
+              setFilterJobType(e.target.value);
+              setPage(0);
+            }}
+            className="rounded-md border border-gray-200
+              bg-white px-2 py-1 text-[11px]
+              dark:border-gray-700 dark:bg-gray-800
+              dark:text-gray-300"
+          >
+            <option value="">All job types</option>
+            <option value="data_refresh">
+              Data Refresh
+            </option>
+            <option value="compute_analytics">
+              Compute Analytics
+            </option>
+            <option value="run_sentiment">
+              Sentiment
+            </option>
+            <option value="run_piotroski">
+              Piotroski F-Score
+            </option>
+            <option value="run_forecasts">
+              Forecasts
+            </option>
+          </select>
+          <select
+            value={filterDays}
+            onChange={(e) => {
+              setFilterDays(Number(e.target.value));
+              setPage(0);
+            }}
+            className="rounded-md border border-gray-200
+              bg-white px-2 py-1 text-[11px]
+              dark:border-gray-700 dark:bg-gray-800
+              dark:text-gray-300"
+          >
+            <option value={1}>Last 24h</option>
+            <option value={7}>Last 7 days</option>
+            <option value={30}>Last 30 days</option>
+          </select>
+        </div>
+      </div>
+
+      {grouped.length === 0 ? (
+        <div className="p-8 text-center text-sm text-gray-400 dark:text-gray-500">
+          No runs match the selected filters.
+        </div>
+      ) : (
+        <div className="px-5 py-5 space-y-3">
+          {grouped.map((entry) =>
+            entry.type === "pipeline" ? (
+              <PipelineRunGroup
+                key={entry.id}
+                steps={entry.steps}
+                started_at={entry.started_at}
+                dotColor={dotColor}
+                onCancel={handleCancel}
+              />
+            ) : (
+              <SoloRunRow
+                key={entry.run.run_id}
+                run={entry.run}
+                dotColor={dotColor}
+                onCancel={handleCancel}
+              />
+            ),
+          )}
+
+          {/* Pagination */}
+          {total > pageSize && (
+            <div className="mt-4 flex items-center justify-center gap-3">
+              <button
+                disabled={page === 0}
+                onClick={() => setPage((p) => p - 1)}
+                className="rounded-md border border-gray-200
+                  px-3 py-1 text-[11px] font-medium
+                  disabled:opacity-40
+                  dark:border-gray-700 dark:text-gray-300
+                  hover:bg-gray-50 dark:hover:bg-gray-800"
               >
-                {/* Dot */}
+                Previous
+              </button>
+              <span className="text-[11px] text-gray-500 dark:text-gray-400">
+                {page * pageSize + 1}&ndash;
+                {Math.min(
+                  (page + 1) * pageSize,
+                  total,
+                )}{" "}
+                of {total}
+              </span>
+              <button
+                disabled={
+                  (page + 1) * pageSize >= total
+                }
+                onClick={() => setPage((p) => p + 1)}
+                className="rounded-md border border-gray-200
+                  px-3 py-1 text-[11px] font-medium
+                  disabled:opacity-40
+                  dark:border-gray-700 dark:text-gray-300
+                  hover:bg-gray-50 dark:hover:bg-gray-800"
+              >
+                Next
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------
+// Pipeline Run Group (collapsible)
+// ---------------------------------------------------------------
+
+function PipelineRunGroup({
+  steps,
+  started_at,
+  dotColor,
+  onCancel,
+}: {
+  steps: SchedulerRun[];
+  started_at: string;
+  dotColor: Record<string, string>;
+  onCancel: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(true);
+
+  const allSuccess = steps.every(
+    (s) => s.status === "success",
+  );
+  const anyFailed = steps.some(
+    (s) => s.status === "failed",
+  );
+  const anyRunning = steps.some(
+    (s) => s.status === "running",
+  );
+  const overallStatus = anyRunning
+    ? "running"
+    : anyFailed
+      ? "failed"
+      : allSuccess
+        ? "success"
+        : "pending";
+
+  const totalDur = steps.reduce(
+    (s, r) => s + (r.duration_secs ?? 0),
+    0,
+  );
+  const pipelineName =
+    steps[0]?.job_name?.replace(
+      /^Daily\s+\w+\s+-\s+/,
+      "",
+    ) ?? "Pipeline";
+  const scope = steps[0]?.scope ?? "";
+
+  const scopeBadge: Record<string, string> = {
+    india:
+      "bg-orange-100 text-orange-700 dark:bg-orange-500/15 dark:text-orange-400",
+    us: "bg-blue-100 text-blue-700 dark:bg-blue-500/15 dark:text-blue-400",
+  };
+
+  return (
+    <div
+      className="rounded-xl border border-gray-200
+        dark:border-gray-700 overflow-hidden"
+    >
+      {/* Header — click to toggle */}
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center gap-3 px-4
+          py-3 text-left bg-gray-50 dark:bg-gray-800/50
+          hover:bg-gray-100 dark:hover:bg-gray-800
+          transition-colors"
+      >
+        <div
+          className={`h-2.5 w-2.5 rounded-full shrink-0
+            ${dotColor[overallStatus] ?? "bg-gray-400"}`}
+        />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-[13px] font-semibold text-gray-900 dark:text-gray-100">
+              Pipeline Run
+            </span>
+            {scope && scopeBadge[scope] && (
+              <span
+                className={`rounded-full px-1.5 py-0.5
+                  text-[9px] font-bold ${scopeBadge[scope]}`}
+              >
+                {scope.toUpperCase()}
+              </span>
+            )}
+            <StatusBadge status={overallStatus} />
+            <span className="font-mono text-[11px] text-gray-400 dark:text-gray-500">
+              {fmtDuration(totalDur)}
+            </span>
+          </div>
+          <p className="font-mono text-[10px] text-gray-400 dark:text-gray-500 mt-0.5">
+            {fmtTimestamp(started_at)}
+            {" \u00B7 "}
+            {steps.length} steps
+          </p>
+        </div>
+        <svg
+          viewBox="0 0 24 24"
+          className={`h-4 w-4 text-gray-400
+            transition-transform duration-200
+            ${open ? "rotate-180" : ""}`}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+        >
+          <polyline points="6 9 12 15 18 9" />
+        </svg>
+      </button>
+
+      {/* Steps */}
+      {open && (
+        <div className="px-4 py-3 space-y-2.5 border-t
+          border-gray-100 dark:border-gray-700/50"
+        >
+          {steps.map((r, i) => (
+            <div
+              key={r.run_id}
+              className="flex items-start gap-3"
+            >
+              {/* Step connector */}
+              <div className="flex flex-col items-center pt-1">
                 <div
-                  className={`absolute -left-[5px]
-                    top-1 h-3.5 w-3.5 rounded-full
-                    border-2 border-white
-                    dark:border-gray-900
-                    ${dotColor[r.status] ?? "bg-gray-400"}
-                  `}
+                  className={`h-2.5 w-2.5 rounded-full
+                    ${dotColor[r.status] ?? "bg-gray-300"}`}
                 />
-                <p className="font-mono text-[11px] text-gray-400 dark:text-gray-500">
-                  {fmtTimestamp(r.started_at)}
-                </p>
-                <p className="text-[13px] font-semibold text-gray-900 dark:text-gray-100">
-                  {r.job_name}
-                </p>
-                <div className="mt-1 flex items-center gap-2">
+                {i < steps.length - 1 && (
+                  <div
+                    className="w-0.5 flex-1 mt-1
+                      bg-gray-200 dark:bg-gray-700
+                      min-h-[20px]"
+                  />
+                )}
+              </div>
+              <div className="flex-1 min-w-0 pb-1">
+                <div className="flex items-center gap-2">
+                  <span
+                    className="text-[10px] font-bold
+                      text-gray-400 dark:text-gray-500"
+                  >
+                    {i + 1}
+                  </span>
+                  <span className="text-[12px] font-semibold text-gray-800 dark:text-gray-200">
+                    {r.job_name}
+                  </span>
+                </div>
+                <div className="mt-0.5 flex items-center gap-2">
                   <StatusBadge status={r.status} />
-                  {r.trigger_type === "catchup" && (
-                    <span
-                      className="rounded-full bg-amber-100
-                        px-2 py-0.5 text-[10px]
-                        font-semibold text-amber-700
-                        dark:bg-amber-500/15
-                        dark:text-amber-400"
-                    >
-                      Catch-up
-                    </span>
-                  )}
-                  {r.trigger_type === "manual" && (
-                    <span
-                      className="rounded-full bg-blue-100
-                        px-2 py-0.5 text-[10px]
-                        font-semibold text-blue-700
-                        dark:bg-blue-500/15
-                        dark:text-blue-400"
-                    >
-                      Manual
-                    </span>
-                  )}
-                  <span className="font-mono text-[11px] text-gray-400 dark:text-gray-500">
+                  <span className="font-mono text-[10px] text-gray-400">
                     {fmtDuration(r.duration_secs)}
                   </span>
-                  <span className="font-mono text-[11px] text-gray-500 dark:text-gray-400">
-                    {r.tickers_done}/{r.tickers_total}{" "}
-                    tickers
+                  <span className="font-mono text-[10px] text-gray-400">
+                    {r.tickers_done}/{r.tickers_total}
                   </span>
                   {r.status === "running" && (
                     <button
-                      onClick={() =>
-                        handleCancel(r.run_id)
-                      }
-                      className="ml-1 rounded-full
-                        bg-red-100 px-2.5 py-0.5
-                        text-[10px] font-semibold
-                        text-red-700 transition-all
-                        hover:bg-red-200
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onCancel(r.run_id);
+                      }}
+                      className="rounded-full bg-red-100
+                        px-2 py-0.5 text-[9px]
+                        font-semibold text-red-700
                         dark:bg-red-500/15
-                        dark:text-red-400
-                        dark:hover:bg-red-500/25"
+                        dark:text-red-400"
                     >
                       Stop
                     </button>
@@ -1274,17 +1622,101 @@ function RunTimeline() {
                 </div>
                 {r.error_message && (
                   <p
-                    className="mt-1 line-clamp-2 text-[10px]
-                      text-orange-600 dark:text-orange-400"
+                    className="mt-0.5 text-[10px]
+                      text-orange-600 dark:text-orange-400
+                      line-clamp-1"
                     title={r.error_message}
                   >
                     {r.error_message}
                   </p>
                 )}
               </div>
-            ),
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------
+// Solo run row (non-pipeline)
+// ---------------------------------------------------------------
+
+function SoloRunRow({
+  run: r,
+  dotColor,
+  onCancel,
+}: {
+  run: SchedulerRun;
+  dotColor: Record<string, string>;
+  onCancel: (id: string) => void;
+}) {
+  return (
+    <div className="flex items-start gap-3 px-2 py-2">
+      <div
+        className={`mt-1 h-3 w-3 rounded-full shrink-0
+          ${dotColor[r.status] ?? "bg-gray-400"}`}
+      />
+      <div className="flex-1 min-w-0">
+        <p className="font-mono text-[11px] text-gray-400 dark:text-gray-500">
+          {fmtTimestamp(r.started_at)}
+        </p>
+        <p className="text-[13px] font-semibold text-gray-900 dark:text-gray-100">
+          {r.job_name}
+        </p>
+        <div className="mt-1 flex items-center gap-2">
+          <StatusBadge status={r.status} />
+          {r.trigger_type === "catchup" && (
+            <span
+              className="rounded-full bg-amber-100
+                px-2 py-0.5 text-[10px]
+                font-semibold text-amber-700
+                dark:bg-amber-500/15
+                dark:text-amber-400"
+            >
+              Catch-up
+            </span>
+          )}
+          {r.trigger_type === "manual" && (
+            <span
+              className="rounded-full bg-blue-100
+                px-2 py-0.5 text-[10px]
+                font-semibold text-blue-700
+                dark:bg-blue-500/15
+                dark:text-blue-400"
+            >
+              Manual
+            </span>
+          )}
+          <span className="font-mono text-[11px] text-gray-400 dark:text-gray-500">
+            {fmtDuration(r.duration_secs)}
+          </span>
+          <span className="font-mono text-[11px] text-gray-500 dark:text-gray-400">
+            {r.tickers_done}/{r.tickers_total} tickers
+          </span>
+          {r.status === "running" && (
+            <button
+              onClick={() => onCancel(r.run_id)}
+              className="ml-1 rounded-full bg-red-100
+                px-2.5 py-0.5 text-[10px] font-semibold
+                text-red-700 hover:bg-red-200
+                dark:bg-red-500/15 dark:text-red-400
+                dark:hover:bg-red-500/25"
+            >
+              Stop
+            </button>
           )}
         </div>
+        {r.error_message && (
+          <p
+            className="mt-1 line-clamp-2 text-[10px]
+              text-orange-600 dark:text-orange-400"
+            title={r.error_message}
+          >
+            {r.error_message}
+          </p>
+        )}
       </div>
     </div>
   );
@@ -1299,6 +1731,10 @@ export function SchedulerTab() {
   const { runs, mutate: mutateRuns } =
     useSchedulerRuns();
   const { mutate: mutateStats } = useSchedulerStats();
+  const {
+    pipelines,
+    mutate: mutatePipelines,
+  } = useSchedulerPipelines();
   const [showForm, setShowForm] = useState(true);
   const [editingJob, setEditingJob] =
     useState<SchedulerJob | null>(null);
@@ -1307,7 +1743,8 @@ export function SchedulerTab() {
     mutateJobs();
     mutateRuns();
     mutateStats();
-  }, [mutateJobs, mutateRuns, mutateStats]);
+    mutatePipelines();
+  }, [mutateJobs, mutateRuns, mutateStats, mutatePipelines]);
 
   // Auto-refresh every 30s for live run tracking
   useEffect(() => {
@@ -1319,6 +1756,12 @@ export function SchedulerTab() {
     <div className="space-y-5">
       {/* Stat cards */}
       <StatCards />
+
+      {/* Pipeline DAG */}
+      <PipelineDAG
+        pipelines={pipelines}
+        mutatePipelines={mutatePipelines}
+      />
 
       {/* Two-panel: Jobs + Form */}
       <div

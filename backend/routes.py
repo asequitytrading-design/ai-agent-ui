@@ -1351,12 +1351,32 @@ def create_app(
             request.app.state, "scheduler", None,
         )
         if not svc:
-            return {"runs": []}
-        runs = svc._repo.get_scheduler_runs(days=7)
-        # Sanitise for JSON (NaN, NaT, datetimes)
+            return {"runs": [], "total": 0}
+        params = request.query_params
+        days = int(params.get("days", "7"))
+        job_type = params.get("job_type") or None
+        status = params.get("status") or None
+        p_run_id = (
+            params.get("pipeline_run_id") or None
+        )
+        offset = int(params.get("offset", "0"))
+        limit = int(params.get("limit", "50"))
+        runs = svc._repo.get_scheduler_runs(
+            days=days,
+            job_type=job_type,
+            status=status,
+            pipeline_run_id=p_run_id,
+            offset=offset,
+            limit=limit,
+        )
+        total = (
+            runs[0].get("_total", len(runs))
+            if runs else 0
+        )
         import math as _math
 
         for r in runs:
+            r.pop("_total", None)
             for k, v in list(r.items()):
                 if hasattr(v, "isoformat"):
                     r[k] = v.isoformat()
@@ -1364,7 +1384,143 @@ def create_app(
                     _math.isnan(v) or _math.isinf(v)
                 ):
                     r[k] = None
-        return {"runs": runs}
+        return {"runs": runs, "total": total}
+
+    # ── Pipeline endpoints ─────────────────────
+
+    async def _pipeline_list(request: Request):
+        """GET /admin/scheduler/pipelines."""
+        svc = getattr(
+            request.app.state, "scheduler", None,
+        )
+        if not svc:
+            return {"pipelines": []}
+        return {"pipelines": svc.list_pipelines()}
+
+    async def _pipeline_create(request: Request):
+        """POST /admin/scheduler/pipelines."""
+        body = await request.json()
+        svc = getattr(
+            request.app.state, "scheduler", None,
+        )
+        if not svc:
+            raise HTTPException(
+                503, "Scheduler not available",
+            )
+        cron_days = body.get("cron_days", [])
+        if isinstance(cron_days, list):
+            cron_days = ",".join(cron_days)
+        cron_dates = body.get("cron_dates", [])
+        if isinstance(cron_dates, list):
+            cron_dates = ",".join(
+                str(d) for d in cron_dates
+            )
+        data = {
+            "name": body.get("name", "Untitled"),
+            "scope": body.get("scope", "all"),
+            "enabled": body.get("enabled", True),
+            "cron_days": cron_days,
+            "cron_dates": cron_dates or "",
+            "cron_time": body.get(
+                "cron_time", "18:00",
+            ),
+            "steps": body.get("steps", []),
+        }
+        pid = svc.add_pipeline(data)
+        return {
+            "pipeline_id": pid, "detail": "created",
+        }
+
+    async def _pipeline_update(
+        request: Request, pipeline_id: str,
+    ):
+        """PATCH /admin/scheduler/pipelines/{id}."""
+        body = await request.json()
+        svc = getattr(
+            request.app.state, "scheduler", None,
+        )
+        if not svc:
+            raise HTTPException(
+                503, "Scheduler not available",
+            )
+        updates = {}
+        for k in (
+            "name", "scope", "enabled",
+            "cron_days", "cron_time", "cron_dates",
+            "steps",
+        ):
+            if k in body:
+                v = body[k]
+                if k == "cron_days" and isinstance(
+                    v, list,
+                ):
+                    v = ",".join(v)
+                if k == "cron_dates" and isinstance(
+                    v, list,
+                ):
+                    v = ",".join(str(d) for d in v)
+                updates[k] = v
+        if updates:
+            svc.update_pipeline(pipeline_id, updates)
+        return {"detail": "updated"}
+
+    async def _pipeline_delete(
+        request: Request, pipeline_id: str,
+    ):
+        """DELETE /admin/scheduler/pipelines/{id}."""
+        svc = getattr(
+            request.app.state, "scheduler", None,
+        )
+        if not svc:
+            raise HTTPException(
+                503, "Scheduler not available",
+            )
+        svc.remove_pipeline(pipeline_id)
+        return {"detail": "deleted"}
+
+    async def _pipeline_trigger(
+        request: Request, pipeline_id: str,
+    ):
+        """POST /admin/scheduler/pipelines/{id}/trigger."""
+        svc = getattr(
+            request.app.state, "scheduler", None,
+        )
+        if not svc:
+            raise HTTPException(
+                503, "Scheduler not available",
+            )
+        tag = svc.trigger_pipeline_now(pipeline_id)
+        if not tag:
+            raise HTTPException(
+                404, "Pipeline not found",
+            )
+        return {"pipeline_id": pipeline_id, "tag": tag}
+
+    async def _pipeline_resume(
+        request: Request, pipeline_id: str,
+    ):
+        """POST .../pipelines/{id}/resume."""
+        body = await request.json()
+        svc = getattr(
+            request.app.state, "scheduler", None,
+        )
+        if not svc:
+            raise HTTPException(
+                503, "Scheduler not available",
+            )
+        from_step = body.get("from_step", 1)
+        tag = svc.resume_pipeline_now(
+            pipeline_id, from_step,
+        )
+        if not tag:
+            raise HTTPException(
+                404, "Pipeline not found",
+            )
+        return {
+            "pipeline_id": pipeline_id,
+            "from_step": from_step,
+            "tag": tag,
+        }
 
     async def _scheduler_stats(request: Request):
         """GET /admin/scheduler/stats."""
@@ -1443,6 +1599,46 @@ def create_app(
         "/admin/scheduler/stats",
         _scheduler_stats,
         methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
+
+    # ── Pipeline routes ───────────────────────
+    admin_router.add_api_route(
+        "/admin/scheduler/pipelines",
+        _pipeline_list,
+        methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/scheduler/pipelines",
+        _pipeline_create,
+        methods=["POST"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/scheduler/pipelines/{pipeline_id}",
+        _pipeline_update,
+        methods=["PATCH"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/scheduler/pipelines/{pipeline_id}",
+        _pipeline_delete,
+        methods=["DELETE"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/scheduler/pipelines"
+        "/{pipeline_id}/trigger",
+        _pipeline_trigger,
+        methods=["POST"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/scheduler/pipelines"
+        "/{pipeline_id}/resume",
+        _pipeline_resume,
+        methods=["POST"],
         dependencies=[Depends(superuser_only)],
     )
 

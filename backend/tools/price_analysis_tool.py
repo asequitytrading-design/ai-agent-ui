@@ -149,7 +149,6 @@ def analyse_stock_price(ticker: str) -> str:
         stats = _generate_summary_stats(df, ticker)
 
         repo = _sh._require_repo()
-        repo.upsert_technical_indicators(ticker, df)
         _iceberg_summary = {
             **movement,
             **stats,
