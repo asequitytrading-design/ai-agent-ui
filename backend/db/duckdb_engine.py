@@ -1,6 +1,7 @@
 """DuckDB in-process query engine for Iceberg tables."""
 
 import logging
+import threading
 
 import duckdb
 
@@ -9,6 +10,11 @@ from backend.paths import ICEBERG_WAREHOUSE
 log = logging.getLogger(__name__)
 
 _extensions_installed = False
+
+# Metadata cache: table_name → metadata JSON path.
+# Avoids filesystem glob on every query (~30ms each).
+_meta_cache: dict[str, str] = {}
+_meta_lock = threading.Lock()
 
 
 def get_connection() -> duckdb.DuckDBPyConnection:
@@ -31,14 +37,40 @@ def get_connection() -> duckdb.DuckDBPyConnection:
     return conn
 
 
+def invalidate_metadata(
+    table_name: str | None = None,
+) -> None:
+    """Invalidate cached metadata path.
+
+    Call after Iceberg writes so the next query picks
+    up the new metadata snapshot.
+
+    Args:
+        table_name: Specific table to invalidate, or
+            ``None`` to clear all.
+    """
+    with _meta_lock:
+        if table_name:
+            _meta_cache.pop(table_name, None)
+        else:
+            _meta_cache.clear()
+
+
 def _resolve_metadata(table_name: str) -> str | None:
     """Find the latest Iceberg metadata JSON path.
 
-    Returns:
-        Path string or ``None`` if no metadata found.
+    Caches the result in-memory. Invalidated by
+    :func:`invalidate_metadata` after writes.
     """
+    with _meta_lock:
+        cached = _meta_cache.get(table_name)
+    if cached:
+        return cached
+
     metadata_path = (
-        ICEBERG_WAREHOUSE / table_name.replace(".", "/") / "metadata"
+        ICEBERG_WAREHOUSE
+        / table_name.replace(".", "/")
+        / "metadata"
     )
     metadata_files = sorted(
         metadata_path.glob("*.metadata.json"),
@@ -47,7 +79,10 @@ def _resolve_metadata(table_name: str) -> str | None:
     if not metadata_files:
         log.warning("No metadata for %s", table_name)
         return None
-    return str(metadata_files[0])
+    result = str(metadata_files[0])
+    with _meta_lock:
+        _meta_cache[table_name] = result
+    return result
 
 
 def _create_view(

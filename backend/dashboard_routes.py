@@ -1781,10 +1781,25 @@ def create_dashboard_router() -> APIRouter:
                 media_type="application/json",
             )
 
-        stock_repo = _get_stock_repo()
-        holdings = stock_repo.get_portfolio_holdings(
-            user.user_id,
-        )
+        import pandas as _pd3
+
+        # Holdings via DuckDB (avoid PyIceberg).
+        try:
+            holdings = _duckdb_read(
+                "stocks.portfolio_transactions",
+                "SELECT ticker, quantity, "
+                "price AS avg_price, currency "
+                "FROM portfolio_transactions "
+                f"WHERE user_id = '{user.user_id}'"
+                " AND side = 'BUY'",
+            )
+        except Exception:
+            stock_repo = _get_stock_repo()
+            holdings = (
+                stock_repo.get_portfolio_holdings(
+                    user.user_id,
+                )
+            )
         if holdings.empty:
             return RecommendationsResponse()
 
@@ -1797,8 +1812,6 @@ def create_dashboard_router() -> APIRouter:
             return RecommendationsResponse()
 
         tickers = holdings["ticker"].unique().tolist()
-        import pandas as _pd3
-
         ph = ",".join(f"'{t}'" for t in tickers)
         try:
             info_df = _duckdb_read(

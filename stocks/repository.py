@@ -817,6 +817,15 @@ class StockRepository:
                     )
                     self._dirty_tables.add(identifier)
                     self._invalidate_cache(identifier)
+                    # Invalidate DuckDB metadata cache
+                    # so next read sees new snapshot.
+                    try:
+                        from backend.db.duckdb_engine import (
+                            invalidate_metadata,
+                        )
+                        invalidate_metadata(identifier)
+                    except Exception:
+                        pass
                     return
                 except CommitFailedException as exc:
                     last_exc = exc
