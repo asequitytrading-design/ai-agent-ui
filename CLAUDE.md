@@ -77,7 +77,7 @@ ollama-profile embedding                    # load nomic-embed-text (memory vect
 ollama-profile status                       # check loaded model
 ```
 
-**Key dirs**: `backend/` (agents, tools, config), `backend/pipeline/` (stock data pipeline, 12 CLI commands), `backend/db/` (ORM models, async engine, Alembic migrations, DuckDB layer), `auth/` (JWT + RBAC + OAuth PKCE), `stocks/` (Iceberg — 14 OLAP tables), `frontend/` (SPA), `dashboard/` (legacy Dash callbacks — all pages migrated to Next.js), `hooks/` (pre-commit, pre-push).
+**Key dirs**: `backend/` (agents, tools, config), `backend/pipeline/` (stock data pipeline, 19 CLI commands), `backend/jobs/` (scheduler executors, pipeline chaining, gap filler), `backend/db/` (ORM models, async engine, Alembic migrations, DuckDB layer), `auth/` (JWT + RBAC + OAuth PKCE), `stocks/` (Iceberg — 14 OLAP tables), `frontend/` (SPA), `dashboard/` (legacy Dash callbacks — all pages migrated to Next.js), `hooks/` (pre-commit, pre-push).
 
 **Docker files**: `Dockerfile.backend`, `Dockerfile.frontend`,
 `Dockerfile.docs`, `docker-compose.yml`,
@@ -113,7 +113,7 @@ ollama-profile status                       # check loaded model
 
 ## Stock Data Pipeline
 
-- **Module:** `backend/pipeline/` — 12 CLI commands via
+- **Module:** `backend/pipeline/` — 19 CLI commands via
   `PYTHONPATH=.:backend python -m backend.pipeline.runner`
 - **Source strategy:** yfinance primary (bulk/daily),
   jugaad-data fallback (retry/correct), racing (chat).
@@ -146,13 +146,17 @@ append-only analytics.
 | `stock_tags` | `backend/db/models/stock_tag.py` | Temporal tagging (nifty50/100/500) |
 | `ingestion_cursor` | `backend/db/models/ingestion_cursor.py` | Keyset pagination cursor |
 | `ingestion_skipped` | `backend/db/models/ingestion_skipped.py` | Failed ticker log + retry |
+| `pipelines` | `backend/db/models/pipeline.py` | Pipeline chain definitions |
+| `pipeline_steps` | `backend/db/models/pipeline.py` | Ordered steps within pipelines |
 
 ### Iceberg tables (14 — append / scoped-delete)
 
 `audit_log`, `usage_history`, `company_info`, `dividends`, `ohlcv`,
-`technical_indicators`, `analysis_summary`, `forecast_runs`,
-`forecasts`, `quarterly_results`, `llm_pricing`, `llm_usage`,
-`scheduler_runs` (stocks ns) + portfolio_transactions (stocks ns)
+`analysis_summary`, `forecast_runs`, `forecasts`, `quarterly_results`,
+`llm_pricing`, `llm_usage`, `scheduler_runs`, `portfolio_transactions`,
+`piotroski_scores`, `sentiment_scores` (stocks ns)
+Note: `technical_indicators` exists but is empty/unused — indicators
+computed on-the-fly from OHLCV in `_analysis_shared.py`.
 
 ### Key components
 
@@ -163,9 +167,13 @@ append-only analytics.
 - `backend/db/migrations/` — Alembic async migrations
 - `auth/repo/repository.py` — `UserRepository` facade
   (session_factory injection, per-call sessions)
-- `backend/db/pg_stocks.py` — registry + scheduler PG functions
-- `backend/db/duckdb_engine.py` — DuckDB query layer foundation
-  (reads Iceberg parquet directly for analytics)
+- `backend/db/pg_stocks.py` — registry + scheduler + pipeline PG functions
+- `backend/db/models/pipeline.py` — Pipeline + PipelineStep ORM
+- `backend/jobs/pipeline_executor.py` — sequential chain execution
+  with skip-on-failure and resume-from-step
+- `backend/db/duckdb_engine.py` — DuckDB query engine (primary
+  Iceberg read path). Has in-memory metadata cache; call
+  `invalidate_metadata()` after writes (auto-wired in repo).
 - `scripts/migrate_iceberg_to_pg.py` — one-time data migration
 
 ---
@@ -353,6 +361,25 @@ Run `list_memories` to browse all topics. Key categories:
   options), the next user message bypasses the financial
   keyword gate and routes to the same agent. See
   `_is_clarification()` in `guardrail.py`.
+- **DuckDB metadata cache**: `duckdb_engine.py` caches metadata
+  paths in-memory. `invalidate_metadata(table_name)` is called
+  automatically in `_retry_commit()`. If reads return stale data
+  after a write, check invalidation is wired.
+- **Iceberg `company_info` is upsert**: `insert_company_info()`
+  deletes existing row for ticker before appending. One row per
+  ticker. Bulk writes in `batch_refresh.py` also pre-delete.
+- **OHLCV full-table scan trap**: Never `SELECT * FROM ohlcv`
+  for all tickers — 1.4M rows kills performance. Use
+  `ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC)`
+  for latest close, or add `AND date >= cutoff` filter.
+- **yfinance pre-market flat candles**: Fetching OHLCV before
+  market settlement returns O=H=L placeholder data. Pipelines
+  scheduled at 08:00 IST (16h after India close, 1.5h after
+  US close). The freshness gate (`latest >= yesterday`) won't
+  re-fetch bad data — must delete and re-fetch.
+- **Perf script login**: `scripts/perf-check-auth.js` uses
+  `emailInput.type()` not `fill()` — React `onChange` doesn't
+  fire with `fill()`, keeping the submit button disabled.
 
 ---
 
@@ -386,6 +413,11 @@ PYTHONPATH=.:backend python -m backend.pipeline.runner seed --csv data/universe/
 PYTHONPATH=.:backend python -m backend.pipeline.runner bulk-download  # yfinance batch OHLCV
 PYTHONPATH=.:backend python -m backend.pipeline.runner fill-gaps   # patch company_info gaps
 PYTHONPATH=.:backend python -m backend.pipeline.runner status      # check cursor progress
+PYTHONPATH=.:backend python -m backend.pipeline.runner analytics --scope india   # compute analysis summary
+PYTHONPATH=.:backend python -m backend.pipeline.runner sentiment --scope india   # LLM sentiment scoring
+PYTHONPATH=.:backend python -m backend.pipeline.runner forecast --scope india    # Prophet forecasts
+PYTHONPATH=.:backend python -m backend.pipeline.runner screen      # Piotroski F-Score
+PYTHONPATH=.:backend python -m backend.pipeline.runner refresh --scope india --force  # full pipeline chain
 
 # Performance (run from frontend/)
 npm run perf:check                # LHCI on /login (pre-PR gate)
