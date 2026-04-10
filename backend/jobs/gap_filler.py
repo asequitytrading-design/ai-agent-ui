@@ -294,7 +294,7 @@ def _get_scoring_llm():
             compressor=MessageCompressor(),
             cascade_profile="tool",
             ollama_model=ollama,
-            ollama_first=True,
+            ollama_first=False,
         )
     except Exception:
         _logger.debug(

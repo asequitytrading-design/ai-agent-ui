@@ -96,9 +96,8 @@ ollama-profile status                       # check loaded model
 
 | Tier | Provider | Model | When |
 |------|----------|-------|------|
-| 0 | Ollama (local) | gpt-oss:20b | Sentiment/batch (`ollama_first=True`) |
-| 1-6 | Groq (free) | Round-robin pools: [70b, kimi-k2, qwen3-32b] → [gpt-oss-120b, gpt-oss-20b] → scout-17b | Interactive chat |
-| N-1 | Ollama (local) | gpt-oss:20b | Chat fallback (`ollama_first=False`) |
+| 1-6 | Groq (free) | Round-robin pools: [70b, kimi-k2, qwen3-32b] → [gpt-oss-120b, gpt-oss-20b] → scout-17b | All (chat + batch) |
+| N-1 | Ollama (local) | gpt-oss:20b | Fallback (`ollama_first=False` everywhere) |
 | N | Anthropic (paid) | claude-sonnet-4-6 | Final fallback |
 
 - `OllamaManager` (`backend/ollama_manager.py`): TTL-cached health probe,

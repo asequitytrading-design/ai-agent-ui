@@ -221,23 +221,34 @@ def create_insights_router() -> APIRouter:
         )
         price_map: dict[str, float | None] = {}
         if not ohlcv_df.empty:
-            latest = ohlcv_df.drop_duplicates(
-                subset=["ticker"],
-                keep="last",
-            )
-            for _, r in latest.iterrows():
-                price_map[str(r["ticker"])] = _safe(r["close"])
+            # Drop rows with NaN close before picking
+            # latest — some tickers have NaN on the
+            # most recent date (yfinance data gap).
+            valid = ohlcv_df.dropna(subset=["close"])
+            if not valid.empty:
+                latest = valid.drop_duplicates(
+                    subset=["ticker"],
+                    keep="last",
+                )
+                for _, r in latest.iterrows():
+                    price_map[str(r["ticker"])] = _safe(
+                        r["close"],
+                    )
 
-        # Batch TI for RSI.
-        ti_df = stock_repo.get_technical_indicators_batch(tickers)
+        # Extract RSI numeric from signal text.
+        # Signal format: "Neutral (RSI: 45.2)" or similar.
+        import re
+
         rsi_map: dict[str, float | None] = {}
-        if not ti_df.empty:
-            latest_ti = ti_df.drop_duplicates(
-                subset=["ticker"],
-                keep="last",
-            )
-            for _, r in latest_ti.iterrows():
-                rsi_map[str(r["ticker"])] = _safe(r.get("rsi_14"))
+        for _, r in df.iterrows():
+            sig = str(r.get("rsi_signal", ""))
+            m = re.search(r"RSI:\s*([\d.]+)", sig)
+            if m:
+                rsi_map[str(r["ticker"])] = float(
+                    m.group(1),
+                )
+            else:
+                rsi_map[str(r["ticker"])] = None
 
         company_df = _get_company_info_df(
             stock_repo,

@@ -107,7 +107,7 @@ function RefreshIcon({ className = "h-4 w-4" }) {
   );
 }
 
-function BarChartIcon({ className = "h-4 w-4" }) {
+function ActivityIcon({ className = "h-4 w-4" }) {
   return (
     <svg
       viewBox="0 0 24 24"
@@ -118,9 +118,40 @@ function BarChartIcon({ className = "h-4 w-4" }) {
       strokeLinecap="round"
       strokeLinejoin="round"
     >
-      <line x1="18" y1="20" x2="18" y2="10" />
-      <line x1="12" y1="20" x2="12" y2="4" />
-      <line x1="6" y1="20" x2="6" y2="14" />
+      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+    </svg>
+  );
+}
+
+function TrendingUpIcon({ className = "h-4 w-4" }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <polyline points="23 6 13.5 15.5 8.5 10.5 1 18" />
+      <polyline points="17 6 23 6 23 12" />
+    </svg>
+  );
+}
+
+function ZapIcon({ className = "h-4 w-4" }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
     </svg>
   );
 }
@@ -681,9 +712,14 @@ function NewScheduleForm({
         scheduleType === "monthly"
           ? `Monthly ${cronDates.join(",")} at ${time}`
           : scheduleLabel(days, time);
-      const typeLabel = jobType === "fetch_quarterly"
-        ? "Fetch Quarterly"
-        : "Data Refresh";
+      const typeLabelMap: Record<string, string> = {
+        data_refresh: "Data Refresh",
+        compute_analytics: "Compute Analytics",
+        run_sentiment: "Run Sentiment",
+        run_forecasts: "Run Forecasts",
+      };
+      const typeLabel = typeLabelMap[jobType]
+        || "Data Refresh";
       const jobName = name.trim() ||
         `${typeLabel} - ${label}`;
       const payload = {
@@ -813,11 +849,11 @@ function NewScheduleForm({
             </button>
             <button
               type="button"
-              onClick={() => setJobType("fetch_quarterly")}
+              onClick={() => setJobType("compute_analytics")}
               className={`flex items-center gap-2.5
                 rounded-xl border p-3 text-left
                 transition-all ${
-                  jobType === "fetch_quarterly"
+                  jobType === "compute_analytics"
                     ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-500/12"
                     : "border-gray-200 dark:border-gray-700"
                 }`}
@@ -825,18 +861,76 @@ function NewScheduleForm({
               <div
                 className="flex h-9 w-9 items-center
                   justify-center rounded-[10px]
-                  bg-emerald-100 text-emerald-700
-                  dark:bg-emerald-500/15
-                  dark:text-emerald-400"
+                  bg-amber-100 text-amber-700
+                  dark:bg-amber-500/15
+                  dark:text-amber-400"
               >
-                <BarChartIcon />
+                <ActivityIcon />
               </div>
               <div>
                 <p className="text-xs font-semibold text-gray-900 dark:text-gray-100">
-                  Fetch Quarterly
+                  Compute Analytics
                 </p>
                 <p className="text-[10px] text-gray-400 dark:text-gray-500">
-                  Quarterly financials
+                  Technical indicators
+                </p>
+              </div>
+            </button>
+            <button
+              type="button"
+              onClick={() => setJobType("run_sentiment")}
+              className={`flex items-center gap-2.5
+                rounded-xl border p-3 text-left
+                transition-all ${
+                  jobType === "run_sentiment"
+                    ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-500/12"
+                    : "border-gray-200 dark:border-gray-700"
+                }`}
+            >
+              <div
+                className="flex h-9 w-9 items-center
+                  justify-center rounded-[10px]
+                  bg-teal-100 text-teal-700
+                  dark:bg-teal-500/15
+                  dark:text-teal-400"
+              >
+                <ZapIcon />
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-gray-900 dark:text-gray-100">
+                  Run Sentiment
+                </p>
+                <p className="text-[10px] text-gray-400 dark:text-gray-500">
+                  LLM headline scoring
+                </p>
+              </div>
+            </button>
+            <button
+              type="button"
+              onClick={() => setJobType("run_forecasts")}
+              className={`flex items-center gap-2.5
+                rounded-xl border p-3 text-left
+                transition-all ${
+                  jobType === "run_forecasts"
+                    ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-500/12"
+                    : "border-gray-200 dark:border-gray-700"
+                }`}
+            >
+              <div
+                className="flex h-9 w-9 items-center
+                  justify-center rounded-[10px]
+                  bg-purple-100 text-purple-700
+                  dark:bg-purple-500/15
+                  dark:text-purple-400"
+              >
+                <TrendingUpIcon />
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-gray-900 dark:text-gray-100">
+                  Run Forecasts
+                </p>
+                <p className="text-[10px] text-gray-400 dark:text-gray-500">
+                  Prophet price forecasts
                 </p>
               </div>
             </button>
@@ -1178,6 +1272,15 @@ function RunTimeline() {
                     </button>
                   )}
                 </div>
+                {r.error_message && (
+                  <p
+                    className="mt-1 line-clamp-2 text-[10px]
+                      text-orange-600 dark:text-orange-400"
+                    title={r.error_message}
+                  >
+                    {r.error_message}
+                  </p>
+                )}
               </div>
             ),
           )}

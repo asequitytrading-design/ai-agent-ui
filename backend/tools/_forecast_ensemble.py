@@ -76,7 +76,6 @@ def ensemble_forecast(
         ensemble training fails.
     """
     try:
-        from tools._stock_shared import _require_repo
         from xgboost import XGBRegressor
 
         # ── 1. Compute in-sample Prophet predictions ────
@@ -85,35 +84,40 @@ def ensemble_forecast(
         work["prophet_yhat"] = in_sample["yhat"].values
         work["residual"] = work["y"] - work["prophet_yhat"]
 
-        # ── 2. Load technical indicators ────────────────
-        repo = _require_repo()
-        tech = repo.get_technical_indicators(ticker)
+        # ── 2. Compute technical indicators on-the-fly ──
+        from tools._analysis_shared import (
+            compute_indicators,
+        )
 
-        if tech.empty:
+        tech = compute_indicators(ticker)
+
+        if tech is None or tech.empty:
             _logger.info(
-                "No tech indicators for %s, " "skipping ensemble",
+                "No tech indicators for %s, "
+                "skipping ensemble",
                 ticker,
             )
             return None
 
-        # Align on date.
+        # Align on date (indicators have DatetimeIndex).
         work["_date"] = pd.to_datetime(
             work["ds"],
         ).dt.date
+        tech = tech.reset_index()
         tech["_date"] = pd.to_datetime(
-            tech["date"],
+            tech["Date"],
         ).dt.date
 
         tech_cols = [
             c
             for c in [
-                "sma_50",
-                "sma_200",
-                "rsi_14",
-                "macd",
-                "bb_upper",
-                "bb_lower",
-                "atr_14",
+                "SMA_50",
+                "SMA_200",
+                "RSI_14",
+                "MACD",
+                "BB_Upper",
+                "BB_Lower",
+                "ATR_14",
             ]
             if c in tech.columns
         ]

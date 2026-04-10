@@ -540,8 +540,16 @@ class StockRepository:
         )
         if df.empty:
             return df
-        if "analysis_date" in df.columns:
-            df = df.sort_values("analysis_date")
+        # Sort by computed_at (not just analysis_date)
+        # to pick the latest write when multiple rows
+        # share the same date.
+        sort_col = (
+            "computed_at"
+            if "computed_at" in df.columns
+            else "analysis_date"
+        )
+        if sort_col in df.columns:
+            df = df.sort_values(sort_col)
         return df.drop_duplicates(
             subset=["ticker"],
             keep="last",
@@ -1855,8 +1863,28 @@ class StockRepository:
                 "computed_at": pa.array([_now_utc()], pa.timestamp("us")),
             }
         )
+        # Upsert: delete existing rows for this ticker,
+        # then append fresh summary. Keeps exactly 1 row
+        # per ticker (latest computation).
+        from pyiceberg.expressions import EqualTo
+
+        try:
+            self._delete_rows(
+                _ANALYSIS_SUMMARY,
+                EqualTo("ticker", ticker),
+            )
+        except Exception:
+            _logger.debug(
+                "Delete before upsert failed for "
+                "analysis_summary/%s",
+                ticker,
+                exc_info=True,
+            )
         self._append_rows(_ANALYSIS_SUMMARY, row)
-        _logger.debug("analysis_summary appended for %s", ticker)
+        _logger.debug(
+            "analysis_summary upserted for %s",
+            ticker,
+        )
 
     def get_latest_analysis_summary(
         self, ticker: str
@@ -1875,9 +1903,14 @@ class StockRepository:
         )
         if df.empty:
             return None
+        sort_col = (
+            "computed_at"
+            if "computed_at" in df.columns
+            else "analysis_date"
+        )
         return (
             df.sort_values(
-                "analysis_date",
+                sort_col,
                 ascending=False,
             )
             .iloc[0]

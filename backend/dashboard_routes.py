@@ -352,24 +352,11 @@ def create_dashboard_router() -> APIRouter:
         if df.empty:
             return AnalysisResponse()
 
-        # Batch fetch indicators: 1 query instead of N
-        ti_df = stock_repo.get_technical_indicators_batch(tickers)
-        # Build map: ticker -> latest indicator vals
-        ti_map: dict = {}
-        if not ti_df.empty:
-            for ticker_val, grp in ti_df.groupby("ticker"):
-                latest = grp.iloc[-1]
-                ti_map[ticker_val] = {
-                    "rsi_14": latest.get("rsi_14"),
-                    "macd": latest.get("macd"),
-                    "sma_50": latest.get("sma_50"),
-                    "sma_200": latest.get("sma_200"),
-                }
-
         analyses: list[TickerAnalysis] = []
         for _, row in df.iterrows():
-            ticker = str(row["ticker"])
-            ti_vals = ti_map.get(ticker, {})
+            # Signal text from analysis_summary;
+            # no TI table read needed.
+            ti_vals: dict = {}
 
             signals: list[SignalInfo] = []
             _add_signal(
@@ -659,13 +646,25 @@ def create_dashboard_router() -> APIRouter:
                 media_type="application/json",
             )
 
-        # Batch fetch: 4 queries instead of 4N
+        # Batch fetch: 3 queries instead of 3N
         ohlcv_df = stock_repo.get_ohlcv_batch(symbols)
         summary_df = stock_repo.get_analysis_summary_batch(symbols)
         info_df = stock_repo.get_company_info_batch(
             symbols,
         )
-        ti_df = stock_repo.get_technical_indicators_batch(symbols)
+
+        # Compute TI on-the-fly for compare tickers
+        # (2-5 tickers, ~200ms each).
+        from tools._analysis_shared import (
+            compute_indicators,
+        )
+
+        ti_map: dict = {}
+        for sym in symbols:
+            ti = compute_indicators(sym)
+            if ti is not None and not ti.empty:
+                latest = ti.iloc[-1]
+                ti_map[sym] = latest.to_dict()
 
         # Index batch results by ticker
         summary_map: dict = {}
@@ -676,11 +675,6 @@ def create_dashboard_router() -> APIRouter:
         if not info_df.empty:
             for _, row in info_df.iterrows():
                 info_map[row["ticker"]] = row.to_dict()
-        ti_map: dict = {}
-        if not ti_df.empty:
-            for t_val, grp in ti_df.groupby("ticker"):
-                latest = grp.iloc[-1]
-                ti_map[t_val] = latest.to_dict()
 
         series: list[CompareSeriesItem] = []
         metrics: list[CompareMetric] = []
@@ -727,11 +721,17 @@ def create_dashboard_router() -> APIRouter:
             if info:
                 ccy = str(info.get("currency", "USD") or "USD")
 
-            # RSI + MACD from technical indicators
+            # RSI + MACD from on-the-fly indicators
             ti = ti_map.get(sym, {})
-            rsi_val = _safe(ti.get("rsi_14"))
-            macd_v = ti.get("macd")
-            sig_v = ti.get("macd_signal")
+            rsi_val = _safe(
+                ti.get("RSI_14", ti.get("rsi_14")),
+            )
+            macd_v = ti.get(
+                "MACD", ti.get("macd"),
+            )
+            sig_v = ti.get(
+                "MACD_Signal", ti.get("macd_signal"),
+            )
             macd_lbl = None
             if macd_v is not None and (sig_v is not None):
                 try:
@@ -973,39 +973,42 @@ def create_dashboard_router() -> APIRouter:
                 media_type="application/json",
             )
 
-        stock_repo = _get_stock_repo()
-        df = stock_repo.get_technical_indicators(
-            t_upper,
+        # Compute indicators on-the-fly from OHLCV
+        # (~200ms per ticker, cached 300s in Redis).
+        from tools._analysis_shared import (
+            compute_indicators,
         )
 
-        if df.empty:
+        df = compute_indicators(t_upper)
+
+        if df is None or df.empty:
             return IndicatorsResponse(
                 ticker=t_upper,
             )
 
         points: list[IndicatorPoint] = []
-        for _, row in df.iterrows():
+        for idx, row in df.iterrows():
             points.append(
                 IndicatorPoint(
-                    date=str(row.get("date", "")),
-                    sma_50=_safe(row.get("sma_50")),
+                    date=str(idx.date()),
+                    sma_50=_safe(row.get("SMA_50")),
                     sma_200=_safe(
-                        row.get("sma_200"),
+                        row.get("SMA_200"),
                     ),
-                    ema_20=_safe(row.get("ema_20")),
-                    rsi_14=_safe(row.get("rsi_14")),
-                    macd=_safe(row.get("macd")),
+                    ema_20=_safe(row.get("EMA_20")),
+                    rsi_14=_safe(row.get("RSI_14")),
+                    macd=_safe(row.get("MACD")),
                     macd_signal=_safe(
-                        row.get("macd_signal"),
+                        row.get("MACD_Signal"),
                     ),
                     macd_hist=_safe(
-                        row.get("macd_hist"),
+                        row.get("MACD_Hist"),
                     ),
                     bb_upper=_safe(
-                        row.get("bb_upper"),
+                        row.get("BB_Upper"),
                     ),
                     bb_lower=_safe(
-                        row.get("bb_lower"),
+                        row.get("BB_Lower"),
                     ),
                 )
             )

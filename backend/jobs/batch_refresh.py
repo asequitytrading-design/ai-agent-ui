@@ -80,6 +80,30 @@ def _now_utc():
     return dt.now(timezone.utc).replace(tzinfo=None)
 
 
+def _get_fetch_end_date() -> date:
+    """Return the exclusive end date for yfinance fetch.
+
+    Before 17:30 IST → excludes today (market may still
+    be open or exchange data not finalized).
+    After 17:30 IST → includes today (2h buffer after
+    NSE close at 15:30 for data settlement).
+
+    Returns:
+        A date to pass as ``end=`` to ``yfinance.history``.
+        yfinance treats ``end`` as exclusive, so returning
+        today means "up to yesterday", returning tomorrow
+        means "up to today".
+    """
+    ist = timezone(timedelta(hours=5, minutes=30))
+    now_ist = dt.now(ist)
+    cutoff = now_ist.replace(
+        hour=17, minute=30, second=0, microsecond=0,
+    )
+    if now_ist < cutoff:
+        return now_ist.date()
+    return now_ist.date() + timedelta(days=1)
+
+
 def _fetch_one_ticker(
     ticker: str,
     ohlcv_start: str | None = None,
@@ -108,13 +132,17 @@ def _fetch_one_ticker(
         yt = yf.Ticker(ticker)
 
         # OHLCV (skip / delta / full)
+        # end= excludes today's incomplete data when
+        # market is still open (before 17:30 IST).
         try:
             t1 = time.monotonic()
+            _end = _get_fetch_end_date()
             if ohlcv_start == "__skip__":
                 result["ohlcv_df"] = pd.DataFrame()
             elif ohlcv_start:
                 ohlcv = yt.history(
                     start=ohlcv_start,
+                    end=str(_end),
                     auto_adjust=False,
                 )
                 if not ohlcv.empty:
@@ -125,6 +153,7 @@ def _fetch_one_ticker(
             else:
                 ohlcv = yt.history(
                     period="10y",
+                    end=str(_end),
                     auto_adjust=False,
                 )
                 if not ohlcv.empty:
@@ -178,7 +207,7 @@ def _fetch_one_ticker(
                     dtype=float,
                 )
 
-        # Quarterly statements (skip if fresh < 7d)
+        # Quarterly statements (skip if fresh < 30d)
         if skip_quarterly:
             result["quarterly_rows"] = []
             result["timings"]["quarterly"] = 0.0
@@ -287,7 +316,11 @@ def batch_data_refresh(
 
         latest_df = query_iceberg_df(
             "stocks.ohlcv",
-            "SELECT ticker, MAX(date) AS latest " "FROM ohlcv GROUP BY ticker",
+            "SELECT ticker, MAX(date) AS latest "
+            "FROM ohlcv "
+            "WHERE close IS NOT NULL "
+            "AND NOT isnan(close) "
+            "GROUP BY ticker",
         )
         latest_map: dict = {}
         if not latest_df.empty:
@@ -303,7 +336,7 @@ def batch_data_refresh(
         )
         latest_map = {}
 
-    # Check quarterly freshness (7-day threshold)
+    # Check quarterly freshness (30-day threshold)
     qtr_cutoff = today - timedelta(days=30)
     qtr_fresh: set[str] = set()
     try:

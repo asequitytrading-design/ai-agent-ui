@@ -108,8 +108,6 @@ def warm_tickers() -> None:
         from dashboard_models import (
             OHLCVPoint,
             OHLCVResponse,
-            IndicatorPoint,
-            IndicatorsResponse,
         )
 
         import pandas as pd
@@ -127,12 +125,9 @@ def warm_tickers() -> None:
         if not ohlcv_all.empty:
             ohlcv_grouped = dict(tuple(ohlcv_all.groupby("ticker")))
 
-        ti_all = stock_repo.get_technical_indicators_batch(
-            tickers,
-        )
-        ti_grouped: dict[str, pd.DataFrame] = {}
-        if not ti_all.empty:
-            ti_grouped = dict(tuple(ti_all.groupby("ticker")))
+        # Technical indicators are computed on-the-fly
+        # from OHLCV (not stored in Iceberg). Cache is
+        # populated on first user request per ticker.
 
         for ticker in tickers:
             try:
@@ -165,49 +160,6 @@ def warm_tickers() -> None:
             except Exception:
                 _logger.debug(
                     "cache_warmup: ohlcv %s failed",
-                    ticker,
-                )
-
-            try:
-                # Indicators
-                ck = f"cache:chart:indicators:" f"{ticker}"
-                if cache.get(ck) is None:
-                    df = ti_grouped.get(ticker, pd.DataFrame())
-                    if not df.empty:
-                        pts = []
-                        for _, r in df.iterrows():
-                            pts.append(
-                                IndicatorPoint(
-                                    date=str(
-                                        r.get(
-                                            "date",
-                                            "",
-                                        )
-                                    ),
-                                    sma_50=_sf(r.get("sma_50")),
-                                    sma_200=_sf(r.get("sma_200")),
-                                    ema_20=_sf(r.get("ema_20")),
-                                    rsi_14=_sf(r.get("rsi_14")),
-                                    macd=_sf(r.get("macd")),
-                                    macd_signal=_sf(r.get("macd_signal")),
-                                    macd_hist=_sf(r.get("macd_hist")),
-                                    bb_upper=_sf(r.get("bb_upper")),
-                                    bb_lower=_sf(r.get("bb_lower")),
-                                )
-                            )
-                        result = IndicatorsResponse(
-                            ticker=ticker,
-                            data=pts,
-                        )
-                        cache.set(
-                            ck,
-                            result.model_dump_json(),
-                            TTL_STABLE,
-                        )
-                        warmed += 1
-            except Exception:
-                _logger.debug(
-                    "cache_warmup: indicators" " %s failed",
                     ticker,
                 )
 
