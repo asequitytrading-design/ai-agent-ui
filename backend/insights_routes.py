@@ -234,14 +234,19 @@ def create_insights_router() -> APIRouter:
         if df.empty:
             return ScreenerResponse()
 
-        # Batch OHLCV for prices via DuckDB.
+        # Latest close per ticker (not full history).
         try:
             ohlcv_df = query_iceberg_df(
                 "stocks.ohlcv",
-                "SELECT ticker, date, close "
-                "FROM ohlcv "
-                f"WHERE ticker IN ({ph}) "
-                "ORDER BY ticker, date",
+                "SELECT ticker, close, date FROM ("
+                "  SELECT ticker, close, date,"
+                "  ROW_NUMBER() OVER ("
+                "    PARTITION BY ticker "
+                "    ORDER BY date DESC"
+                "  ) AS rn FROM ohlcv "
+                f"  WHERE ticker IN ({ph})"
+                "    AND close IS NOT NULL"
+                ") WHERE rn = 1",
             )
         except Exception:
             ohlcv_df = pd.DataFrame()
@@ -356,7 +361,17 @@ def create_insights_router() -> APIRouter:
             ph = ",".join(f"'{t}'" for t in tickers)
             df = query_iceberg_df(
                 "stocks.forecast_runs",
-                "SELECT * FROM forecast_runs "
+                "SELECT ticker, horizon_months, "
+                "run_date, "
+                "current_price_at_run, "
+                "target_3m_price, "
+                "target_3m_pct_change, "
+                "target_6m_price, "
+                "target_6m_pct_change, "
+                "target_9m_price, "
+                "target_9m_pct_change, "
+                "sentiment "
+                "FROM forecast_runs "
                 f"WHERE ticker IN ({ph})",
             )
         except Exception as exc:
@@ -462,7 +477,9 @@ def create_insights_router() -> APIRouter:
             ).strftime("%Y-%m-%d")
             df = query_iceberg_df(
                 "stocks.dividends",
-                "SELECT * FROM dividends "
+                "SELECT ticker, ex_date, "
+                "dividend_amount, currency "
+                "FROM dividends "
                 f"WHERE ticker IN ({placeholders}) "
                 f"AND ex_date >= '{cutoff}' "
                 "ORDER BY ex_date DESC",

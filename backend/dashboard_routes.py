@@ -157,12 +157,18 @@ def create_dashboard_router() -> APIRouter:
         import pandas as _pd
 
         ph = ",".join(f"'{t}'" for t in tickers)
+        _wl_cutoff = (
+            _pd.Timestamp.now()
+            - _pd.DateOffset(days=45)
+        ).strftime("%Y-%m-%d")
         try:
             ohlcv_df = _duckdb_read(
                 "stocks.ohlcv",
                 "SELECT ticker, date, open, high, "
                 "low, close, volume "
-                f"FROM ohlcv WHERE ticker IN ({ph}) "
+                "FROM ohlcv "
+                f"WHERE ticker IN ({ph}) "
+                f"AND date >= '{_wl_cutoff}' "
                 "ORDER BY ticker, date",
             )
         except Exception:
