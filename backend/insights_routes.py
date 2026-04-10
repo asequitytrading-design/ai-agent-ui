@@ -428,8 +428,18 @@ def create_insights_router() -> APIRouter:
         if df.empty:
             return DividendsResponse()
 
-        # Sort by ex_date descending.
+        # Sort by ex_date descending, limit to 2 years.
         if "ex_date" in df.columns:
+            df["ex_date"] = pd.to_datetime(
+                df["ex_date"], errors="coerce",
+            )
+            cutoff = pd.Timestamp.now() - pd.DateOffset(
+                years=2,
+            )
+            df = df[
+                df["ex_date"].notna()
+                & (df["ex_date"] >= cutoff)
+            ]
             df = df.sort_values(
                 "ex_date",
                 ascending=False,
