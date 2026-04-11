@@ -172,6 +172,7 @@ def _finalize_run(
     total: int,
     errors: list[str],
     cancelled: bool,
+    started_at: datetime | None = None,
 ) -> None:
     """Write final status to the scheduler run record."""
     if cancelled:
@@ -189,11 +190,15 @@ def _finalize_run(
     else:
         status = "success"
     now = datetime.now(timezone.utc)
+    duration = None
+    if started_at:
+        duration = (now - started_at).total_seconds()
     repo.update_scheduler_run(
         run_id,
         {
             "status": status,
             "completed_at": now,
+            "duration_secs": duration,
             "tickers_total": total,
             "tickers_done": done,
             "error_message": (
@@ -1230,6 +1235,7 @@ def execute_run_forecasts(
     )
     from tools._stock_shared import _require_repo
 
+    _run_start = datetime.now(timezone.utc)
     stock_repo = _require_repo()
     registry = repo.get_all_registry()
     tickers = _scope_filter(registry, scope)
@@ -1522,6 +1528,7 @@ def execute_run_forecasts(
 
     _finalize_run(
         repo, run_id, done, total, errors, cancelled,
+        started_at=_run_start,
     )
 
 
