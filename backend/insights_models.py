@@ -30,6 +30,7 @@ class ScreenerRow(BaseModel):
     sharpe_ratio: float | None = None
     sector: str | None = None
     market: str = "us"
+    tags: list[str] = Field(default_factory=list)
 
 
 class ScreenerResponse(BaseModel):
@@ -39,6 +40,9 @@ class ScreenerResponse(BaseModel):
         default_factory=list,
     )
     sectors: list[str] = Field(
+        default_factory=list,
+    )
+    tags: list[str] = Field(
         default_factory=list,
     )
 

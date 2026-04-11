@@ -316,6 +316,44 @@ def create_insights_router() -> APIRouter:
             tickers,
         )
 
+        # Load tags from PG (stock_tags + stock_master).
+        tags_map: dict[str, list[str]] = {}
+        all_tags: set[str] = set()
+        try:
+            from sqlalchemy import text as _text
+
+            async def _load_tags():
+                from backend.db.engine import (
+                    get_session_factory,
+                )
+
+                async with get_session_factory()() as s:
+                    r = await s.execute(
+                        _text(
+                            "SELECT sm.yf_ticker, "
+                            "st.tag "
+                            "FROM stock_tags st "
+                            "JOIN stock_master sm "
+                            "ON st.stock_id = sm.id "
+                            "WHERE st.removed_at "
+                            "IS NULL",
+                        )
+                    )
+                    for row in r.fetchall():
+                        tk = str(row[0])
+                        tg = str(row[1])
+                        tags_map.setdefault(
+                            tk, [],
+                        ).append(tg)
+                        all_tags.add(tg)
+
+            await _load_tags()
+        except Exception:
+            _logger.debug(
+                "Tags load failed",
+                exc_info=True,
+            )
+
         rows: list[ScreenerRow] = []
         for _, row in df.iterrows():
             t = str(row["ticker"])
@@ -346,12 +384,14 @@ def create_insights_router() -> APIRouter:
                         company_df,
                     ),
                     market=_market(t),
+                    tags=tags_map.get(t, []),
                 )
             )
 
         result = ScreenerResponse(
             rows=rows,
             sectors=sectors,
+            tags=sorted(all_tags),
         )
         cache.set(
             ck,

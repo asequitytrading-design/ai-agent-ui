@@ -303,12 +303,14 @@ export interface ScreenerRow {
   sharpe_ratio: number | null;
   sector: string | null;
   market: string;
+  tags: string[];
   action?: string;
 }
 
 export interface ScreenerResponse {
   rows: ScreenerRow[];
   sectors: string[];
+  tags: string[];
 }
 
 export interface TargetRow {

@@ -700,17 +700,24 @@ function ScreenerTab() {
   const [market, setMarket] = useState("all");
   const [sector, setSector] = useState("all");
   const [rsiFilter, setRsiFilter] = useState("all");
+  const [tag, setTag] = useState("all");
 
   const filtered = useMemo(() => {
     if (!data.value?.rows) return [];
-    return applyFilters(
+    let rows = applyFilters(
       data.value.rows,
       market,
       sector,
       "all",
       rsiFilter,
     );
-  }, [data.value, market, sector, rsiFilter]);
+    if (tag !== "all") {
+      rows = rows.filter(
+        (r) => r.tags?.includes(tag),
+      );
+    }
+    return rows;
+  }, [data.value, market, sector, rsiFilter, tag]);
 
   if (data.loading) return <WidgetSkeleton />;
   if (data.error)
@@ -724,6 +731,9 @@ function ScreenerTab() {
         sector={sector}
         onSectorChange={setSector}
         sectors={data.value?.sectors ?? []}
+        tag={tag}
+        onTagChange={setTag}
+        availableTags={data.value?.tags ?? []}
         rsiFilter={rsiFilter}
         onRsiFilterChange={setRsiFilter}
       />
