@@ -4702,60 +4702,23 @@ class StockRepository:
                 exc_info=True,
             )
 
-    # -- Iceberg scheduler_runs (append-only) --
+    # -- Scheduler runs (PostgreSQL) --
 
     def append_scheduler_run(
         self,
         run: dict,
     ) -> None:
-        """Append a single scheduler run record."""
+        """Insert a single scheduler run record."""
+        from backend.db.pg_stocks import (
+            insert_scheduler_run as pg_insert,
+        )
+
+        async def _call():
+            async with _pg_session() as s:
+                await pg_insert(s, run)
+
         try:
-            clean = {}
-            for k, v in run.items():
-                if hasattr(v, "tzinfo") and v.tzinfo:
-                    v = v.replace(tzinfo=None)
-                clean[k] = v
-            tbl = self._load_table(_SCHEDULER_RUNS)
-            col_names = [f.name for f in tbl.schema().fields]
-            if "trigger_type" not in col_names:
-                from pyiceberg.types import StringType
-
-                with tbl.update_schema() as upd:
-                    upd.add_column(
-                        "trigger_type",
-                        StringType(),
-                    )
-                tbl = self._load_table(
-                    _SCHEDULER_RUNS,
-                )
-                col_names = [
-                    f.name
-                    for f in tbl.schema().fields
-                ]
-            if "pipeline_run_id" not in col_names:
-                from pyiceberg.types import StringType
-
-                with tbl.update_schema() as upd:
-                    upd.add_column(
-                        "pipeline_run_id",
-                        StringType(),
-                    )
-                tbl = self._load_table(
-                    _SCHEDULER_RUNS,
-                )
-            schema = tbl.schema().as_arrow()
-            col_names = [
-                f.name for f in tbl.schema().fields
-            ]
-            for col in col_names:
-                if col not in clean:
-                    clean[col] = None
-            df = pd.DataFrame([clean])
-            at = pa.Table.from_pandas(
-                df,
-                schema=schema,
-            )
-            self._append_rows(_SCHEDULER_RUNS, at)
+            _run_pg(_call)
         except Exception:
             _logger.error(
                 "append_scheduler_run failed",
@@ -4768,32 +4731,16 @@ class StockRepository:
         updates: dict,
     ) -> None:
         """Update fields on an existing run."""
+        from backend.db.pg_stocks import (
+            update_scheduler_run_pg as pg_update,
+        )
+
+        async def _call():
+            async with _pg_session() as s:
+                await pg_update(s, run_id, updates)
+
         try:
-            tbl = self._load_table(_SCHEDULER_RUNS)
-            df = tbl.scan().to_pandas()
-            mask = df["run_id"] == run_id
-            if not mask.any():
-                _logger.warning(
-                    "update_scheduler_run:" " run_id %s not found",
-                    run_id,
-                )
-                return
-            clean = {}
-            for k, v in updates.items():
-                if hasattr(v, "tzinfo") and v.tzinfo:
-                    v = v.replace(tzinfo=None)
-                clean[k] = v
-            for k, v in clean.items():
-                df.loc[mask, k] = v
-            schema = tbl.schema().as_arrow()
-            at = pa.Table.from_pandas(
-                df,
-                schema=schema,
-            )
-            self._overwrite_table(
-                _SCHEDULER_RUNS,
-                at,
-            )
+            _run_pg(_call)
         except Exception:
             _logger.error(
                 "update_scheduler_run %s failed",
@@ -4812,127 +4759,27 @@ class StockRepository:
         limit: int | None = None,
     ) -> list[dict]:
         """Return scheduler runs with filters."""
-        try:
-            # Try DuckDB first (fast path).
-            from backend.db.duckdb_engine import (
-                query_iceberg_df,
-            )
+        from backend.db.pg_stocks import (
+            get_scheduler_runs_pg as pg_get,
+        )
 
-            cutoff = (
-                pd.Timestamp.now(tz="UTC")
-                - pd.Timedelta(days=days)
-            ).strftime("%Y-%m-%d %H:%M:%S")
-            wheres = [
-                f"started_at >= '{cutoff}'",
-            ]
-            if job_type:
-                wheres.append(
-                    f"job_type = '{job_type}'",
+        async def _call():
+            async with _pg_session() as s:
+                return await pg_get(
+                    s,
+                    days=days,
+                    job_type=job_type,
+                    status=status,
+                    pipeline_run_id=pipeline_run_id,
+                    offset=offset,
+                    limit=limit,
                 )
-            if status:
-                wheres.append(
-                    f"status = '{status}'",
-                )
-            if pipeline_run_id:
-                wheres.append(
-                    f"pipeline_run_id = "
-                    f"'{pipeline_run_id}'",
-                )
-            where_sql = " AND ".join(wheres)
-            df = query_iceberg_df(
-                _SCHEDULER_RUNS,
-                "SELECT * FROM scheduler_runs "
-                f"WHERE {where_sql} "
-                "ORDER BY started_at DESC",
-            )
-            if df.empty:
-                return []
-            if "started_at" in df.columns:
-                df["started_at"] = pd.to_datetime(
-                    df["started_at"],
-                    utc=True,
-                    errors="coerce",
-                )
-            if "completed_at" in df.columns:
-                df["completed_at"] = pd.to_datetime(
-                    df["completed_at"],
-                    utc=True,
-                    errors="coerce",
-                )
-            total = len(df)
-            if offset:
-                df = df.iloc[offset:]
-            if limit:
-                df = df.iloc[:limit]
-            df = df.where(df.notna(), None)
-            records = df.to_dict(orient="records")
-            for r in records:
+
+        try:
+            rows, total = _run_pg(_call)
+            for r in rows:
                 r["_total"] = total
-                for k, v in list(r.items()):
-                    if hasattr(v, "isoformat"):
-                        r[k] = v.isoformat()
-                    elif isinstance(v, float) and (
-                        v != v
-                    ):
-                        r[k] = None
-            return records
-        except Exception:
-            # Fallback to PyIceberg.
-            df = self._table_to_df(_SCHEDULER_RUNS)
-            if df.empty:
-                return []
-            if "started_at" in df.columns:
-                df["started_at"] = pd.to_datetime(
-                    df["started_at"],
-                    utc=True,
-                    errors="coerce",
-                )
-                cutoff = pd.Timestamp.now(
-                    tz="UTC",
-                ) - pd.Timedelta(days=days)
-                df = df[
-                    df["started_at"].notna()
-                    & (df["started_at"] >= cutoff)
-                ]
-                df = df.sort_values(
-                    "started_at",
-                    ascending=False,
-                )
-            if "completed_at" in df.columns:
-                df["completed_at"] = pd.to_datetime(
-                    df["completed_at"],
-                    utc=True,
-                    errors="coerce",
-                )
-            if job_type and "job_type" in df.columns:
-                df = df[df["job_type"] == job_type]
-            if status and "status" in df.columns:
-                df = df[df["status"] == status]
-            if (
-                pipeline_run_id
-                and "pipeline_run_id" in df.columns
-            ):
-                df = df[
-                    df["pipeline_run_id"]
-                    == pipeline_run_id
-                ]
-            total = len(df)
-            if offset:
-                df = df.iloc[offset:]
-            if limit:
-                df = df.iloc[:limit]
-            df = df.where(df.notna(), None)
-            records = df.to_dict(orient="records")
-            for r in records:
-                r["_total"] = total
-                for k, v in list(r.items()):
-                    if hasattr(v, "isoformat"):
-                        r[k] = v.isoformat()
-                    elif isinstance(v, float) and (
-                        v != v
-                    ):
-                        r[k] = None
-            return records
+            return rows
         except Exception:
             _logger.error(
                 "get_scheduler_runs failed",
@@ -4942,18 +4789,16 @@ class StockRepository:
 
     def get_scheduler_run_stats(self) -> dict:
         """Return aggregate stats for dashboard."""
+        from backend.db.pg_stocks import (
+            get_scheduler_run_stats_pg as pg_stats,
+        )
+
+        async def _call():
+            async with _pg_session() as s:
+                return await pg_stats(s)
+
         try:
-            runs = self.get_scheduler_runs(days=1)
-            total = len(runs)
-            success = sum(1 for r in runs if r.get("status") == "success")
-            failed = sum(1 for r in runs if r.get("status") == "failed")
-            running = sum(1 for r in runs if r.get("status") == "running")
-            return {
-                "runs_today": total,
-                "runs_today_success": success,
-                "runs_today_failed": failed,
-                "runs_today_running": running,
-            }
+            return _run_pg(_call)
         except Exception:
             _logger.warning(
                 "get_scheduler_run_stats failed",
@@ -4971,55 +4816,18 @@ class StockRepository:
         pipeline_run_id: str,
     ) -> list[dict]:
         """Return all runs for a pipeline_run_id."""
-        try:
-            from backend.db.duckdb_engine import (
-                query_iceberg_df,
-            )
+        from backend.db.pg_stocks import (
+            get_pipeline_run_status_pg as pg_get,
+        )
 
-            df = query_iceberg_df(
-                _SCHEDULER_RUNS,
-                "SELECT * FROM scheduler_runs "
-                "WHERE pipeline_run_id = "
-                f"'{pipeline_run_id}' "
-                "ORDER BY started_at ASC",
-            )
-        except Exception:
-            df = self._table_to_df(_SCHEDULER_RUNS)
-            if not df.empty:
-                if "pipeline_run_id" in df.columns:
-                    df = df[
-                        df["pipeline_run_id"]
-                        == pipeline_run_id
-                    ]
-                else:
-                    df = pd.DataFrame()
+        async def _call():
+            async with _pg_session() as s:
+                return await pg_get(
+                    s, pipeline_run_id,
+                )
+
         try:
-            if df.empty:
-                return []
-            if "started_at" in df.columns:
-                df["started_at"] = pd.to_datetime(
-                    df["started_at"],
-                    utc=True,
-                    errors="coerce",
-                )
-                df = df.sort_values("started_at")
-            if "completed_at" in df.columns:
-                df["completed_at"] = pd.to_datetime(
-                    df["completed_at"],
-                    utc=True,
-                    errors="coerce",
-                )
-            df = df.where(df.notna(), None)
-            records = df.to_dict(orient="records")
-            for r in records:
-                for k, v in list(r.items()):
-                    if hasattr(v, "isoformat"):
-                        r[k] = v.isoformat()
-                    elif isinstance(v, float) and (
-                        v != v
-                    ):
-                        r[k] = None
-            return records
+            return _run_pg(_call)
         except Exception:
             _logger.error(
                 "get_pipeline_run_status failed",
@@ -5031,52 +4839,17 @@ class StockRepository:
         self,
         pipeline_id: str,
     ) -> str | None:
-        """Get latest pipeline_run_id for a pipeline.
+        """Get latest pipeline_run_id for a pipeline."""
+        from backend.db.pg_stocks import (
+            get_last_pipeline_run_id_pg as pg_get,
+        )
 
-        Looks for runs where job_id matches the
-        pipeline_id and pipeline_run_id is present.
-        """
-        try:
-            from backend.db.duckdb_engine import (
-                query_iceberg_df,
-            )
+        async def _call():
+            async with _pg_session() as s:
+                return await pg_get(s, pipeline_id)
 
-            df = query_iceberg_df(
-                _SCHEDULER_RUNS,
-                "SELECT pipeline_run_id, started_at "
-                "FROM scheduler_runs "
-                f"WHERE job_id = '{pipeline_id}' "
-                "AND pipeline_run_id IS NOT NULL "
-                "ORDER BY started_at DESC "
-                "LIMIT 1",
-            )
-        except Exception:
-            df = self._table_to_df(_SCHEDULER_RUNS)
-            if not df.empty:
-                if "pipeline_run_id" in df.columns:
-                    df = df[
-                        df["pipeline_run_id"].notna()
-                    ]
-                    df = df[
-                        df["job_id"] == pipeline_id
-                    ]
-                else:
-                    df = pd.DataFrame()
-            if not df.empty and (
-                "started_at" in df.columns
-            ):
-                df["started_at"] = pd.to_datetime(
-                    df["started_at"],
-                    utc=True,
-                    errors="coerce",
-                )
-                df = df.sort_values(
-                    "started_at", ascending=False,
-                )
         try:
-            if df.empty:
-                return None
-            return str(df.iloc[0]["pipeline_run_id"])
+            return _run_pg(_call)
         except Exception:
             _logger.error(
                 "get_last_pipeline_run_id failed",
@@ -5089,30 +4862,16 @@ class StockRepository:
         job_id: str,
     ) -> dict | None:
         """Return the most recent run for a job."""
+        from backend.db.pg_stocks import (
+            get_last_run_for_job_pg as pg_get,
+        )
+
+        async def _call():
+            async with _pg_session() as s:
+                return await pg_get(s, job_id)
+
         try:
-            df = self._table_to_df(_SCHEDULER_RUNS)
-            if df.empty:
-                return None
-            df = df[df["job_id"] == job_id]
-            if df.empty:
-                return None
-            if "started_at" in df.columns:
-                df["started_at"] = pd.to_datetime(
-                    df["started_at"],
-                    utc=True,
-                    errors="coerce",
-                )
-                df = df.sort_values(
-                    "started_at",
-                    ascending=False,
-                )
-            row = df.iloc[0].to_dict()
-            for k, v in list(row.items()):
-                if hasattr(v, "isoformat"):
-                    row[k] = v.isoformat()
-                elif isinstance(v, float) and v != v:
-                    row[k] = None
-            return row
+            return _run_pg(_call)
         except Exception:
             _logger.error(
                 "get_last_run_for_job %s failed",

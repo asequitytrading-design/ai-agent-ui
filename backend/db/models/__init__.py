@@ -6,6 +6,7 @@ from backend.db.models.payment import PaymentTransaction
 from backend.db.models.pipeline import Pipeline, PipelineStep
 from backend.db.models.registry import StockRegistry
 from backend.db.models.scheduler import ScheduledJob
+from backend.db.models.scheduler_run import SchedulerRun
 from backend.db.models.stock_master import StockMaster
 from backend.db.models.stock_tag import StockTag
 from backend.db.models.user import User
@@ -18,6 +19,7 @@ __all__ = [
     "Pipeline",
     "PipelineStep",
     "ScheduledJob",
+    "SchedulerRun",
     "StockMaster",
     "StockRegistry",
     "StockTag",

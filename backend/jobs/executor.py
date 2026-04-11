@@ -81,14 +81,6 @@ def _parallel_fetch(
     errors: list[str] = []
     cancelled = False
     lock = threading.Lock()
-    total = len(tickers)
-    # Throttle progress writes — update_scheduler_run
-    # does a full Iceberg table scan + overwrite (~9s).
-    # Only update every 30s or on final ticker.
-    import time as _tm
-
-    _last_progress_t = _tm.monotonic()
-    _PROGRESS_INTERVAL = 30.0  # seconds
 
     with ThreadPoolExecutor(
         max_workers=max_workers,
@@ -117,16 +109,10 @@ def _parallel_fetch(
                     )
             with lock:
                 done += 1
-            now = _tm.monotonic()
-            if (
-                now - _last_progress_t
-                >= _PROGRESS_INTERVAL
-            ):
-                repo.update_scheduler_run(
-                    run_id,
-                    {"tickers_done": done},
-                )
-                _last_progress_t = now
+            repo.update_scheduler_run(
+                run_id,
+                {"tickers_done": done},
+            )
 
     return done, errors, cancelled
 
@@ -1251,8 +1237,10 @@ def execute_run_forecasts(
     horizon_months = 9
 
     total = len(tickers)
-    # tickers_total is set in _finalize_run to avoid
-    # an expensive Iceberg full-table overwrite here.
+    repo.update_scheduler_run(
+        run_id,
+        {"tickers_total": total},
+    )
 
     # Pre-load all OHLCV in one batch DuckDB query
     # (~99% faster than N individual reads).

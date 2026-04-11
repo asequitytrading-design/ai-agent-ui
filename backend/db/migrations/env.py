@@ -20,6 +20,7 @@ from backend.db.models import (  # noqa: F401
     Pipeline,
     PipelineStep,
     ScheduledJob,
+    SchedulerRun,
     StockMaster,
     StockRegistry,
     StockTag,
