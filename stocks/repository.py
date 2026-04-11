@@ -2230,6 +2230,174 @@ class StockRepository:
             len(forecast_df),
         )
 
+    def insert_forecast_runs_batch(
+        self,
+        runs: list[tuple],
+    ) -> None:
+        """Bulk-append forecast run metadata.
+
+        Accepts a list of ``(ticker, horizon_months,
+        run_dict)`` tuples and writes them in a single
+        Iceberg commit.
+        """
+        if not runs:
+            return
+        rows: list[dict] = []
+        for ticker, hm, rd in runs:
+            today = rd.get("run_date") or date.today()
+            rows.append(
+                {
+                    "run_id": str(uuid.uuid4()),
+                    "ticker": ticker,
+                    "horizon_months": int(hm),
+                    "run_date": _to_date(today),
+                    "sentiment": rd.get("sentiment"),
+                    "current_price_at_run": _safe_float(
+                        rd.get("current_price_at_run"),
+                    ),
+                    "target_3m_date": _to_date(
+                        rd.get("target_3m_date"),
+                    ),
+                    "target_3m_price": _safe_float(
+                        rd.get("target_3m_price"),
+                    ),
+                    "target_3m_pct_change": _safe_float(
+                        rd.get("target_3m_pct_change"),
+                    ),
+                    "target_3m_lower": _safe_float(
+                        rd.get("target_3m_lower"),
+                    ),
+                    "target_3m_upper": _safe_float(
+                        rd.get("target_3m_upper"),
+                    ),
+                    "target_6m_date": _to_date(
+                        rd.get("target_6m_date"),
+                    ),
+                    "target_6m_price": _safe_float(
+                        rd.get("target_6m_price"),
+                    ),
+                    "target_6m_pct_change": _safe_float(
+                        rd.get("target_6m_pct_change"),
+                    ),
+                    "target_6m_lower": _safe_float(
+                        rd.get("target_6m_lower"),
+                    ),
+                    "target_6m_upper": _safe_float(
+                        rd.get("target_6m_upper"),
+                    ),
+                    "target_9m_date": _to_date(
+                        rd.get("target_9m_date"),
+                    ),
+                    "target_9m_price": _safe_float(
+                        rd.get("target_9m_price"),
+                    ),
+                    "target_9m_pct_change": _safe_float(
+                        rd.get("target_9m_pct_change"),
+                    ),
+                    "target_9m_lower": _safe_float(
+                        rd.get("target_9m_lower"),
+                    ),
+                    "target_9m_upper": _safe_float(
+                        rd.get("target_9m_upper"),
+                    ),
+                    "mae": _safe_float(
+                        rd.get("mae"),
+                    ),
+                    "rmse": _safe_float(
+                        rd.get("rmse"),
+                    ),
+                    "mape": _safe_float(
+                        rd.get("mape"),
+                    ),
+                    "computed_at": _now_utc(),
+                }
+            )
+        tbl = self._load_table(_FORECAST_RUNS)
+        schema = tbl.schema().as_arrow()
+        df = pd.DataFrame(rows)
+        arrow = pa.Table.from_pandas(df, schema=schema)
+        self._append_rows(_FORECAST_RUNS, arrow)
+        _logger.info(
+            "forecast_runs batch: %d rows",
+            len(rows),
+        )
+
+    def insert_forecast_series_batch(
+        self,
+        series: list[tuple],
+    ) -> None:
+        """Bulk-append forecast series data.
+
+        Accepts a list of ``(ticker, horizon_months,
+        run_date, forecast_df)`` tuples.  Deletes
+        existing rows for all tickers in one pass,
+        then appends all series in a single commit.
+        """
+        if not series:
+            return
+
+        # Collect all rows.
+        all_rows: list[dict] = []
+        tickers_in_batch: set[str] = set()
+        for ticker, hm, rd, fdf in series:
+            rd = _to_date(rd)
+            tickers_in_batch.add(ticker)
+            for _, row in fdf.iterrows():
+                all_rows.append(
+                    {
+                        "ticker": ticker,
+                        "horizon_months": int(hm),
+                        "run_date": rd,
+                        "forecast_date": _to_date(
+                            row["ds"],
+                        ),
+                        "predicted_price": _safe_float(
+                            row["yhat"],
+                        ),
+                        "lower_bound": _safe_float(
+                            row["yhat_lower"],
+                        ),
+                        "upper_bound": _safe_float(
+                            row["yhat_upper"],
+                        ),
+                    }
+                )
+
+        # Bulk delete old forecasts for these tickers.
+        if tickers_in_batch:
+            from pyiceberg.expressions import In
+
+            try:
+                self._delete_rows(
+                    _FORECASTS,
+                    In(
+                        "ticker",
+                        list(tickers_in_batch),
+                    ),
+                )
+            except Exception:
+                _logger.debug(
+                    "Batch forecast delete failed",
+                    exc_info=True,
+                )
+
+        # Single bulk append.
+        if all_rows:
+            tbl = self._load_table(_FORECASTS)
+            schema = tbl.schema().as_arrow()
+            df = pd.DataFrame(all_rows)
+            arrow = pa.Table.from_pandas(
+                df, schema=schema,
+            )
+            self._append_rows(_FORECASTS, arrow)
+
+        _logger.info(
+            "forecast_series batch: %d tickers, "
+            "%d rows",
+            len(tickers_in_batch),
+            len(all_rows),
+        )
+
     def get_latest_forecast_series(
         self, ticker: str, horizon_months: int
     ) -> pd.DataFrame:

@@ -1160,6 +1160,44 @@ def execute_run_sentiment(
 # ------------------------------------------------------------------
 
 
+def _ohlcv_from_cached(
+    df: "pd.DataFrame",
+) -> "pd.DataFrame | None":
+    """Convert raw OHLCV DataFrame to _load_ohlcv format.
+
+    Mirrors the transform in ``_forecast_shared._load_ohlcv``
+    but skips the Iceberg read (data already in memory).
+    """
+    import pandas as pd
+
+    if df.empty:
+        return None
+    df = df.copy()
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.sort_values("date").set_index("date")
+    use_adj = (
+        "adj_close" in df.columns
+        and df["adj_close"].notna().mean() > 0.5
+    )
+    df = df.dropna(subset=["close"])
+    adj_col = (
+        df["adj_close"] if use_adj else df["close"]
+    )
+    result = pd.DataFrame(
+        {
+            "Open": df["open"],
+            "High": df["high"],
+            "Low": df["low"],
+            "Close": df["close"],
+            "Adj Close": adj_col,
+            "Volume": df["volume"],
+        }
+    )
+    result.index.name = "Date"
+    result.index = pd.to_datetime(result.index)
+    return result
+
+
 @register_job("run_forecasts")
 def execute_run_forecasts(
     scope: str,
@@ -1203,6 +1241,51 @@ def execute_run_forecasts(
         {"tickers_total": total},
     )
 
+    # Pre-load all OHLCV in one batch DuckDB query
+    # (~99% faster than N individual reads).
+    _ohlcv_cache: dict[str, pd.DataFrame] = {}
+    try:
+        from backend.db.duckdb_engine import (
+            query_iceberg_df,
+        )
+
+        yf_tickers_all = [
+            yf_map.get(t, t) for t in tickers
+        ]
+        ph = ",".join(
+            f"'{t}'" for t in yf_tickers_all
+        )
+        _t0 = datetime.now(timezone.utc)
+        _bulk_ohlcv = query_iceberg_df(
+            "stocks.ohlcv",
+            "SELECT * FROM ohlcv "
+            f"WHERE ticker IN ({ph}) "
+            "ORDER BY ticker, date",
+        )
+        if not _bulk_ohlcv.empty:
+            for tk, grp in _bulk_ohlcv.groupby(
+                "ticker",
+            ):
+                _ohlcv_cache[str(tk)] = (
+                    grp.reset_index(drop=True)
+                )
+        _elapsed = (
+            datetime.now(timezone.utc) - _t0
+        ).total_seconds()
+        _logger.info(
+            "[forecast] Batch OHLCV: %d tickers, "
+            "%d rows in %.2fs",
+            len(_ohlcv_cache),
+            len(_bulk_ohlcv),
+            _elapsed,
+        )
+    except Exception:
+        _logger.warning(
+            "[forecast] Batch OHLCV failed, "
+            "falling back to per-ticker",
+            exc_info=True,
+        )
+
     def _forecast_one(ticker):
         yf_ticker = yf_map.get(ticker, ticker)
         _logger.info(
@@ -1242,7 +1325,12 @@ def execute_run_forecasts(
                         )
                         return
 
-        df = _load_ohlcv(yf_ticker)
+        # Use pre-loaded OHLCV if available.
+        cached_df = _ohlcv_cache.get(yf_ticker)
+        if cached_df is not None:
+            df = _ohlcv_from_cached(cached_df)
+        else:
+            df = _load_ohlcv(yf_ticker)
         if df is None:
             raise ValueError(
                 f"No OHLCV data for {yf_ticker}",
@@ -1335,18 +1423,23 @@ def execute_run_forecasts(
             run_dict["rmse"] = accuracy.get("RMSE")
             run_dict["mape"] = accuracy.get("MAPE_pct")
 
-        with _iceberg_write_lock:
-            stock_repo.insert_forecast_run(
-                yf_ticker,
-                horizon_months,
-                run_dict,
+        # Accumulate for bulk write after parallel loop.
+        with _write_lock:
+            _pending_runs.append(
+                (yf_ticker, horizon_months, run_dict),
             )
-            stock_repo.insert_forecast_series(
-                yf_ticker,
-                horizon_months,
-                run_date,
-                forecast_df,
+            _pending_series.append(
+                (
+                    yf_ticker,
+                    horizon_months,
+                    run_date,
+                    forecast_df,
+                ),
             )
+
+    _write_lock = threading.Lock()
+    _pending_runs: list[tuple] = []
+    _pending_series: list[tuple] = []
 
     done, errors, cancelled = _parallel_fetch(
         tickers,
@@ -1354,8 +1447,29 @@ def execute_run_forecasts(
         repo,
         run_id,
         cancel_event,
-        max_workers=3,  # Prophet is CPU-heavy
+        max_workers=5,  # CmdStanPy is fast; 5 OK
     )
+
+    # Bulk write all forecast results (2 commits
+    # instead of 3 × N).
+    if _pending_runs:
+        _t0 = datetime.now(timezone.utc)
+        stock_repo.insert_forecast_runs_batch(
+            _pending_runs,
+        )
+        stock_repo.insert_forecast_series_batch(
+            _pending_series,
+        )
+        _elapsed = (
+            datetime.now(timezone.utc) - _t0
+        ).total_seconds()
+        _logger.info(
+            "[forecast] Bulk write: %d runs + "
+            "%d series in %.2fs",
+            len(_pending_runs),
+            len(_pending_series),
+            _elapsed,
+        )
 
     _finalize_run(
         repo, run_id, done, total, errors, cancelled,
