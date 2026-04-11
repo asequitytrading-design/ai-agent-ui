@@ -1287,6 +1287,50 @@ def execute_run_forecasts(
             exc_info=True,
         )
 
+    # Pre-load all forecast runs for freshness check
+    # (one DuckDB query instead of 748 Iceberg reads).
+    _fc_run_cache: dict[str, dict] = {}
+    try:
+        _t0 = datetime.now(timezone.utc)
+        _fc_df = query_iceberg_df(
+            "stocks.forecast_runs",
+            "SELECT ticker, horizon_months, "
+            "run_date, mae, rmse, mape "
+            "FROM forecast_runs "
+            f"WHERE horizon_months = {horizon_months}",
+        )
+        if not _fc_df.empty:
+            import pandas as _pd
+
+            _fc_df["run_date"] = _pd.to_datetime(
+                _fc_df["run_date"],
+            )
+            # Keep latest run per ticker.
+            _fc_df = _fc_df.sort_values(
+                "run_date", ascending=False,
+            ).drop_duplicates(
+                subset=["ticker"], keep="first",
+            )
+            for _, _r in _fc_df.iterrows():
+                _fc_run_cache[str(_r["ticker"])] = (
+                    _r.to_dict()
+                )
+        _elapsed = (
+            datetime.now(timezone.utc) - _t0
+        ).total_seconds()
+        _logger.info(
+            "[forecast] Batch forecast_runs: "
+            "%d tickers in %.2fs",
+            len(_fc_run_cache),
+            _elapsed,
+        )
+    except Exception:
+        _logger.warning(
+            "[forecast] Batch forecast_runs "
+            "failed, falling back to per-ticker",
+            exc_info=True,
+        )
+
     def _forecast_one(ticker):
         yf_ticker = yf_map.get(ticker, ticker)
         _logger.info(
@@ -1294,14 +1338,18 @@ def execute_run_forecasts(
             yf_ticker,
         )
 
-        # Skip if forecast is <7 days old
+        # Skip if forecast is <7 days old.
+        # Uses pre-loaded cache (dict lookup) instead
+        # of per-ticker Iceberg read (~2.2s → <0.001s).
         if not force:
-            fc_run = (
-                stock_repo.get_latest_forecast_run(
-                    yf_ticker,
-                    horizon_months,
+            fc_run = _fc_run_cache.get(yf_ticker)
+            if not fc_run:
+                fc_run = (
+                    stock_repo.get_latest_forecast_run(
+                        yf_ticker,
+                        horizon_months,
+                    )
                 )
-            )
             if fc_run:
                 from datetime import timedelta
 
