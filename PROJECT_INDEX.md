@@ -1,136 +1,132 @@
 # Project Index: AI Agent UI
 
 > AI-agent-optimised codebase map. For human onboarding, see `docs/`.
-> Last refreshed: 2026-03-30 (Sprint 4 — Context-Aware Chat + Recency News)
+> Last refreshed: 2026-04-12 (Sprint 6 — Forecast Optimization + Scheduler)
+
+---
 
 ## Project Structure
 
 ```
 ai-agent-ui/
-├── backend/          105 .py — FastAPI, LangChain agents, tools, ORM
-│   ├── agents/       LangGraph nodes, configs, conversation context
-│   │   └── nodes/    guardrail, router, supervisor, topic_classifier
-│   ├── tools/        25 tool implementations + _date_utils
-│   ├── db/           SQLAlchemy models, engine, Alembic, DuckDB
-│   └── jobs/         Scheduler service, executor, gap filler
-├── auth/             34 .py — JWT, OAuth PKCE, endpoints, repos
-│   ├── endpoints/    9 route handlers
-│   └── repo/         UserRepository facade (async PG)
-├── stocks/           8 .py — Iceberg (14 OLAP), repository
-├── frontend/         89 .tsx — Next.js 16, React 19, Tailwind 4
-│   ├── app/          18 pages (dashboard, analytics, admin, portfolio)
-│   ├── components/   Charts, widgets, admin, chat UI
-│   ├── hooks/        18 hooks (data, auth, chat, portfolio)
-│   └── providers/    ChatProvider (session_id), ThemeProvider
-├── tests/            60+ .py — pytest (712 tests)
-├── e2e/              55 .ts — Playwright E2E
-├── scripts/          39 — seed, migrate, backfill, perf
-└── docs/             40+ .md — MkDocs Material site
+├── backend/               # FastAPI application (:8181)
+│   ├── main.py            # Entry point
+│   ├── agents/            # LangChain agentic framework (14 files)
+│   ├── tools/             # Stock analysis tools (20+ files)
+│   ├── jobs/              # Scheduler executors + pipeline (5 files)
+│   ├── pipeline/          # CLI data pipeline (19 commands)
+│   ├── db/                # ORM models, migrations, DuckDB
+│   │   ├── models/        # 12 SQLAlchemy models
+│   │   ├── migrations/    # Alembic async migrations
+│   │   ├── engine.py      # Async session factory
+│   │   ├── duckdb_engine.py # Iceberg read engine + metadata cache
+│   │   └── pg_stocks.py   # PG CRUD (registry, scheduler, pipeline)
+│   ├── config.py          # Settings (Pydantic)
+│   ├── routes.py          # Admin API + data-health endpoints
+│   ├── dashboard_routes.py # Dashboard/chart API
+│   ├── insights_routes.py # Screener/analytics API
+│   └── llm_fallback.py    # N-tier LLM cascade (Groq → Ollama → Anthropic)
+├── auth/                  # JWT + RBAC + OAuth PKCE
+├── stocks/                # Iceberg repository (5,000+ lines)
+├── frontend/              # Next.js 16 SPA (:3000)
+│   ├── app/               # 12 pages (App Router)
+│   ├── components/        # 30+ components (admin, charts, insights, widgets)
+│   ├── hooks/             # 19 SWR data hooks
+│   └── lib/               # Types, config, apiFetch
+├── e2e/                   # 54 Playwright specs (~219 tests)
+├── tests/                 # 83 pytest files (~755 tests)
+├── scripts/               # 30 data/migration/seed scripts
+├── docs/                  # 48 MkDocs Material pages
+└── docker-compose.yml     # 5 services (backend, frontend, PG, Redis, docs)
 ```
+
+---
 
 ## Entry Points
 
-- **Backend:** `backend/main.py` → uvicorn :8181
-- **Frontend:** `frontend/app/page.tsx` → Next.js :3000
-- **Docs:** Docker `docs` service → MkDocs :8000
-- **Tests:** `pytest tests/ -v` (712), `cd e2e && npm test` (E2E)
+| Entry | Path | Port |
+|-------|------|------|
+| Backend API | `backend/main.py` | 8181 |
+| Frontend SPA | `frontend/app/page.tsx` | 3000 |
+| Pipeline CLI | `backend/pipeline/runner.py` | — |
+| Scheduler | `backend/jobs/scheduler_service.py` | daemon |
+| Docs | `docs/` via MkDocs | 8000 |
 
-## Data Architecture (Hybrid)
+---
 
-**PostgreSQL (5 OLTP):** users, user_tickers, payment_transactions,
-stock_registry, scheduled_jobs — `backend/db/models/`, Alembic
+## Database (Hybrid PG + Iceberg)
 
-**Iceberg (14 OLAP):** ohlcv, indicators, forecasts, dividends,
-company_info, analysis_summary, forecast_runs, quarterly_results,
-llm_pricing, llm_usage, scheduler_runs, audit_log, usage_history,
-portfolio_transactions — `stocks/repository.py`
+**PostgreSQL (13 tables)**: users, user_tickers, payments, registry,
+scheduled_jobs, scheduler_runs, user_memories (pgvector 768-dim),
+stock_master, stock_tags, ingestion_cursor, ingestion_skipped,
+pipelines, pipeline_steps.
 
-**DuckDB:** In-process analytics — `backend/db/duckdb_engine.py`
+**Iceberg (12 tables)**: ohlcv (1.4M rows), company_info, dividends,
+quarterly_results, analysis_summary, forecast_runs, forecasts,
+piotroski_scores, sentiment_scores, llm_pricing, llm_usage,
+portfolio_transactions.
 
-## Core Modules
+**Rule**: Mutable state → PG. Append-only analytics → Iceberg.
+DuckDB for all Iceberg reads (metadata cache, auto-invalidated).
 
-| Module | Path | Purpose |
-|--------|------|---------|
-| Routes | `backend/routes.py` | Main HTTP API + context update |
-| Dashboard | `backend/dashboard_routes.py` | Dashboard + watchlist |
-| Insights | `backend/insights_routes.py` | Analytics endpoints |
-| WebSocket | `backend/ws.py` | Real-time chat streaming |
-| LLM Fallback | `backend/llm_fallback.py` | Multi-tier cascade |
-| Token Budget | `backend/token_budget.py` | Cost-aware LLM routing |
-| Observability | `backend/observability.py` | OpenTelemetry + usage |
-| Agent Graph | `backend/agents/graph.py` | LangGraph supervisor |
-| Conv Context | `backend/agents/conversation_context.py` | Session context + summary |
-| Topic Classifier | `backend/agents/nodes/topic_classifier.py` | Follow-up detection |
-| Date Utils | `backend/tools/_date_utils.py` | News recency filtering |
-| Sentiment | `backend/tools/_sentiment_scorer.py` | Time-decay scoring |
-| Auth Service | `auth/service.py` | JWT + bcrypt |
-| User Repo | `auth/repo/repository.py` | Async PG user ops |
-| Stock Repo | `stocks/repository.py` | Iceberg + PG wrappers |
+---
 
-## LLM Cascade (FallbackLLM)
+## Key Modules
 
-| Tier | Provider | Model | Use |
-|------|----------|-------|-----|
-| 0 | Ollama | gpt-oss:20b | Sentiment/batch |
-| 1-4 | Groq | llama-3.3-70b → scout-17b | Interactive |
-| N | Anthropic | claude-sonnet-4-6 | Final fallback |
+| Module | Files | Purpose |
+|--------|-------|---------|
+| `backend/agents/` | 14 | LangChain ReAct agent, intent routing, multi-turn |
+| `backend/tools/` | 20+ | Stock tools: forecast, analysis, sentiment, portfolio |
+| `backend/jobs/` | 5 | Executor registry, pipeline chaining, batch refresh |
+| `backend/pipeline/` | 8 | CLI: download, seed, bulk-download, analytics, forecast |
+| `backend/db/models/` | 12 | SQLAlchemy ORM (PG tables) |
+| `stocks/repository.py` | 1 (5K lines) | Iceberg CRUD + DuckDB reads + PG bridge |
+| `frontend/hooks/` | 19 | SWR data fetching for all pages |
+| `frontend/components/admin/` | 6 | Scheduler, Pipeline, DataHealth, PipelineForm |
 
-## Context-Aware Chat (Phase 1)
+---
 
-- `ConversationContext` in-memory store (1hr TTL)
-- Topic classifier: "follow_up" or "new_topic" via LLM
-- Rolling summary updated after each turn (Ollama/Groq)
-- [Conversation Context] block injected into system prompts
-- Frontend passes `session_id` in HTTP + WebSocket
+## Scheduler & Jobs
 
-## Recency-Aware News
+5 job types: `data_refresh`, `compute_analytics`, `run_sentiment`,
+`run_forecasts`, `run_piotroski`. All accept `force=False`.
 
-- `_date_utils.py`: parse Unix/RFC2822/ISO8601 dates
-- `days_back=7` default on news + sentiment tools
-- Time-decay: 1.0 (0-2d), 0.5 (3-7d), 0.25 (8-30d), 0.1 (>30d)
+Freshness gates: daily (OHLCV, analytics, sentiment), weekly
+(forecasts), monthly (CV accuracy auto-refresh via 30-day TTL).
 
-## Configuration
+Pipeline: sequential steps with skip-on-failure. India (4 steps,
+~10 min) and USA (4 steps, ~2 min) daily pipelines.
 
-| File | Purpose |
-|------|---------|
-| `pyproject.toml` | Black/isort/pytest (79 chars) |
-| `docker-compose.yml` | 5 services: backend, frontend, PG, Redis, docs |
-| `docker-compose.override.yml` | Dev hot-reload + fixtures mount |
-| `Dockerfile.backend` | 2-stage Python 3.12-slim |
-| `Dockerfile.frontend` | 3-stage Next.js standalone |
-| `Dockerfile.docs` | MkDocs Material 9 |
-| `alembic.ini` | PG schema migrations |
-| `.pyiceberg.yaml` | Iceberg SQLite catalog |
-| `mkdocs.yml` | Documentation site |
+Performance: batch DuckDB reads, bulk Iceberg writes,
+`workers = cpu_count // 2`, `parallel=None` for Prophet CV.
+
+---
 
 ## Key Dependencies
 
-**Backend:** FastAPI, SQLAlchemy 2.0 async, LangChain 1.2,
-LangGraph 1.0, asyncpg, Alembic, DuckDB, PyIceberg, pandas,
-Prophet, yfinance, feedparser, Stripe, Razorpay, Redis, OTel
+| Package | Version | Purpose |
+|---------|---------|---------|
+| FastAPI | 0.135 | REST API |
+| Next.js | 16.1 | Frontend |
+| LangChain | 1.2 | Agent framework |
+| Prophet | 1.3 + CmdStanPy 1.3 | Forecasting |
+| SQLAlchemy | 2.0 async | ORM (asyncpg) |
+| PyIceberg | 0.11 | Table management |
+| SWR | 2.3 | Frontend data hooks |
+| lightweight-charts | 5.1 | TradingView |
 
-**Frontend:** Next.js 16, React 19, TailwindCSS 4, ECharts,
-lightweight-charts, Plotly, SWR, Playwright
+---
+
+## File Counts
+
+Python: 214 | TypeScript: 118 | Tests: 83+10+54 | Docs: 48 | Scripts: 30
+
+---
 
 ## Quick Start
 
 ```bash
-docker compose up -d                    # 5 services
-docker compose exec backend \
-  python scripts/seed_demo_data.py      # Seed data
-# Visit http://localhost:3000
-# Admin: admin@demo.com / Admin123!
-# User:  test@demo.com  / Test1234!
+cp .env.example .env && ./run.sh start
+docker compose exec backend python scripts/seed_demo_data.py
+# http://localhost:3000 → admin@demo.com / Admin123!
 ```
-
-## Stats
-
-| Metric | Count |
-|--------|-------|
-| Python modules | 165 |
-| TypeScript files | 89 |
-| Backend tests | 712 (60+ files) |
-| E2E tests | ~219 (55 files) |
-| Docker services | 5 (+ Ollama host-native) |
-| Perf score | 94/100 (Sprint 3 = Sprint 4) |
-| Sprint 4 tickets | 32 (31 Done) |
