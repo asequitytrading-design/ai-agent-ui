@@ -281,6 +281,32 @@ def create_insights_router() -> APIRouter:
             else:
                 rsi_map[str(r["ticker"])] = None
 
+        # Latest sentiment per ticker.
+        sent_map: dict[str, tuple[float, int]] = {}
+        try:
+            sent_df = query_iceberg_df(
+                "stocks.sentiment_scores",
+                "SELECT ticker, avg_score, "
+                "headline_count FROM ("
+                "  SELECT ticker, avg_score, "
+                "  headline_count, "
+                "  ROW_NUMBER() OVER ("
+                "    PARTITION BY ticker "
+                "    ORDER BY scored_at DESC"
+                "  ) AS rn "
+                "  FROM sentiment_scores "
+                f"  WHERE ticker IN ({ph})"
+                ") WHERE rn = 1",
+            )
+            if not sent_df.empty:
+                for _, sr in sent_df.iterrows():
+                    sent_map[str(sr["ticker"])] = (
+                        float(sr["avg_score"]),
+                        int(sr["headline_count"]),
+                    )
+        except Exception:
+            pass
+
         company_df = _get_company_info_df(
             stock_repo,
             tickers,
@@ -293,6 +319,7 @@ def create_insights_router() -> APIRouter:
         rows: list[ScreenerRow] = []
         for _, row in df.iterrows():
             t = str(row["ticker"])
+            s_tup = sent_map.get(t)
             rows.append(
                 ScreenerRow(
                     ticker=t,
@@ -301,6 +328,12 @@ def create_insights_router() -> APIRouter:
                     rsi_signal=str(row.get("rsi_signal", "")) or None,
                     macd_signal=str(row.get("macd_signal_text", "")) or None,
                     sma_200_signal=str(row.get("sma_200_signal", "")) or None,
+                    sentiment_score=(
+                        s_tup[0] if s_tup else None
+                    ),
+                    sentiment_headlines=(
+                        s_tup[1] if s_tup else None
+                    ),
                     annualized_return_pct=_safe(
                         row.get("annualized_return_pct")
                     ),
@@ -1049,13 +1082,17 @@ def create_insights_router() -> APIRouter:
     async def get_piotroski(
         min_score: int = Query(0, ge=0, le=9),
         sector: str = Query("all"),
+        market: str = Query("all"),
         user: UserContext = Depends(
             get_current_user,
         ),
     ):
         """Return latest Piotroski F-Score results."""
         cache = get_cache()
-        ck = f"cache:insights:piotroski:" f"{min_score}:{sector}"
+        ck = (
+            f"cache:insights:piotroski:"
+            f"{min_score}:{sector}:{market}"
+        )
         hit = cache.get(ck)
         if hit is not None:
             return Response(
@@ -1070,11 +1107,7 @@ def create_insights_router() -> APIRouter:
 
             df = query_iceberg_df(
                 "stocks.piotroski_scores",
-                "SELECT * FROM piotroski_scores "
-                "WHERE score_date = ("
-                "  SELECT MAX(score_date) "
-                "  FROM piotroski_scores"
-                ")",
+                "SELECT * FROM piotroski_scores",
             )
         except Exception:
             repo = _get_stock_repo()
@@ -1090,6 +1123,18 @@ def create_insights_router() -> APIRouter:
         )
 
         # Apply filters.
+        if market == "india":
+            df = df[
+                df["ticker"].str.endswith(
+                    (".NS", ".BO"),
+                )
+            ]
+        elif market == "us":
+            df = df[
+                ~df["ticker"].str.endswith(
+                    (".NS", ".BO"),
+                )
+            ]
         if min_score > 0:
             df = df[df["total_score"] >= min_score]
         if sector != "all":

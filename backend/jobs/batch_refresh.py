@@ -166,6 +166,11 @@ def _fetch_one_ticker(
                 2,
             )
         except Exception:
+            _logger.warning(
+                "[batch] OHLCV fetch failed: %s",
+                ticker,
+                exc_info=True,
+            )
             result["ohlcv_df"] = pd.DataFrame()
 
         # Company info (skip if fresh today)

@@ -225,6 +225,45 @@ const screenerCols: Column<ScreenerRow>[] = [
     render: (r) => signalBadge(r.rsi_signal),
   },
   {
+    key: "sentiment_score",
+    label: "Sentiment",
+    numeric: true,
+    tooltip:
+      "LLM-scored sentiment from recent news. " +
+      "Range: -1 (bearish) to +1 (bullish). " +
+      "Each headline scored via Groq LLM, " +
+      "averaged across Yahoo Finance, Reuters " +
+      "and other sources.",
+    render: (r) => {
+      if (r.sentiment_score == null) return "—";
+      const s = r.sentiment_score;
+      const label =
+        s >= 0.3
+          ? "Bullish"
+          : s <= -0.3
+            ? "Bearish"
+            : "Neutral";
+      const color =
+        s >= 0.3
+          ? "text-emerald-600 dark:text-emerald-400"
+          : s <= -0.3
+            ? "text-red-600 dark:text-red-400"
+            : "text-gray-600 dark:text-gray-400";
+      return (
+        <span
+          className={`${color} cursor-help`}
+          title={`Score: ${s.toFixed(3)} from ${r.sentiment_headlines ?? 0} headlines`}
+        >
+          {label}
+          <span className="ml-1 text-[10px] opacity-60">
+            {s >= 0 ? "+" : ""}
+            {s.toFixed(2)}
+          </span>
+        </span>
+      );
+    },
+  },
+  {
     key: "macd_signal",
     label: "MACD",
     render: (r) => signalBadge(r.macd_signal),
@@ -1299,7 +1338,8 @@ function QuarterlyTab() {
 function PiotroskiTab() {
   const [sector, setSector] = useState("all");
   const [minScore, setMinScore] = useState(0);
-  const data = usePiotroski(minScore, sector);
+  const [market, setMarket] = useState("all");
+  const data = usePiotroski(minScore, sector, market);
 
   const filtered = useMemo(() => {
     if (!data.value?.rows) return [];
@@ -1341,6 +1381,24 @@ function PiotroskiTab() {
             ))}
           </select>
         )}
+        {/* Market filter */}
+        <select
+          data-testid="piotroski-market-filter"
+          value={market}
+          onChange={(e) =>
+            setMarket(e.target.value)
+          }
+          className="rounded-lg border border-gray-300
+            dark:border-gray-600 bg-white dark:bg-gray-800
+            px-2.5 py-1.5 text-sm
+            text-gray-700 dark:text-gray-200
+            focus:outline-none focus:ring-2
+            focus:ring-indigo-500/40"
+        >
+          <option value="all">All Markets</option>
+          <option value="india">India</option>
+          <option value="us">US</option>
+        </select>
         {/* Min score filter */}
         <select
           data-testid="piotroski-score-filter"

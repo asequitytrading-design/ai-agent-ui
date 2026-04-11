@@ -2609,24 +2609,31 @@ class StockRepository:
                 ),
             }
         )
-        # Delete previous run for same date
-        if score_date:
+        # Delete previous scores for same tickers
+        # (scoped, not whole-date) so India and US
+        # pipelines don't overwrite each other.
+        tickers_in_batch = {
+            s["ticker"] for s in scores
+        }
+        if tickers_in_batch:
             from pyiceberg.expressions import (
-                EqualTo,
+                In,
             )
 
             try:
                 self._delete_rows(
                     _PIOTROSKI_SCORES,
-                    EqualTo(
-                        "score_date",
-                        _to_date(score_date),
+                    In(
+                        "ticker",
+                        list(tickers_in_batch),
                     ),
                 )
             except Exception:
                 _logger.debug(
-                    "Delete before insert failed " "for piotroski_scores/%s",
-                    score_date,
+                    "Delete before insert failed "
+                    "for piotroski_scores (%d "
+                    "tickers)",
+                    len(tickers_in_batch),
                     exc_info=True,
                 )
         self._append_rows(_PIOTROSKI_SCORES, arrow)
@@ -4569,6 +4576,12 @@ class StockRepository:
                     _SCHEDULER_RUNS,
                 )
             schema = tbl.schema().as_arrow()
+            col_names = [
+                f.name for f in tbl.schema().fields
+            ]
+            for col in col_names:
+                if col not in clean:
+                    clean[col] = None
             df = pd.DataFrame([clean])
             at = pa.Table.from_pandas(
                 df,
@@ -4678,6 +4691,23 @@ class StockRepository:
                     utc=True,
                     errors="coerce",
                 )
+            total = len(df)
+            if offset:
+                df = df.iloc[offset:]
+            if limit:
+                df = df.iloc[:limit]
+            df = df.where(df.notna(), None)
+            records = df.to_dict(orient="records")
+            for r in records:
+                r["_total"] = total
+                for k, v in list(r.items()):
+                    if hasattr(v, "isoformat"):
+                        r[k] = v.isoformat()
+                    elif isinstance(v, float) and (
+                        v != v
+                    ):
+                        r[k] = None
+            return records
         except Exception:
             # Fallback to PyIceberg.
             df = self._table_to_df(_SCHEDULER_RUNS)
@@ -4774,14 +4804,28 @@ class StockRepository:
     ) -> list[dict]:
         """Return all runs for a pipeline_run_id."""
         try:
+            from backend.db.duckdb_engine import (
+                query_iceberg_df,
+            )
+
+            df = query_iceberg_df(
+                _SCHEDULER_RUNS,
+                "SELECT * FROM scheduler_runs "
+                "WHERE pipeline_run_id = "
+                f"'{pipeline_run_id}' "
+                "ORDER BY started_at ASC",
+            )
+        except Exception:
             df = self._table_to_df(_SCHEDULER_RUNS)
-            if df.empty:
-                return []
-            if "pipeline_run_id" not in df.columns:
-                return []
-            df = df[
-                df["pipeline_run_id"] == pipeline_run_id
-            ]
+            if not df.empty:
+                if "pipeline_run_id" in df.columns:
+                    df = df[
+                        df["pipeline_run_id"]
+                        == pipeline_run_id
+                    ]
+                else:
+                    df = pd.DataFrame()
+        try:
             if df.empty:
                 return []
             if "started_at" in df.columns:
@@ -4791,6 +4835,12 @@ class StockRepository:
                     errors="coerce",
                 )
                 df = df.sort_values("started_at")
+            if "completed_at" in df.columns:
+                df["completed_at"] = pd.to_datetime(
+                    df["completed_at"],
+                    utc=True,
+                    errors="coerce",
+                )
             df = df.where(df.notna(), None)
             records = df.to_dict(orient="records")
             for r in records:
@@ -4815,26 +4865,38 @@ class StockRepository:
     ) -> str | None:
         """Get latest pipeline_run_id for a pipeline.
 
-        Looks for runs whose job_name starts with a
-        pattern matching the pipeline, filtering by
-        pipeline_run_id presence.
+        Looks for runs where job_id matches the
+        pipeline_id and pipeline_run_id is present.
         """
         try:
+            from backend.db.duckdb_engine import (
+                query_iceberg_df,
+            )
+
+            df = query_iceberg_df(
+                _SCHEDULER_RUNS,
+                "SELECT pipeline_run_id, started_at "
+                "FROM scheduler_runs "
+                f"WHERE job_id = '{pipeline_id}' "
+                "AND pipeline_run_id IS NOT NULL "
+                "ORDER BY started_at DESC "
+                "LIMIT 1",
+            )
+        except Exception:
             df = self._table_to_df(_SCHEDULER_RUNS)
-            if df.empty:
-                return None
-            if "pipeline_run_id" not in df.columns:
-                return None
-            df = df[df["pipeline_run_id"].notna()]
-            if df.empty:
-                return None
-            # Filter by job_id == pipeline_id (we
-            # store pipeline_id in job_id for pipeline
-            # runs)
-            df = df[df["job_id"] == pipeline_id]
-            if df.empty:
-                return None
-            if "started_at" in df.columns:
+            if not df.empty:
+                if "pipeline_run_id" in df.columns:
+                    df = df[
+                        df["pipeline_run_id"].notna()
+                    ]
+                    df = df[
+                        df["job_id"] == pipeline_id
+                    ]
+                else:
+                    df = pd.DataFrame()
+            if not df.empty and (
+                "started_at" in df.columns
+            ):
                 df["started_at"] = pd.to_datetime(
                     df["started_at"],
                     utc=True,
@@ -4843,6 +4905,9 @@ class StockRepository:
                 df = df.sort_values(
                     "started_at", ascending=False,
                 )
+        try:
+            if df.empty:
+                return None
             return str(df.iloc[0]["pipeline_run_id"])
         except Exception:
             _logger.error(

@@ -23,6 +23,8 @@ class ScreenerRow(BaseModel):
     rsi_signal: str | None = None
     macd_signal: str | None = None
     sma_200_signal: str | None = None
+    sentiment_score: float | None = None
+    sentiment_headlines: int | None = None
     annualized_return_pct: float | None = None
     annualized_volatility_pct: float | None = None
     sharpe_ratio: float | None = None

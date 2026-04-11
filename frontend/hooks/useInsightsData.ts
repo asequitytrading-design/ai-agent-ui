@@ -113,12 +113,15 @@ export function useQuarterly(
 export function usePiotroski(
   minScore: number = 0,
   sector: string = "all",
+  market: string = "all",
 ): InsightsData<PiotroskiResponse> {
   const params = new URLSearchParams();
   if (minScore > 0)
     params.set("min_score", String(minScore));
   if (sector !== "all")
     params.set("sector", sector);
+  if (market !== "all")
+    params.set("market", market);
   const qs = params.toString();
   return useInsightsFetch<PiotroskiResponse>(
     `/insights/piotroski${qs ? `?${qs}` : ""}`,

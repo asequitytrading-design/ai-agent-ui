@@ -296,6 +296,8 @@ export interface ScreenerRow {
   rsi_signal: string | null;
   macd_signal: string | null;
   sma_200_signal: string | null;
+  sentiment_score: number | null;
+  sentiment_headlines: number | null;
   annualized_return_pct: number | null;
   annualized_volatility_pct: number | null;
   sharpe_ratio: number | null;
