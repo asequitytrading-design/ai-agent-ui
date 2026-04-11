@@ -75,7 +75,7 @@ _FORECASTS = f"{_NAMESPACE}.forecasts"
 _QUARTERLY_RESULTS = f"{_NAMESPACE}.quarterly_results"
 _CHAT_AUDIT_LOG = f"{_NAMESPACE}.chat_audit_log"
 _PORTFOLIO = f"{_NAMESPACE}.portfolio_transactions"
-_SCHEDULER_RUNS = f"{_NAMESPACE}.scheduler_runs"
+# scheduler_runs migrated to PostgreSQL (ASETPLTFRM-301)
 _PIOTROSKI_SCORES = f"{_NAMESPACE}.piotroski_scores"
 
 
