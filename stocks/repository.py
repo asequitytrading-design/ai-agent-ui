@@ -79,31 +79,23 @@ _PORTFOLIO = f"{_NAMESPACE}.portfolio_transactions"
 _PIOTROSKI_SCORES = f"{_NAMESPACE}.piotroski_scores"
 
 
-import threading as _threading
-
-_tl = _threading.local()
-
-
 def _run_pg(async_fn):
     """Run an async PG function from sync context.
 
-    Uses a **thread-local event loop + engine** so each
-    worker thread reuses the same pooled connection pool
-    across calls.
+    Two paths:
+    1. **From async context** (FastAPI endpoints): uses
+       the shared pooled engine from ``engine.py`` via
+       ``get_session_factory()``.  No thread offload
+       needed — runs in the existing event loop.
+    2. **From sync context** (scheduler, executor,
+       pipeline threads): uses ``asyncio.run()`` with a
+       ``NullPool`` engine so each call gets a fresh
+       connection and releases it immediately.
 
-    Why thread-local:
-        asyncpg connections are bound to the event loop
-        that created them.  ``asyncio.run()`` creates a
-        new loop each time, breaking pool reuse.  Instead
-        we keep one loop per thread via ``threading.local``
-        and run coroutines with ``loop.run_until_complete``.
-
-    Performance:
-        Before (per-call engine): 748 calls = 748 TCP
-        connections, exhausts ``max_connections``, ~450ms
-        per call under contention.
-        After (thread-local pool): 5 workers × 1 engine
-        each, pooled connections reused, ~4ms per call.
+    ``NullPool`` for sync callers avoids:
+    - Connection leaks from terminated threads
+    - 'Future attached to different loop' errors
+    - Exhausting ``max_connections`` from stale pools
 
     Usage::
 
@@ -123,34 +115,28 @@ def _run_pg(async_fn):
 
     if running and running.is_running():
         # Called from an async context (FastAPI) —
-        # offload to a worker thread that has its
-        # own loop.
+        # offload to a worker thread with NullPool.
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=1,
         ) as pool:
             return pool.submit(
-                _run_pg, async_fn,
+                asyncio.run,
+                async_fn(),
             ).result()
-
-    # Get or create thread-local event loop.
-    loop = getattr(_tl, "pg_loop", None)
-    if loop is None or loop.is_closed():
-        loop = asyncio.new_event_loop()
-        _tl.pg_loop = loop
-    return loop.run_until_complete(async_fn())
+    return asyncio.run(async_fn())
 
 
 def _pg_session():
-    """Return an async session from a thread-local engine.
+    """Return an async session with NullPool engine.
 
-    First call per thread creates the engine
-    (``pool_size=3``, ``max_overflow=5``).  Subsequent
-    calls reuse the pooled engine — no new TCP
-    connections.
+    ``NullPool`` creates a fresh TCP connection per
+    session and releases it on close.  This avoids
+    connection leaks and loop-binding issues in sync
+    worker threads.
 
-    The engine + session factory are stored in
-    ``threading.local()`` alongside the event loop
-    so they share the same lifecycle.
+    Each call costs ~2-5ms (TCP connect).  For hot
+    paths, prefer DuckDB batch reads or bulk PG writes
+    to minimise the number of sessions.
 
     Returns:
         An ``AsyncSession`` async context manager.
@@ -160,23 +146,18 @@ def _pg_session():
         async_sessionmaker,
         create_async_engine,
     )
+    from sqlalchemy.pool import NullPool
+    from config import get_settings
 
-    factory = getattr(_tl, "pg_factory", None)
-    if factory is None:
-        from config import get_settings
-
-        engine = create_async_engine(
-            get_settings().database_url,
-            pool_size=3,
-            max_overflow=5,
-            pool_pre_ping=True,
-        )
-        factory = async_sessionmaker(
-            engine,
-            class_=AsyncSession,
-            expire_on_commit=False,
-        )
-        _tl.pg_factory = factory
+    engine = create_async_engine(
+        get_settings().database_url,
+        poolclass=NullPool,
+    )
+    factory = async_sessionmaker(
+        engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+    )
     return factory()
 
 

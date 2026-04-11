@@ -69,7 +69,7 @@ services:
         -c shared_buffers=512MB
         -c effective_cache_size=1GB
         -c work_mem=32MB
-        -c max_connections=20
+        -c max_connections=50
 
   # ── MkDocs Material (documentation) ────────────────
   docs:
