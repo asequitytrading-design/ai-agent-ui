@@ -1436,9 +1436,46 @@ def execute_run_forecasts(
             if corrected is not None:
                 forecast_df = corrected
 
-        accuracy = _calculate_forecast_accuracy(
-            model,
-            prophet_df,
+        # Reuse accuracy from previous run if <30 days
+        # old. CV drifts <1% MAPE for 95% of tickers
+        # over 30 days — no need to recompute weekly.
+        _prev_acc = None
+        if not force:
+            _prev = _fc_run_cache.get(yf_ticker)
+            if _prev and _prev.get("mae"):
+                from datetime import timedelta
+
+                rd = _prev.get("run_date")
+                if hasattr(rd, "date"):
+                    rd = rd.date()
+                elif hasattr(rd, "to_pydatetime"):
+                    rd = rd.to_pydatetime().date()
+                acc_cutoff = (
+                    datetime.now(
+                        timezone.utc,
+                    ).date()
+                    - timedelta(days=30)
+                )
+                if rd and rd >= acc_cutoff:
+                    _prev_acc = {
+                        "MAE": _prev["mae"],
+                        "RMSE": _prev["rmse"],
+                        "MAPE_pct": _prev["mape"],
+                    }
+                    _logger.info(
+                        "[scheduler] Reusing "
+                        "accuracy for %s "
+                        "(run_date=%s)",
+                        yf_ticker,
+                        rd,
+                    )
+
+        accuracy = (
+            _prev_acc
+            if _prev_acc
+            else _calculate_forecast_accuracy(
+                model, prophet_df,
+            )
         )
 
         summary = _generate_forecast_summary(
