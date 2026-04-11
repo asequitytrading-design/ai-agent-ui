@@ -210,6 +210,30 @@ These rules MUST be followed in every interaction:
 18. **LHCI can't audit authenticated routes** — Lighthouse clears
     localStorage per navigation. Use `npm run perf:full` (Playwright)
     instead. See `PERFORMANCE.md`.
+19. **Batch DuckDB reads, not per-ticker loops** — use single
+    `SELECT ... WHERE ticker IN (...)` query before parallel
+    loops. Pre-load into dict. Never N individual reads.
+20. **Bulk Iceberg writes** — accumulate results in memory,
+    write in 1-2 commits after the loop. Never per-ticker
+    `_append_rows` inside parallel workers (2,244 commits
+    → 2 commits saved 11.5 min).
+21. **Never use Iceberg for mutable state** — row-level
+    `update` does full table scan + overwrite (~9s). Use
+    PostgreSQL for any field that changes (status, counters,
+    timestamps). Iceberg is append-only analytics.
+22. **NullPool for sync→async PG bridge** — `_pg_session()`
+    uses `NullPool` to avoid connection leaks from terminated
+    threads. Never use thread-local or per-call pooled engines.
+23. **No nested parallelism** — if outer `ThreadPoolExecutor`
+    runs N workers, inner code must NOT spawn
+    `ProcessPoolExecutor`. Use `parallel=None` for Prophet
+    CV. `workers = cpu_count // 2`.
+24. **Cache scope-level data** — VIX, index, macro regressors
+    are identical across tickers in same scope. Cache with
+    TTL, only per-ticker data (sentiment) fetched individually.
+25. **Throttle expensive updates** — if an update costs >100ms,
+    throttle to time-based intervals or batch into finalize.
+    `update_scheduler_run` was 9s per call on Iceberg.
 
 ---
 
@@ -380,6 +404,22 @@ Run `list_memories` to browse all topics. Key categories:
 - **Perf script login**: `scripts/perf-check-auth.js` uses
   `emailInput.type()` not `fill()` — React `onChange` doesn't
   fire with `fill()`, keeping the submit button disabled.
+- **`_pg_session()` NullPool**: Each call creates a fresh TCP
+  connection (~2-5ms). Don't use for hot loops — batch via
+  DuckDB or bulk PG writes instead. See memory
+  `shared/debugging/pg-nullpool-sync-async-bridge`.
+- **Prophet CV `parallel="processes"` from stdin**: Spawns
+  subprocesses that fail with `FileNotFoundError: /app/<stdin>`.
+  Must run from a `.py` file. Batch executor uses
+  `parallel=None` to avoid this.
+- **Piotroski scoped delete**: `insert_piotroski_scores`
+  deletes by `In("ticker", batch)` not `EqualTo("score_date")`.
+  India and US pipelines run same day — date-scoped delete
+  wipes the other market's scores.
+- **Forecast backtest convention**: Backtest data stored in
+  `forecasts` Iceberg table with `horizon_months=0`. Actual
+  price in `lower_bound` column. Batch executor must persist
+  this when CV runs (not just the live chat tool).
 
 ---
 
