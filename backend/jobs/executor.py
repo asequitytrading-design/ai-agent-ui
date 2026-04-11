@@ -1602,6 +1602,7 @@ def execute_run_piotroski(
     run_id: str,
     repo,  # StockRepository
     cancel_event=None,
+    force: bool = False,
 ) -> None:
     """Compute Piotroski F-Score for all tickers.
 
