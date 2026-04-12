@@ -387,6 +387,7 @@ def create_recommendation_router() -> APIRouter:
                         r.get("run_id", ""),
                     ),
                     run_date=str(rd),
+                    scope=r.get("scope", "all"),
                     health_score=float(
                         r.get("health_score", 0),
                     ),

@@ -72,7 +72,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "correlation", label: "Correlation" },
   { id: "quarterly", label: "Quarterly" },
   { id: "piotroski", label: "Piotroski F-Score" },
-  { id: "recommendations", label: "Rec History" },
+  { id: "recommendations", label: "Recommendation History" },
 ];
 
 // ---------------------------------------------------------------
