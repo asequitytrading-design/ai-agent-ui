@@ -20,6 +20,7 @@ import type {
   QuarterlyResponse,
   PiotroskiResponse,
   RecommendationHistoryResponse,
+  RecommendationResponse,
   RecommendationStatsResponse,
 } from "@/lib/types";
 
@@ -145,5 +146,15 @@ export function useRecommendationHistory(
 export function useRecommendationStats(): InsightsData<RecommendationStatsResponse> {
   return useInsightsFetch<RecommendationStatsResponse>(
     `/dashboard/portfolio/recommendations/stats`,
+  );
+}
+
+export function useRunDetail(
+  runId: string | null,
+): InsightsData<RecommendationResponse> {
+  return useInsightsFetch<RecommendationResponse>(
+    runId
+      ? `/dashboard/portfolio/recommendations/${runId}`
+      : null,
   );
 }

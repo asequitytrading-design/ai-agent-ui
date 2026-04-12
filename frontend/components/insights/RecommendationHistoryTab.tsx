@@ -4,7 +4,10 @@ import { useState, useMemo } from "react";
 import {
   useRecommendationHistory,
   useRecommendationStats,
+  useRunDetail,
 } from "@/hooks/useInsightsData";
+import { RecommendationSlideOver } from
+  "@/components/widgets/RecommendationSlideOver";
 import type {
   HistoryRunItem,
   RecommendationStatsResponse,
@@ -188,7 +191,13 @@ function FilterPill({
 // Collapsible run row
 // ---------------------------------------------------------------
 
-function RunRow({ run }: { run: HistoryRunItem }) {
+function RunRow({
+  run,
+  onView,
+}: {
+  run: HistoryRunItem;
+  onView: (runId: string) => void;
+}) {
   const [open, setOpen] = useState(false);
   const date = new Date(run.run_date);
   const formatted = date.toLocaleDateString(
@@ -251,6 +260,39 @@ function RunRow({ run }: { run: HistoryRunItem }) {
           <span>
             {run.acted_on_count} acted on
           </span>
+          {run.total_recommendations > 0 && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onView(run.run_id);
+              }}
+              title="View recommendations"
+              className="p-1 rounded
+                hover:bg-gray-200
+                dark:hover:bg-gray-700
+                transition-colors"
+            >
+              <svg
+                className="w-4 h-4"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={2}
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"
+                />
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+                />
+              </svg>
+            </button>
+          )}
           <svg
             className={
               "w-4 h-4 transition-transform " +
@@ -402,6 +444,9 @@ export function RecommendationHistoryTab() {
     useState<ScopeFilter>("india");
   const [daysBack, setDaysBack] = useState(90);
   const [page, setPage] = useState(0);
+  const [viewRunId, setViewRunId] =
+    useState<string | null>(null);
+  const runDetail = useRunDetail(viewRunId);
 
   // Filter runs by scope + time range
   const filtered = useMemo(() => {
@@ -566,7 +611,11 @@ export function RecommendationHistoryTab() {
       ) : (
         <div className="space-y-2">
           {pageRuns.map((run) => (
-            <RunRow key={run.run_id} run={run} />
+            <RunRow
+              key={run.run_id}
+              run={run}
+              onView={setViewRunId}
+            />
           ))}
         </div>
       )}
@@ -611,6 +660,13 @@ export function RecommendationHistoryTab() {
           </button>
         </div>
       )}
+
+      {/* Run detail modal */}
+      <RecommendationSlideOver
+        open={viewRunId !== null}
+        onClose={() => setViewRunId(null)}
+        data={runDetail.value ?? null}
+      />
     </div>
   );
 }
