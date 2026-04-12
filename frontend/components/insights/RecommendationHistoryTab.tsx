@@ -335,21 +335,39 @@ function StatsRow({
 
 type ScopeFilter = "all" | "india" | "us";
 
+const TIME_RANGES = [
+  { value: 7, label: "7D" },
+  { value: 30, label: "1M" },
+  { value: 90, label: "3M" },
+  { value: 180, label: "6M" },
+  { value: 270, label: "9M" },
+  { value: 365, label: "1Y" },
+] as const;
+
 export function RecommendationHistoryTab() {
   const history = useRecommendationHistory(12);
   const stats = useRecommendationStats();
   const [scopeFilter, setScopeFilter] =
-    useState<ScopeFilter>("all");
+    useState<ScopeFilter>("india");
+  const [daysBack, setDaysBack] = useState(90);
   const [page, setPage] = useState(0);
 
-  // Filter runs by scope
+  // Filter runs by scope + time range
   const filtered = useMemo(() => {
     const runs = history.value?.runs ?? [];
-    if (scopeFilter === "all") return runs;
-    return runs.filter(
-      (r) => r.scope === scopeFilter,
-    );
-  }, [history.value, scopeFilter]);
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - daysBack);
+
+    return runs.filter((r) => {
+      if (
+        scopeFilter !== "all" &&
+        r.scope !== scopeFilter
+      )
+        return false;
+      const rd = new Date(r.run_date);
+      return rd >= cutoff;
+    });
+  }, [history.value, scopeFilter, daysBack]);
 
   // Paginate
   const totalPages = Math.max(
@@ -364,6 +382,10 @@ export function RecommendationHistoryTab() {
   // Reset page on filter change
   const handleScopeChange = (s: ScopeFilter) => {
     setScopeFilter(s);
+    setPage(0);
+  };
+  const handleTimeChange = (days: number) => {
+    setDaysBack(days);
     setPage(0);
   };
 
@@ -425,35 +447,60 @@ export function RecommendationHistoryTab() {
       {/* KPI cards */}
       {statsData && <StatsRow stats={statsData} />}
 
-      {/* Scope filter + header */}
-      <div
-        className="flex items-center
-          justify-between flex-wrap gap-3"
-      >
-        <h3
-          className="text-sm font-semibold
-            text-gray-700 dark:text-gray-300
-            uppercase tracking-wide"
+      {/* Filters */}
+      <div className="space-y-3">
+        <div
+          className="flex items-center
+            justify-between flex-wrap gap-3"
         >
-          Run History
-        </h3>
-        <div className="flex gap-1.5">
-          {(
-            [
-              { value: "all", label: "All" },
-              { value: "india", label: "India" },
-              { value: "us", label: "US" },
-            ] as const
-          ).map((o) => (
-            <FilterPill
-              key={o.value}
-              label={o.label}
-              active={scopeFilter === o.value}
-              onClick={() =>
-                handleScopeChange(o.value)
-              }
-            />
-          ))}
+          <h3
+            className="text-sm font-semibold
+              text-gray-700 dark:text-gray-300
+              uppercase tracking-wide"
+          >
+            Run History
+          </h3>
+          <div className="flex items-center gap-4 flex-wrap">
+            {/* Scope filter */}
+            <div className="flex gap-1.5">
+              {(
+                [
+                  { value: "all", label: "All" },
+                  {
+                    value: "india",
+                    label: "India",
+                  },
+                  { value: "us", label: "US" },
+                ] as const
+              ).map((o) => (
+                <FilterPill
+                  key={o.value}
+                  label={o.label}
+                  active={scopeFilter === o.value}
+                  onClick={() =>
+                    handleScopeChange(o.value)
+                  }
+                />
+              ))}
+            </div>
+            {/* Time range filter */}
+            <div
+              className="flex gap-1 border-l
+                border-gray-200 dark:border-gray-700
+                pl-3"
+            >
+              {TIME_RANGES.map((t) => (
+                <FilterPill
+                  key={t.value}
+                  label={t.label}
+                  active={daysBack === t.value}
+                  onClick={() =>
+                    handleTimeChange(t.value)
+                  }
+                />
+              ))}
+            </div>
+          </div>
         </div>
       </div>
 
