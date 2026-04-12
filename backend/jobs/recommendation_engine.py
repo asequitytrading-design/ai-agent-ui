@@ -1,4 +1,4 @@
-"""Smart Funnel Stage 1 — DuckDB pre-filter + composite scoring.
+"""Smart Funnel — DuckDB pre-filter, gap analysis, LLM reasoning.
 
 Scores the full ticker universe using a 6-factor composite
 signal from Iceberg tables:
@@ -14,6 +14,7 @@ Hard gates eliminate low-quality candidates before
 expensive LLM reasoning in Stage 3.
 """
 
+import json
 import logging
 import time as _time
 
@@ -957,3 +958,486 @@ def stage2_gap_analysis(
         "candidates": top_candidates,
         "gap_analysis": gap_analysis,
     }
+
+
+# ─────────────────────────────────────────────────────
+# Stage 3 — LLM reasoning pass
+# ─────────────────────────────────────────────────────
+
+_REQUIRED_REC_FIELDS = {
+    "tier", "category", "action", "severity", "rationale",
+}
+
+
+def _validate_llm_output(
+    output: dict,
+    valid_tickers: set,
+) -> list[str]:
+    """Validate LLM JSON response.
+
+    Returns a list of error strings.  An empty list means
+    the output is valid.
+
+    Parameters
+    ----------
+    output : dict
+        Parsed JSON from the LLM.
+    valid_tickers : set
+        Tickers known to the candidate universe.
+
+    Returns
+    -------
+    list[str]
+        Validation errors (empty = valid).
+    """
+    errors: list[str] = []
+    if "recommendations" not in output:
+        errors.append("Missing 'recommendations' key")
+        return errors
+
+    recs = output["recommendations"]
+    if not isinstance(recs, list):
+        errors.append("'recommendations' is not a list")
+        return errors
+
+    for i, rec in enumerate(recs):
+        missing = _REQUIRED_REC_FIELDS - set(rec.keys())
+        if missing:
+            errors.append(
+                f"rec[{i}]: missing fields "
+                f"{sorted(missing)}"
+            )
+        ticker = rec.get("ticker")
+        if ticker and ticker not in valid_tickers:
+            errors.append(
+                f"rec[{i}]: hallucinated ticker "
+                f"'{ticker}'"
+            )
+
+    if "health_score" not in output:
+        errors.append("Missing 'health_score'")
+    if "health_label" not in output:
+        errors.append("Missing 'health_label'")
+
+    return errors
+
+
+def _deterministic_fallback(
+    candidates: list[dict],
+    portfolio_actions: list[dict],
+    health_score: float,
+    health_label: str,
+) -> dict:
+    """Fallback when LLM reasoning fails.
+
+    Returns top 5 recommendations with template rationale.
+    Includes up to 2 portfolio_actions first, then fills
+    with top candidates by gap_adjusted_score.
+
+    Parameters
+    ----------
+    candidates : list[dict]
+        Enriched candidates from Stage 2.
+    portfolio_actions : list[dict]
+        Holding actions from Stage 2.
+    health_score : float
+        Computed portfolio health score.
+    health_label : str
+        Health label string.
+
+    Returns
+    -------
+    dict
+        Stage 3 result dict.
+    """
+    recs: list[dict] = []
+
+    # Up to 2 portfolio actions (exit/risk first)
+    action_map = {
+        "exit_reduce": "sell",
+        "risk_alert": "alert",
+        "rebalance": "reduce",
+        "hold_accumulate": "accumulate",
+    }
+    priority = [
+        "exit_reduce", "risk_alert",
+        "rebalance", "hold_accumulate",
+    ]
+    sorted_actions = sorted(
+        portfolio_actions,
+        key=lambda a: priority.index(
+            a.get("category", "hold_accumulate"),
+        ),
+    )
+    for pa in sorted_actions[:2]:
+        cat = pa.get("category", "hold_accumulate")
+        recs.append({
+            "ticker": pa["ticker"],
+            "tier": "portfolio",
+            "category": cat,
+            "action": action_map.get(cat, "hold"),
+            "severity": (
+                "high" if cat == "exit_reduce"
+                else "medium"
+            ),
+            "rationale": (
+                f"Deterministic fallback: {cat} "
+                f"signal based on composite score "
+                f"{pa.get('composite_score', 0):.1f} "
+                f"and 3m forecast "
+                f"{pa.get('forecast_3m_pct', 0):.1f}%."
+            ),
+        })
+
+    # Fill remaining slots from candidates
+    remaining = 5 - len(recs)
+    seen = {r["ticker"] for r in recs}
+    for c in candidates[:remaining + 5]:
+        if c["ticker"] in seen:
+            continue
+        recs.append({
+            "ticker": c["ticker"],
+            "tier": c.get("tier", "discovery"),
+            "category": "value",
+            "action": "buy",
+            "severity": "medium",
+            "rationale": (
+                f"Deterministic fallback: "
+                f"gap-adjusted score "
+                f"{c.get('gap_adjusted_score', 0):.1f}"
+                f", sector {c.get('sector', 'N/A')}."
+            ),
+        })
+        seen.add(c["ticker"])
+        if len(recs) >= 5:
+            break
+
+    return {
+        "recommendations": recs,
+        "portfolio_health_assessment": (
+            f"Score {health_score:.0f}/100 "
+            f"({health_label}). "
+            "Generated via deterministic fallback."
+        ),
+        "health_score": health_score,
+        "health_label": health_label,
+        "llm_model": "deterministic_fallback",
+        "llm_tokens_used": 0,
+    }
+
+
+def compute_outcome_label(
+    action: str, return_pct: float,
+) -> str:
+    """Label recommendation outcome for tracking.
+
+    Parameters
+    ----------
+    action : str
+        Original action (buy, sell, hold, etc.).
+    return_pct : float
+        Actual percentage return since recommendation.
+
+    Returns
+    -------
+    str
+        ``"correct"``, ``"incorrect"``, or ``"neutral"``.
+    """
+    action_lower = action.lower()
+
+    if action_lower in ("buy", "accumulate"):
+        if return_pct > 2.0:
+            return "correct"
+        if return_pct < -2.0:
+            return "incorrect"
+        return "neutral"
+
+    if action_lower in ("sell", "reduce"):
+        if return_pct < -2.0:
+            return "correct"
+        if return_pct > 2.0:
+            return "incorrect"
+        return "neutral"
+
+    if action_lower == "hold":
+        if abs(return_pct) < 10.0:
+            return "correct"
+        return "incorrect"
+
+    # alert, rotate, etc.
+    return "neutral"
+
+
+def _compute_health_score(
+    portfolio_summary: dict,
+) -> tuple[float, str]:
+    """Compute 0-100 portfolio health score.
+
+    Parameters
+    ----------
+    portfolio_summary : dict
+        From Stage 2 output.
+
+    Returns
+    -------
+    tuple[float, str]
+        (score, label) where label is one of
+        ``"critical"``, ``"needs_attention"``,
+        ``"healthy"``, ``"excellent"``.
+    """
+    score = 70.0
+
+    # Penalise concentration risks
+    risks = portfolio_summary.get(
+        "concentration_risks", [],
+    )
+    for risk in risks:
+        if "sector" in risk.lower():
+            score -= 10.0
+        elif "cap" in risk.lower():
+            score -= 8.0
+        else:
+            score -= 10.0
+
+    # Penalise correlation alerts
+    corr_alerts = portfolio_summary.get(
+        "correlation_alerts", [],
+    )
+    score -= 5.0 * len(corr_alerts)
+
+    # Low diversification penalty
+    total_holdings = portfolio_summary.get(
+        "total_holdings", 0,
+    )
+    if total_holdings < 5:
+        score -= 15.0
+
+    # Nifty 50 overlap bonus (not in summary, skip)
+    # Could be computed if we had the data; placeholder
+    # for future enrichment.
+
+    score = max(0.0, min(100.0, score))
+
+    if score < 30:
+        label = "critical"
+    elif score < 60:
+        label = "needs_attention"
+    elif score < 80:
+        label = "healthy"
+    else:
+        label = "excellent"
+
+    return round(score, 1), label
+
+
+_STAGE3_SYSTEM_PROMPT = """\
+You are a portfolio recommendation engine. Given the \
+user's portfolio state, candidate stocks, and gap \
+analysis, select 5-8 actionable recommendations.
+
+Rules:
+1. Include at least 1 recommendation from each tier \
+(portfolio, watchlist, discovery) IF candidates exist \
+in that tier.
+2. Include at least 1 defensive recommendation \
+(sell/reduce/alert) if the portfolio has concentration \
+risks, correlation alerts, or low diversification.
+3. Balance offensive (buy/accumulate) and defensive \
+(sell/reduce/alert) actions.
+4. For each recommendation explain its portfolio impact.
+5. Assign severity: high, medium, or low.
+6. Reference specific data signals (composite score, \
+forecast, sentiment, sector gap).
+7. Output STRICT JSON only. No markdown fences, \
+no commentary outside the JSON object.
+
+Required JSON schema:
+{
+  "recommendations": [
+    {
+      "ticker": "SYMBOL.NS",
+      "tier": "portfolio|watchlist|discovery",
+      "category": "string",
+      "action": "buy|sell|hold|accumulate|reduce|alert|\
+rotate",
+      "severity": "high|medium|low",
+      "rationale": "string (2-3 sentences)",
+      "expected_impact": "string",
+      "data_signals": {}
+    }
+  ],
+  "portfolio_health_assessment": "string (2-3 sentences)",
+  "health_score": 0-100,
+  "health_label": "critical|needs_attention|healthy|\
+excellent"
+}
+"""
+
+
+def stage3_llm_reasoning(
+    stage2_output: dict,
+) -> dict:
+    """LLM reasoning pass over Stage 2 output.
+
+    Calls FallbackLLM with structured context, parses
+    and validates the JSON response.  Falls back to
+    deterministic recommendations on any failure.
+
+    Parameters
+    ----------
+    stage2_output : dict
+        Output from :func:`stage2_gap_analysis`.
+
+    Returns
+    -------
+    dict
+        Keys: ``recommendations``,
+        ``portfolio_health_assessment``,
+        ``health_score``, ``health_label``,
+        ``llm_model``, ``llm_tokens_used``.
+    """
+    portfolio_summary = stage2_output.get(
+        "portfolio_summary", {},
+    )
+    portfolio_actions = stage2_output.get(
+        "portfolio_actions", [],
+    )
+    candidates = stage2_output.get("candidates", [])
+    gap_analysis = stage2_output.get("gap_analysis", {})
+
+    # Compute health score
+    health_score, health_label = _compute_health_score(
+        portfolio_summary,
+    )
+
+    # Empty portfolio early return
+    if (
+        not candidates
+        and not portfolio_actions
+    ):
+        return {
+            "recommendations": [],
+            "portfolio_health_assessment": (
+                "Empty portfolio — no recommendations."
+            ),
+            "health_score": health_score,
+            "health_label": health_label,
+            "llm_model": "none",
+            "llm_tokens_used": 0,
+        }
+
+    # Build valid ticker set for validation
+    valid_tickers = {c["ticker"] for c in candidates}
+    for pa in portfolio_actions:
+        valid_tickers.add(pa["ticker"])
+
+    # Build structured context for LLM
+    context = {
+        "portfolio_summary": portfolio_summary,
+        "portfolio_actions": portfolio_actions[:10],
+        "candidates": candidates[:20],
+        "sector_gaps": gap_analysis.get(
+            "sector_gaps", {},
+        ),
+        "cap_gaps": gap_analysis.get("cap_gaps", {}),
+    }
+    user_message = json.dumps(
+        context, default=str, indent=2,
+    )
+
+    try:
+        from langchain_core.messages import (
+            HumanMessage,
+            SystemMessage,
+        )
+
+        from llm_fallback import FallbackLLM
+
+        llm = FallbackLLM(
+            temperature=0.3,
+            agent_id="recommendation_engine",
+            ollama_first=False,
+        )
+        response = llm.invoke([
+            SystemMessage(
+                content=_STAGE3_SYSTEM_PROMPT,
+            ),
+            HumanMessage(content=user_message),
+        ])
+        raw = response.content
+
+        # Strip markdown fences if present
+        text = raw.strip()
+        if text.startswith("```"):
+            first_nl = text.index("\n")
+            text = text[first_nl + 1:]
+        if text.endswith("```"):
+            text = text[:-3].rstrip()
+
+        parsed = json.loads(text)
+
+        # Validate
+        errors = _validate_llm_output(
+            parsed, valid_tickers,
+        )
+
+        # Remove hallucinated tickers (soft fix)
+        if "recommendations" in parsed:
+            cleaned = []
+            for rec in parsed["recommendations"]:
+                tkr = rec.get("ticker")
+                if tkr and tkr not in valid_tickers:
+                    _logger.warning(
+                        "Removing hallucinated ticker "
+                        "%s from LLM output",
+                        tkr,
+                    )
+                    continue
+                cleaned.append(rec)
+            parsed["recommendations"] = cleaned
+
+        # Check for structural errors (not just
+        # hallucinated tickers which we already removed)
+        structural = [
+            e for e in errors
+            if "hallucinated" not in e
+        ]
+        if structural:
+            _logger.warning(
+                "LLM output validation errors: %s",
+                structural,
+            )
+            return _deterministic_fallback(
+                candidates,
+                portfolio_actions,
+                health_score,
+                health_label,
+            )
+
+        # Override health score/label with computed
+        parsed["health_score"] = health_score
+        parsed["health_label"] = health_label
+
+        # Add LLM metadata
+        model = getattr(
+            llm, "last_provider", "unknown",
+        )
+        parsed["llm_model"] = model
+        parsed["llm_tokens_used"] = len(
+            user_message,
+        ) + len(raw)
+
+        return parsed
+
+    except Exception:
+        _logger.warning(
+            "Stage 3 LLM reasoning failed, "
+            "using deterministic fallback",
+            exc_info=True,
+        )
+        return _deterministic_fallback(
+            candidates,
+            portfolio_actions,
+            health_score,
+            health_label,
+        )
