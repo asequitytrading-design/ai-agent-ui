@@ -1395,7 +1395,9 @@ def stage3_llm_reasoning(
         from config import get_settings
         from llm_fallback import FallbackLLM
         from token_budget import get_token_budget
-        from compressor import MessageCompressor
+        from message_compressor import (
+            MessageCompressor,
+        )
 
         settings = get_settings()
         tiers = [
