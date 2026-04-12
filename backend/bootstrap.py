@@ -142,6 +142,25 @@ def setup_tools(registry):
             exc_info=True,
         )
 
+    # Register recommendation tools
+    try:
+        from tools.recommendation_tools import (
+            generate_recommendations,
+            get_recommendation_history,
+            get_recommendation_performance,
+        )
+
+        registry.register(generate_recommendations)
+        registry.register(get_recommendation_history)
+        registry.register(
+            get_recommendation_performance,
+        )
+    except Exception:
+        _logger.warning(
+            "Recommendation tools registration failed",
+            exc_info=True,
+        )
+
     _logger.info(
         "Tools registered: %s",
         registry.list_names(),

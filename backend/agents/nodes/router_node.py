@@ -1,6 +1,6 @@
 """Two-tier intent router node (Tier 1 — keyword).
 
-Scores the user query against 4 intent keyword sets.
+Scores the user query against 5 intent keyword sets.
 High-confidence match routes directly to the supervisor.
 No match routes to the LLM classifier (Tier 2).
 Zero LLM cost.
@@ -80,7 +80,6 @@ _INTENT_MAP: dict[str, set[str]] = {
         "headlines",
         "sentiment",
         "analyst",
-        "recommendation",
         "upgrade",
         "downgrade",
         "market trend",
@@ -88,6 +87,22 @@ _INTENT_MAP: dict[str, set[str]] = {
         "latest on",
         "what happened",
         "why did",
+    },
+    "recommendation": {
+        "recommend",
+        "recommendations",
+        "suggestion",
+        "suggestions",
+        "what should i buy",
+        "what should i sell",
+        "portfolio advice",
+        "improve my portfolio",
+        "improve portfolio",
+        "recommendation history",
+        "how did your picks",
+        "hit rate",
+        "track record",
+        "pick stocks",
     },
 }
 
