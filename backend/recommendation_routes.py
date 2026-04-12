@@ -209,7 +209,11 @@ def create_recommendation_router() -> APIRouter:
             get_current_user,
         ),
     ):
-        """Trigger a fresh Smart Funnel pipeline run."""
+        """Trigger a fresh Smart Funnel pipeline run.
+
+        Skips if a run for the same user+scope exists
+        within the last hour.
+        """
         from jobs.recommendation_engine import (
             stage1_prefilter,
             stage2_gap_analysis,
@@ -217,15 +221,55 @@ def create_recommendation_router() -> APIRouter:
         )
         from backend.db.pg_stocks import (
             expire_old_recommendations,
+            get_latest_recommendation_run,
             get_recommendations_for_run,
             insert_recommendation_run,
             insert_recommendations,
         )
         import time as _time
         import uuid as _uuid
-        from datetime import date
+        from datetime import date, datetime, timedelta
 
         uid = str(user.user_id)
+
+        # 1-hour freshness gate for manual refresh
+        factory = _get_session_factory()
+        async with factory() as session:
+            latest = (
+                await get_latest_recommendation_run(
+                    session, uid, scope=market,
+                )
+            )
+        if latest:
+            ca = latest.get("created_at")
+            if ca:
+                if isinstance(ca, str):
+                    ca = datetime.fromisoformat(ca)
+                if ca.tzinfo is None:
+                    from datetime import timezone
+                    ca = ca.replace(
+                        tzinfo=timezone.utc,
+                    )
+                age = (
+                    datetime.now(
+                        ca.tzinfo or timezone.utc,
+                    )
+                    - ca
+                )
+                if age < timedelta(hours=1):
+                    # Return cached instead
+                    async with factory() as session:
+                        recs = (
+                            await
+                            get_recommendations_for_run(
+                                session,
+                                latest["run_id"],
+                            )
+                        )
+                    return _build_run_response(
+                        latest, recs,
+                    )
+
         t0 = _time.monotonic()
 
         s1 = stage1_prefilter(scope=market)
