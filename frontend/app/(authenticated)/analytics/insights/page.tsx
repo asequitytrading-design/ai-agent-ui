@@ -34,6 +34,7 @@ import { InsightsFilters } from "@/components/insights/InsightsFilters";
 import { PlotlyChart } from "@/components/charts/PlotlyChart";
 import { CorrelationHeatmap } from "@/components/charts/CorrelationHeatmap";
 import { PiotroskiBadge } from "@/components/insights/PiotroskiBadge";
+import { RecommendationHistoryTab } from "@/components/insights/RecommendationHistoryTab";
 import { usePortfolio } from "@/hooks/usePortfolio";
 import { WidgetSkeleton } from "@/components/widgets/WidgetSkeleton";
 import { WidgetError } from "@/components/widgets/WidgetError";
@@ -59,7 +60,8 @@ type TabId =
   | "sectors"
   | "correlation"
   | "quarterly"
-  | "piotroski";
+  | "piotroski"
+  | "recommendations";
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "screener", label: "Screener" },
@@ -70,6 +72,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "correlation", label: "Correlation" },
   { id: "quarterly", label: "Quarterly" },
   { id: "piotroski", label: "Piotroski F-Score" },
+  { id: "recommendations", label: "Rec History" },
 ];
 
 // ---------------------------------------------------------------
@@ -1492,6 +1495,8 @@ function InsightsPageInner() {
         return <QuarterlyTab />;
       case "piotroski":
         return <PiotroskiTab />;
+      case "recommendations":
+        return <RecommendationHistoryTab />;
     }
   }, [activeTab]);
 
