@@ -1821,59 +1821,88 @@ def execute_run_recommendations(
                 "recommendations", [],
             )
 
-            # Write to PG via async bridge.
+            # Write to PG via sync NullPool session.
             rec_run_id = str(uuid.uuid4())
             run_data = {
                 "run_id": rec_run_id,
                 "user_id": uid,
-                "scope": scope,
                 "run_date": today,
-                "candidates_count": len(
-                    candidates_df,
-                ),
-                "stage1_pass": len(candidates_df),
-                "stage2_pass": len(
-                    stage2.get(
-                        "ranked_candidates", [],
-                    ),
-                ),
-                "stage3_pass": len(recs),
+                "run_type": "scheduled",
+                "portfolio_snapshot": portfolio,
                 "health_score": stage3.get(
-                    "health_score",
+                    "health_score", 0,
                 ),
                 "health_label": stage3.get(
-                    "health_label",
+                    "health_label", "critical",
+                ),
+                "health_assessment": stage3.get(
+                    "portfolio_health_assessment",
+                ),
+                "candidates_scanned": len(
+                    candidates_df,
+                ),
+                "candidates_passed": len(
+                    stage2.get("candidates", []),
                 ),
                 "llm_model": stage3.get("llm_model"),
                 "llm_tokens_used": stage3.get(
                     "llm_tokens_used", 0,
                 ),
-                "status": "completed",
             }
 
-            async def _persist(
-                rd, rr_id, rec_list, user,
-            ):
-                async with session_factory() as s:
-                    await insert_recommendation_run(
-                        s, rd,
-                    )
-                    if rec_list:
-                        for r in rec_list:
-                            r["run_id"] = rr_id
-                            r["user_id"] = user
-                        await insert_recommendations(
-                            s, rr_id, rec_list,
-                        )
-                    await expire_old_recommendations(
-                        s, user, rr_id,
-                    )
-
-            asyncio.run(
-                _persist(
-                    run_data, rec_run_id, recs, uid,
-                ),
+            from jobs.recommendation_engine import (
+                _sync_pg_url,
             )
+            from sqlalchemy import (
+                create_engine,
+                select as sa_select,
+            )
+            from sqlalchemy.orm import Session
+            from sqlalchemy.pool import NullPool
+            from db.models.recommendation import (
+                Recommendation as RecModel,
+                RecommendationRun as RunModel,
+            )
+
+            sync_eng = create_engine(
+                _sync_pg_url(), poolclass=NullPool,
+            )
+            with Session(sync_eng) as s:
+                s.add(RunModel(**run_data))
+                for r in recs:
+                    r["run_id"] = rec_run_id
+                    r["id"] = str(uuid.uuid4())
+                    # Ensure required fields
+                    r.setdefault("data_signals", {})
+                    r.setdefault("status", "active")
+                    s.add(RecModel(**r))
+                s.commit()
+
+            # Expire old recs for this user
+            with Session(sync_eng) as s:
+                from sqlalchemy import update as sa_upd
+                old_ids = [
+                    row[0] for row in s.execute(
+                        sa_select(RunModel.run_id)
+                        .where(
+                            RunModel.user_id == uid,
+                            RunModel.run_id
+                            != rec_run_id,
+                        )
+                    ).all()
+                ]
+                if old_ids:
+                    s.execute(
+                        sa_upd(RecModel)
+                        .where(
+                            RecModel.run_id.in_(
+                                old_ids
+                            ),
+                            RecModel.status == "active",
+                        )
+                        .values(status="expired")
+                    )
+                    s.commit()
 
             _logger.info(
                 "[recommendations] User %s: "
