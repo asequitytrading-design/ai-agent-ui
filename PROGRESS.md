@@ -2,9 +2,9 @@
 
 ---
 
-# Session: Apr 12, 2026 — Sprint 6: LLM Portfolio Recommendations (ASETPLTFRM-298)
+# Session: Apr 12-13, 2026 — Sprint 6: LLM Portfolio Recommendations (ASETPLTFRM-298)
 
-## Branch: `feature/sprint6` | 14 commits
+## Branch: `feature/sprint6` | ~45 commits
 
 ### Smart Funnel Pipeline
 - Stage 1: DuckDB pre-filter scoring 748 tickers via 6-factor composite score (Piotroski, Sharpe, momentum, forecast with accuracy-adjustment, sentiment, technical signals)
@@ -35,14 +35,49 @@
 - GET /recommendations/stats — aggregate hit rates + adoption
 - GET /recommendations/{run_id} — specific run detail
 
+### Market Scoping
+- Stage 1 filters candidates by `is_indian_market()` based on scope
+- Stage 2 filters holdings by market column
+- Scope stored on `recommendation_runs.scope` (india/us/all)
+- Route filters latest run by scope — India and US don't shadow each other
+- Dashboard Refresh button passes current market toggle
+
+### Unified Quota System
+- Max 5 runs per user per rolling 30 days (all types combined)
+- `check_recommendation_quota()` shared by all 4 routes
+- Only superusers bypass with force
+- Returns cached latest run when quota exceeded
+
 ### Frontend
-- Upgraded RecommendationsWidget: HealthScoreBadge, tier/severity filters, RecommendationCard with SignalPill components
-- New Recommendation History tab on Insights page (KPI cards + collapsible monthly timeline)
+- Compact dashboard widget (~300px) with health score + top 3 preview rows
+- "View All" opens centered modal (max-w-3xl) with full cards, filters, rationale
+- Recommendation History tab: scope filter (All/India/US), time range (7D-1Y), pagination (10/page)
+- Scope badges (India/US) + run_type badges (Scheduled/Manual/Chat/CLI) on each run
+- Eye icon to view any historical run's full recommendations in modal
+- View link opens stock analysis in new tab
 - TypeScript types + SWR hooks for dashboard + insights
+
+### CLI Pipeline Runner
+- `python -m backend.pipeline.runner recommend --scope india --force`
+- Same Smart Funnel pipeline, run_type="cli", quota gate, --user flag for single user
+
+### Observability
+- `get_obs_collector()` singleton accessor for background job LLM tracking
+- Recommendation engine calls now appear in Admin > LLM Observability
+
+### Bug Fixes During Testing
+- SQL column names (analysis_date, close/volume lowercase, total_score)
+- Holdings enrichment: fallback to company_info for low-Piotroski stocks
+- Async NullPool everywhere (session_factory fails in thread pool workers)
+- Route ordering: /{run_id} after /history and /stats
+- Cache API: invalidate(pattern) not delete(key)
+- Hallucination fallback: deterministic recs when all LLM output rejected
+- Old rule-based endpoint removed (was shadowing new route)
 
 ### Testing
 - 84 unit tests: composite scoring, accuracy factor, gap analysis, outcome labeling, health score, LLM validation, deterministic fallback
 - 12 PG CRUD tests (async in-memory)
+- Manual E2E: scheduler jobs (India+US), dashboard refresh, CLI, quota enforcement
 
 ### Docs
 - Design spec: `docs/superpowers/specs/2026-04-12-llm-portfolio-recommendations-design.md`
