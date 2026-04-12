@@ -10,6 +10,7 @@ import { SignalPill } from "./SignalPill";
 
 interface RecommendationCardProps {
   rec: RecommendationItem;
+  expanded?: boolean;
 }
 
 /* ── Tier badge colors ─────────────────────────────── */
@@ -66,6 +67,7 @@ function labelFromKey(key: string): string {
 
 export function RecommendationCard({
   rec,
+  expanded = false,
 }: RecommendationCardProps) {
   const border =
     severityBorder[rec.severity] ?? severityBorder.low;
@@ -121,7 +123,13 @@ export function RecommendationCard({
       )}
 
       {/* Rationale */}
-      <p className="text-sm text-gray-600 dark:text-gray-400 line-clamp-3">
+      <p
+        className={
+          "text-sm text-gray-600 " +
+          "dark:text-gray-400 leading-relaxed" +
+          (expanded ? "" : " line-clamp-3")
+        }
+      >
         {rec.rationale}
       </p>
 

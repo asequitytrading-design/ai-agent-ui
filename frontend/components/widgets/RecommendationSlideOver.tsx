@@ -1,20 +1,17 @@
 "use client";
 /**
- * Slide-over panel for full recommendation list.
+ * Full-screen modal for recommendation list.
  *
- * Opens from the right with backdrop. Contains health
- * score, tier/severity filters, and scrollable list
- * of RecommendationCard components.
+ * Centered overlay with health score, tier/severity
+ * filters, health assessment, and scrollable list
+ * of RecommendationCard components with full rationale.
  */
 
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { HealthScoreBadge } from "./HealthScoreBadge";
 import { RecommendationCard } from "./RecommendationCard";
-import type {
-  RecommendationResponse,
-  RecommendationItem,
-} from "@/lib/types";
+import type { RecommendationResponse } from "@/lib/types";
 
 /* ── Filter types ──────────────────────────────────── */
 
@@ -29,7 +26,10 @@ type SeverityFilter =
   | "medium"
   | "low";
 
-const TIER_OPTIONS: { value: TierFilter; label: string }[] = [
+const TIER_OPTIONS: {
+  value: TierFilter;
+  label: string;
+}[] = [
   { value: "all", label: "All" },
   { value: "portfolio", label: "Portfolio" },
   { value: "watchlist", label: "Watchlist" },
@@ -64,14 +64,15 @@ function FilterPill<T extends string>({
       type="button"
       onClick={() => onClick(value)}
       className={
-        "rounded-full px-3 py-1 text-xs font-medium " +
-        "transition-colors " +
+        "rounded-full px-3 py-1 text-xs " +
+        "font-medium transition-colors " +
         (active
-          ? "bg-gray-900 text-white dark:bg-gray-100 " +
-            "dark:text-gray-900"
+          ? "bg-gray-900 text-white " +
+            "dark:bg-gray-100 dark:text-gray-900"
           : "bg-gray-100 text-gray-600 " +
             "hover:bg-gray-200 " +
-            "dark:bg-gray-800 dark:text-gray-400 " +
+            "dark:bg-gray-800 " +
+            "dark:text-gray-400 " +
             "dark:hover:bg-gray-700")
       }
     >
@@ -82,7 +83,7 @@ function FilterPill<T extends string>({
 
 /* ── Props ─────────────────────────────────────────── */
 
-interface SlideOverProps {
+interface ModalProps {
   open: boolean;
   onClose: () => void;
   data: RecommendationResponse | null;
@@ -94,8 +95,9 @@ export function RecommendationSlideOver({
   open,
   onClose,
   data,
-}: SlideOverProps) {
-  const [tier, setTier] = useState<TierFilter>("all");
+}: ModalProps) {
+  const [tier, setTier] =
+    useState<TierFilter>("all");
   const [severity, setSeverity] =
     useState<SeverityFilter>("all");
 
@@ -107,7 +109,10 @@ export function RecommendationSlideOver({
     };
     document.addEventListener("keydown", handler);
     return () =>
-      document.removeEventListener("keydown", handler);
+      document.removeEventListener(
+        "keydown",
+        handler,
+      );
   }, [open, onClose]);
 
   // Lock body scroll when open
@@ -133,8 +138,12 @@ export function RecommendationSlideOver({
   const filtered = useMemo(() => {
     const recs = data?.recommendations ?? [];
     return recs.filter((r) => {
-      if (tier !== "all" && r.tier !== tier) return false;
-      if (severity !== "all" && r.severity !== severity)
+      if (tier !== "all" && r.tier !== tier)
+        return false;
+      if (
+        severity !== "all" &&
+        r.severity !== severity
+      )
         return false;
       return true;
     });
@@ -142,37 +151,36 @@ export function RecommendationSlideOver({
 
   if (!open) return null;
 
-  const panel = (
-    <div className="fixed inset-0 z-[60]">
+  const modal = (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 sm:p-6">
       {/* Backdrop */}
       <div
-        className="absolute inset-0 bg-black/40 transition-opacity"
+        className="absolute inset-0 bg-black/50 transition-opacity"
         onClick={onClose}
       />
 
-      {/* Panel */}
+      {/* Modal */}
       <div
         className={
-          "absolute right-0 top-0 h-full w-full " +
-          "max-w-[480px] bg-white dark:bg-gray-900 " +
-          "shadow-2xl flex flex-col " +
-          "transform transition-transform duration-300 " +
-          "translate-x-0"
+          "relative w-full max-w-3xl " +
+          "max-h-[90vh] bg-white dark:bg-gray-900 " +
+          "rounded-2xl shadow-2xl flex flex-col " +
+          "border border-gray-200 " +
+          "dark:border-gray-700 " +
+          "overflow-hidden"
         }
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-800">
-          <div>
-            <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100">
+        <div className="flex items-start justify-between px-6 py-5 border-b border-gray-200 dark:border-gray-800 shrink-0">
+          <div className="space-y-3">
+            <h2 className="text-lg font-bold text-gray-900 dark:text-gray-100">
               Portfolio Recommendations
             </h2>
             {data && (
-              <div className="mt-2">
-                <HealthScoreBadge
-                  score={data.health_score}
-                  label={data.health_label}
-                />
-              </div>
+              <HealthScoreBadge
+                score={data.health_score}
+                label={data.health_label}
+              />
             )}
           </div>
           <button
@@ -180,9 +188,11 @@ export function RecommendationSlideOver({
             onClick={onClose}
             className={
               "rounded-lg p-2 text-gray-400 " +
-              "hover:text-gray-600 hover:bg-gray-100 " +
+              "hover:text-gray-600 " +
+              "hover:bg-gray-100 " +
               "dark:hover:text-gray-300 " +
-              "dark:hover:bg-gray-800 transition-colors"
+              "dark:hover:bg-gray-800 " +
+              "transition-colors"
             }
           >
             <svg
@@ -196,7 +206,7 @@ export function RecommendationSlideOver({
         </div>
 
         {/* Filters */}
-        <div className="px-5 py-3 border-b border-gray-100 dark:border-gray-800 space-y-2">
+        <div className="px-6 py-3 border-b border-gray-100 dark:border-gray-800 space-y-2 shrink-0">
           <div className="flex flex-wrap gap-1.5">
             {TIER_OPTIONS.map((o) => (
               <FilterPill
@@ -223,24 +233,29 @@ export function RecommendationSlideOver({
 
         {/* Health assessment */}
         {data?.health_assessment && (
-          <div className="px-5 py-3 border-b border-gray-100 dark:border-gray-800">
-            <p className="text-xs text-gray-500 dark:text-gray-400 italic leading-relaxed">
+          <div className="px-6 py-3 border-b border-gray-100 dark:border-gray-800 shrink-0">
+            <p className="text-sm text-gray-600 dark:text-gray-400 leading-relaxed">
               {data.health_assessment}
             </p>
           </div>
         )}
 
-        {/* Cards */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        {/* Cards — scrollable */}
+        <div className="flex-1 overflow-y-auto p-6 space-y-4">
           {filtered.length === 0 ? (
-            <div className="py-8 text-center">
+            <div className="py-12 text-center">
               <p className="text-sm text-gray-500 dark:text-gray-400">
-                No recommendations match the filters.
+                No recommendations match the
+                selected filters.
               </p>
             </div>
           ) : (
             filtered.map((r) => (
-              <RecommendationCard key={r.id} rec={r} />
+              <RecommendationCard
+                key={r.id}
+                rec={r}
+                expanded
+              />
             ))
           )}
         </div>
@@ -248,5 +263,5 @@ export function RecommendationSlideOver({
     </div>
   );
 
-  return createPortal(panel, document.body);
+  return createPortal(modal, document.body);
 }
