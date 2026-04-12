@@ -1764,20 +1764,20 @@ def create_dashboard_router() -> APIRouter:
         )
         return result
 
-    # ── W5: Recommendations (ASETPLTFRM-291) ──────────
+    # ── W5: Recommendations — MOVED to
+    # recommendation_routes.py (ASETPLTFRM-298) ────────
+    # Old rule-based endpoint replaced by Smart Funnel.
+    # Kept as dead code reference; will be removed in
+    # next cleanup pass.
 
-    @router.get(
-        "/portfolio/recommendations",
-        response_model=RecommendationsResponse,
-    )
-    async def get_portfolio_recommendations(
+    async def _old_get_portfolio_recommendations(
         market: str = Query(
             "india",
             description="india|us",
         ),
         user: UserContext = Depends(get_current_user),
     ):
-        """Actionable rebalancing and risk suggestions."""
+        """DEPRECATED — see recommendation_routes.py."""
         cache = get_cache()
         cache_key = f"cache:portfolio:recs" f":{user.user_id}:{market}"
         hit = cache.get(cache_key)
