@@ -1594,6 +1594,20 @@ def stage3_llm_reasoning(
                 cleaned.append(rec)
             parsed["recommendations"] = cleaned
 
+        # If all recs were hallucinated, fall back
+        if not parsed.get("recommendations"):
+            _logger.warning(
+                "All LLM recs removed "
+                "(hallucinated tickers), "
+                "using deterministic fallback",
+            )
+            return _deterministic_fallback(
+                candidates,
+                portfolio_actions,
+                health_score,
+                health_label,
+            )
+
         # Check for structural errors (not just
         # hallucinated tickers which we already removed)
         structural = [
