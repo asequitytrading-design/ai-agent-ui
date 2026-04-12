@@ -1213,7 +1213,9 @@ def _compute_health_score(
         score -= 15.0
 
     # Nifty 50 overlap bonus (+2 per stock, max +10)
-    overlap = summary.get("nifty50_overlap", 0)
+    overlap = portfolio_summary.get(
+        "nifty50_overlap", 0,
+    )
     score += min(overlap * 2, 10)
 
     score = max(0.0, min(100.0, score))
