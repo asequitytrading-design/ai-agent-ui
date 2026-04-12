@@ -22,6 +22,7 @@ import type {
   PortfolioNewsResponse,
   PortfolioPerformanceResponse,
   RecommendationsResponse,
+  RecommendationResponse,
 } from "@/lib/types";
 
 export interface DashboardData<T> {
@@ -118,11 +119,28 @@ export function usePortfolioNews(
 }
 
 export function useRecommendations(
-  market: string = "india",
-): DashboardData<RecommendationsResponse> {
-  return useDashboardData<RecommendationsResponse>(
-    `/dashboard/portfolio/recommendations?market=${market}`,
-  );
+  market: string = "all",
+) {
+  const { data, error, isLoading, mutate } =
+    useSWR<RecommendationResponse>(
+      `${API_URL}/dashboard/portfolio/recommendations?market=${market}`,
+      fetcher,
+      {
+        revalidateOnFocus: false,
+        dedupingInterval: 120_000,
+      },
+    );
+
+  return {
+    value: data ?? null,
+    loading: isLoading,
+    error: error
+      ? error instanceof Error
+        ? error.message
+        : "Failed to load"
+      : null,
+    mutate,
+  };
 }
 
 export function useForecastBacktest(

@@ -607,3 +607,72 @@ export interface PiotroskiResponse {
   sectors: string[];
   score_date: string | null;
 }
+
+// ---------------------------------------------------------------
+// LLM Portfolio Recommendations (ASETPLTFRM-298)
+// ---------------------------------------------------------------
+
+export interface RecommendationItem {
+  id: string;
+  tier: "portfolio" | "watchlist" | "discovery";
+  category: string;
+  ticker: string | null;
+  company_name?: string | null;
+  action: string;
+  severity: "high" | "medium" | "low";
+  rationale: string;
+  expected_impact?: string | null;
+  data_signals: Record<string, number | string>;
+  price_at_rec?: number | null;
+  target_price?: number | null;
+  expected_return_pct?: number | null;
+  index_tags: string[];
+  status: string;
+  acted_on_date?: string | null;
+}
+
+export interface RecommendationResponse {
+  run_id: string;
+  run_date: string;
+  run_type: string;
+  health_score: number;
+  health_label: string;
+  health_assessment?: string | null;
+  recommendations: RecommendationItem[];
+  generated_at?: string | null;
+}
+
+export interface HistoryRunItem {
+  run_id: string;
+  run_date: string;
+  health_score: number;
+  health_label: string;
+  total_recommendations: number;
+  acted_on_count: number;
+}
+
+export interface AggregateStats {
+  total_runs: number;
+  total_recommendations: number;
+  overall_hit_rate_30d?: number | null;
+  overall_hit_rate_60d?: number | null;
+  overall_hit_rate_90d?: number | null;
+  adoption_rate_pct: number;
+}
+
+export interface RecommendationHistoryResponse {
+  runs: HistoryRunItem[];
+  aggregate_stats: AggregateStats;
+}
+
+export interface RecommendationStatsResponse {
+  total_recommendations: number;
+  total_acted_on: number;
+  adoption_rate_pct: number;
+  hit_rate_30d?: number | null;
+  hit_rate_60d?: number | null;
+  hit_rate_90d?: number | null;
+  avg_return_30d?: number | null;
+  avg_return_60d?: number | null;
+  avg_return_90d?: number | null;
+}

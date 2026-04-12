@@ -19,6 +19,8 @@ import type {
   CorrelationResponse,
   QuarterlyResponse,
   PiotroskiResponse,
+  RecommendationHistoryResponse,
+  RecommendationStatsResponse,
 } from "@/lib/types";
 
 export interface InsightsData<T> {
@@ -125,5 +127,23 @@ export function usePiotroski(
   const qs = params.toString();
   return useInsightsFetch<PiotroskiResponse>(
     `/insights/piotroski${qs ? `?${qs}` : ""}`,
+  );
+}
+
+// ---------------------------------------------------------
+// LLM Portfolio Recommendations (ASETPLTFRM-298)
+// ---------------------------------------------------------
+
+export function useRecommendationHistory(
+  monthsBack: number = 6,
+): InsightsData<RecommendationHistoryResponse> {
+  return useInsightsFetch<RecommendationHistoryResponse>(
+    `/dashboard/portfolio/recommendations/history?months_back=${monthsBack}`,
+  );
+}
+
+export function useRecommendationStats(): InsightsData<RecommendationStatsResponse> {
+  return useInsightsFetch<RecommendationStatsResponse>(
+    `/dashboard/portfolio/recommendations/stats`,
   );
 }
