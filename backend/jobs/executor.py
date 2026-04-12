@@ -1876,6 +1876,13 @@ def execute_run_recommendations(
                 factory = async_sessionmaker(
                     eng, class_=AsyncSession,
                 )
+                # Build candidate lookup for enrichment
+                cand_map = {
+                    c["ticker"]: c
+                    for c in stage2.get(
+                        "candidates", [],
+                    )
+                }
                 async with factory() as s:
                     s.add(RunModel(**run_data))
                     for r in recs:
@@ -1885,6 +1892,23 @@ def execute_run_recommendations(
                             "data_signals", {},
                         )
                         r.setdefault("status", "active")
+                        # Enrich with price data
+                        ticker = r.get("ticker")
+                        c = cand_map.get(ticker, {})
+                        if not r.get("price_at_rec"):
+                            r["price_at_rec"] = c.get(
+                                "current_price",
+                            )
+                        if not r.get("target_price"):
+                            r["target_price"] = c.get(
+                                "target_price",
+                            )
+                        if not r.get(
+                            "expected_return_pct",
+                        ):
+                            r["expected_return_pct"] = (
+                                c.get("forecast_3m_pct")
+                            )
                         s.add(RecModel(**r))
                     await s.commit()
 
