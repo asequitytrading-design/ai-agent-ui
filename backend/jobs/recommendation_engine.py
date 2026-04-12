@@ -502,54 +502,70 @@ def _categorize_holding(
 # ── PG helpers (deferred imports, safe fallback) ─────
 
 
-def _sync_pg_url() -> str:
-    """Get sync PG URL (psycopg2) from settings."""
+def _async_nullpool_session():
+    """Create a fresh async NullPool session factory.
+
+    Safe in thread pool workers — each call creates a
+    new engine + session, no loop conflicts.
+    """
+    from sqlalchemy.ext.asyncio import (
+        AsyncSession,
+        async_sessionmaker,
+        create_async_engine,
+    )
+    from sqlalchemy.pool import NullPool
     from config import get_settings
 
-    url = get_settings().database_url
-    # Convert async URL to sync
-    return url.replace(
-        "postgresql+asyncpg://",
-        "postgresql://",
+    engine = create_async_engine(
+        get_settings().database_url,
+        poolclass=NullPool,
     )
+    factory = async_sessionmaker(
+        engine, class_=AsyncSession,
+    )
+    return engine, factory
 
 
 def _get_nifty50_tickers() -> set[str]:
     """Load Nifty 50 tickers from stock_tags PG table.
 
-    Uses sync psycopg2 connection (safe in thread
-    pool workers). Returns empty set on any failure.
+    Uses async NullPool + asyncio.run() (safe in
+    thread pool workers). Returns empty set on failure.
     """
     try:
-        from sqlalchemy import (
-            create_engine,
-            select as sa_select,
-            text,
-        )
-        from sqlalchemy.orm import Session
-        from sqlalchemy.pool import NullPool
+        import asyncio
+        from sqlalchemy import select as sa_select
 
-        from db.models.stock_master import StockMaster
-        from db.models.stock_tag import StockTag
-
-        engine = create_engine(
-            _sync_pg_url(), poolclass=NullPool,
+        from backend.db.models.stock_master import (
+            StockMaster,
         )
-        with Session(engine) as s:
-            stmt = (
-                sa_select(StockMaster.yf_ticker)
-                .join(
-                    StockTag,
-                    StockTag.stock_id
-                    == StockMaster.id,
+        from backend.db.models.stock_tag import (
+            StockTag,
+        )
+
+        async def _fetch() -> set[str]:
+            eng, factory = _async_nullpool_session()
+            async with factory() as s:
+                stmt = (
+                    sa_select(StockMaster.yf_ticker)
+                    .join(
+                        StockTag,
+                        StockTag.stock_id
+                        == StockMaster.id,
+                    )
+                    .where(StockTag.tag == "nifty50")
+                    .where(
+                        StockTag.removed_at.is_(None)
+                    )
                 )
-                .where(StockTag.tag == "nifty50")
-                .where(
-                    StockTag.removed_at.is_(None)
-                )
-            )
-            result = s.execute(stmt)
-            return {r[0] for r in result.all()}
+                result = await s.execute(stmt)
+                tickers = {
+                    r[0] for r in result.all()
+                }
+            await eng.dispose()
+            return tickers
+
+        return asyncio.run(_fetch())
     except Exception:
         _logger.warning(
             "Failed to load nifty50 tickers from PG",
@@ -561,30 +577,34 @@ def _get_nifty50_tickers() -> set[str]:
 def _get_user_watchlist(user_id: str) -> set[str]:
     """Load user's watchlist tickers from PG.
 
-    Uses sync psycopg2 connection (safe in thread
-    pool workers). Returns empty set on any failure.
+    Uses async NullPool + asyncio.run() (safe in
+    thread pool workers). Returns empty set on failure.
     """
     try:
-        from sqlalchemy import (
-            create_engine,
-            select as sa_select,
-        )
-        from sqlalchemy.orm import Session
-        from sqlalchemy.pool import NullPool
+        import asyncio
+        from sqlalchemy import select as sa_select
 
-        from db.models.user_ticker import UserTicker
-
-        engine = create_engine(
-            _sync_pg_url(), poolclass=NullPool,
+        from backend.db.models.user_ticker import (
+            UserTicker,
         )
-        with Session(engine) as s:
-            stmt = (
-                sa_select(UserTicker.ticker).where(
-                    UserTicker.user_id == user_id,
+
+        async def _fetch() -> set[str]:
+            eng, factory = _async_nullpool_session()
+            async with factory() as s:
+                stmt = (
+                    sa_select(UserTicker.ticker)
+                    .where(
+                        UserTicker.user_id == user_id,
+                    )
                 )
-            )
-            result = s.execute(stmt)
-            return {r[0] for r in result.all()}
+                result = await s.execute(stmt)
+                tickers = {
+                    r[0] for r in result.all()
+                }
+            await eng.dispose()
+            return tickers
+
+        return asyncio.run(_fetch())
     except Exception:
         _logger.warning(
             "Failed to load watchlist for user %s",
@@ -1372,11 +1392,24 @@ def stage3_llm_reasoning(
             SystemMessage,
         )
 
+        from config import get_settings
         from llm_fallback import FallbackLLM
+        from token_budget import get_token_budget
+        from compressor import MessageCompressor
 
+        settings = get_settings()
+        tiers = [
+            t.strip()
+            for t in settings.groq_model_tiers.split(",")
+            if t.strip()
+        ]
         llm = FallbackLLM(
+            groq_models=tiers,
+            anthropic_model="claude-sonnet-4-6",
             temperature=0.3,
             agent_id="recommendation_engine",
+            token_budget=get_token_budget(),
+            compressor=MessageCompressor(),
             ollama_first=False,
         )
         response = llm.invoke([

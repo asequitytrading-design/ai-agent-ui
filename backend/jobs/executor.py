@@ -1821,7 +1821,7 @@ def execute_run_recommendations(
                 "recommendations", [],
             )
 
-            # Write to PG via sync NullPool session.
+            # Write to PG via async NullPool session.
             rec_run_id = str(uuid.uuid4())
             run_data = {
                 "run_id": rec_run_id,
@@ -1850,59 +1850,71 @@ def execute_run_recommendations(
                 ),
             }
 
-            from jobs.recommendation_engine import (
-                _sync_pg_url,
-            )
-            from sqlalchemy import (
-                create_engine,
-                select as sa_select,
-            )
-            from sqlalchemy.orm import Session
-            from sqlalchemy.pool import NullPool
             from backend.db.models.recommendation import (
                 Recommendation as RecModel,
                 RecommendationRun as RunModel,
             )
-
-            sync_eng = create_engine(
-                _sync_pg_url(), poolclass=NullPool,
+            from sqlalchemy import (
+                select as sa_select,
+                update as sa_upd,
             )
-            with Session(sync_eng) as s:
-                s.add(RunModel(**run_data))
-                for r in recs:
-                    r["run_id"] = rec_run_id
-                    r["id"] = str(uuid.uuid4())
-                    # Ensure required fields
-                    r.setdefault("data_signals", {})
-                    r.setdefault("status", "active")
-                    s.add(RecModel(**r))
-                s.commit()
+            from sqlalchemy.ext.asyncio import (
+                AsyncSession,
+                async_sessionmaker,
+                create_async_engine,
+            )
+            from sqlalchemy.pool import NullPool
+            from config import get_settings
 
-            # Expire old recs for this user
-            with Session(sync_eng) as s:
-                from sqlalchemy import update as sa_upd
-                old_ids = [
-                    row[0] for row in s.execute(
+            async def _persist_recs():
+                eng = create_async_engine(
+                    get_settings().database_url,
+                    poolclass=NullPool,
+                )
+                factory = async_sessionmaker(
+                    eng, class_=AsyncSession,
+                )
+                async with factory() as s:
+                    s.add(RunModel(**run_data))
+                    for r in recs:
+                        r["run_id"] = rec_run_id
+                        r["id"] = str(uuid.uuid4())
+                        r.setdefault(
+                            "data_signals", {},
+                        )
+                        r.setdefault("status", "active")
+                        s.add(RecModel(**r))
+                    await s.commit()
+
+                # Expire old recs
+                async with factory() as s:
+                    old_q = await s.execute(
                         sa_select(RunModel.run_id)
                         .where(
                             RunModel.user_id == uid,
                             RunModel.run_id
                             != rec_run_id,
                         )
-                    ).all()
-                ]
-                if old_ids:
-                    s.execute(
-                        sa_upd(RecModel)
-                        .where(
-                            RecModel.run_id.in_(
-                                old_ids
-                            ),
-                            RecModel.status == "active",
-                        )
-                        .values(status="expired")
                     )
-                    s.commit()
+                    old_ids = [
+                        r[0] for r in old_q.all()
+                    ]
+                    if old_ids:
+                        await s.execute(
+                            sa_upd(RecModel)
+                            .where(
+                                RecModel.run_id.in_(
+                                    old_ids,
+                                ),
+                                RecModel.status
+                                == "active",
+                            )
+                            .values(status="expired")
+                        )
+                        await s.commit()
+                await eng.dispose()
+
+            asyncio.run(_persist_recs())
 
             _logger.info(
                 "[recommendations] User %s: "
