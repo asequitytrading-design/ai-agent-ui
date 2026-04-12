@@ -104,6 +104,9 @@ class ChatServer:
         self.obs_collector = ObservabilityCollector(
             repo=_obs_repo,
         )
+        from observability import set_obs_collector
+
+        set_obs_collector(self.obs_collector)
 
         # PII anonymizer for LangSmith + LangFuse.
         from tracing import setup_anonymizer

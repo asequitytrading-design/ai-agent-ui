@@ -1544,6 +1544,8 @@ def stage3_llm_reasoning(
             for t in settings.groq_model_tiers.split(",")
             if t.strip()
         ]
+        from observability import get_obs_collector
+
         llm = FallbackLLM(
             groq_models=tiers,
             anthropic_model="claude-sonnet-4-6",
@@ -1551,6 +1553,7 @@ def stage3_llm_reasoning(
             agent_id="recommendation_engine",
             token_budget=get_token_budget(),
             compressor=MessageCompressor(),
+            obs_collector=get_obs_collector(),
             ollama_first=False,
         )
         response = llm.invoke([
