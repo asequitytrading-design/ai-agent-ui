@@ -124,11 +124,15 @@ function RunTypeBadge({
     chat:
       "bg-violet-100 text-violet-700 " +
       "dark:bg-violet-900/30 dark:text-violet-400",
+    cli:
+      "bg-gray-200 text-gray-700 " +
+      "dark:bg-gray-700 dark:text-gray-300",
   };
   const labels: Record<string, string> = {
     scheduled: "Scheduled",
     manual: "Manual",
     chat: "Chat",
+    cli: "CLI",
   };
   return (
     <span
