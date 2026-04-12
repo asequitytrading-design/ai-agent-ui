@@ -1685,3 +1685,468 @@ def execute_run_piotroski(
             repo, run_id, 0, total,
             [str(exc)[:500]], False,
         )
+
+
+# ------------------------------------------------------------------
+# Built-in: recommendations
+# ------------------------------------------------------------------
+
+
+@register_job("recommendations")
+def execute_run_recommendations(
+    scope: str,
+    run_id: str,
+    repo,  # StockRepository
+    cancel_event=None,
+    **kwargs,
+) -> None:
+    """Generate LLM portfolio recommendations.
+
+    Monthly job — runs the 3-stage smart funnel for
+    every user with portfolio transactions:
+
+    1. Stage 1: DuckDB pre-filter (shared, cached 1h).
+    2. Stage 2: Per-user gap analysis.
+    3. Stage 3: LLM reasoning pass.
+    4. Write recommendation_run + recs to PG.
+    5. Expire prior active recs for user.
+
+    Errors per user are caught and logged; the batch
+    continues to the next user.
+    """
+    import asyncio
+    import uuid
+    from datetime import date
+
+    from backend.db.engine import get_session_factory
+    from backend.db.pg_stocks import (
+        expire_old_recommendations,
+        insert_recommendation_run,
+        insert_recommendations,
+    )
+    from backend.jobs.recommendation_engine import (
+        stage1_prefilter,
+        stage2_gap_analysis,
+        stage3_llm_reasoning,
+    )
+    from db.duckdb_engine import query_iceberg_df
+
+    _run_start = datetime.now(timezone.utc)
+    today = date.today()
+
+    # ── Stage 1: shared pre-filter (cached) ───────────
+    _logger.info("[recommendations] Stage 1: pre-filter")
+    candidates_df = stage1_prefilter()
+    if candidates_df.empty:
+        _logger.warning(
+            "[recommendations] No candidates after "
+            "pre-filter — aborting",
+        )
+        _finalize_run(
+            repo, run_id, 0, 0, [], False,
+            started_at=_run_start,
+        )
+        return
+
+    _logger.info(
+        "[recommendations] Stage 1: %d candidates",
+        len(candidates_df),
+    )
+
+    # ── Discover users with portfolios ────────────────
+    try:
+        user_df = query_iceberg_df(
+            "stocks.portfolio_transactions",
+            "SELECT DISTINCT user_id "
+            "FROM portfolio_transactions",
+        )
+        user_ids = (
+            user_df["user_id"].tolist()
+            if not user_df.empty
+            else []
+        )
+    except Exception as exc:
+        _logger.error(
+            "[recommendations] Failed to query "
+            "portfolio users: %s",
+            exc,
+        )
+        _finalize_run(
+            repo, run_id, 0, 0,
+            [f"user query: {exc}"], False,
+            started_at=_run_start,
+        )
+        return
+
+    total = len(user_ids)
+    _logger.info(
+        "[recommendations] %d users with portfolios",
+        total,
+    )
+    repo.update_scheduler_run(
+        run_id,
+        {"tickers_total": total},
+    )
+
+    done = 0
+    errors: list[str] = []
+    cancelled = False
+    session_factory = get_session_factory()
+
+    for uid in user_ids:
+        if cancel_event and cancel_event.is_set():
+            cancelled = True
+            break
+
+        try:
+            # Stage 2: per-user gap analysis.
+            stage2 = stage2_gap_analysis(
+                uid, candidates_df, repo,
+            )
+            portfolio = stage2.get(
+                "portfolio_summary", {},
+            )
+            if not portfolio.get("holdings"):
+                _logger.info(
+                    "[recommendations] User %s: "
+                    "empty portfolio, skip",
+                    uid,
+                )
+                done += 1
+                continue
+
+            # Stage 3: LLM reasoning.
+            stage3 = stage3_llm_reasoning(stage2)
+            recs = stage3.get(
+                "recommendations", [],
+            )
+
+            # Write to PG via async bridge.
+            rec_run_id = str(uuid.uuid4())
+            run_data = {
+                "run_id": rec_run_id,
+                "user_id": uid,
+                "scope": scope,
+                "run_date": today,
+                "candidates_count": len(
+                    candidates_df,
+                ),
+                "stage1_pass": len(candidates_df),
+                "stage2_pass": len(
+                    stage2.get(
+                        "ranked_candidates", [],
+                    ),
+                ),
+                "stage3_pass": len(recs),
+                "health_score": stage3.get(
+                    "health_score",
+                ),
+                "health_label": stage3.get(
+                    "health_label",
+                ),
+                "llm_model": stage3.get("llm_model"),
+                "llm_tokens_used": stage3.get(
+                    "llm_tokens_used", 0,
+                ),
+                "status": "completed",
+            }
+
+            async def _persist(
+                rd, rr_id, rec_list, user,
+            ):
+                async with session_factory() as s:
+                    await insert_recommendation_run(
+                        s, rd,
+                    )
+                    if rec_list:
+                        for r in rec_list:
+                            r["run_id"] = rr_id
+                            r["user_id"] = user
+                        await insert_recommendations(
+                            s, rr_id, rec_list,
+                        )
+                    await expire_old_recommendations(
+                        s, user, rr_id,
+                    )
+
+            asyncio.run(
+                _persist(
+                    run_data, rec_run_id, recs, uid,
+                ),
+            )
+
+            _logger.info(
+                "[recommendations] User %s: "
+                "%d recs generated",
+                uid,
+                len(recs),
+            )
+        except Exception as exc:
+            _logger.warning(
+                "[recommendations] User %s "
+                "failed: %s",
+                uid,
+                exc,
+            )
+            errors.append(f"{uid}: {exc}")
+
+        done += 1
+        repo.update_scheduler_run(
+            run_id,
+            {"tickers_done": done},
+        )
+
+    _finalize_run(
+        repo, run_id, done, total,
+        errors, cancelled,
+        started_at=_run_start,
+    )
+
+
+# ------------------------------------------------------------------
+# Built-in: recommendation_outcomes
+# ------------------------------------------------------------------
+
+
+@register_job("recommendation_outcomes")
+def execute_run_recommendation_outcomes(
+    scope: str,
+    run_id: str,
+    repo,  # StockRepository
+    cancel_event=None,
+    **kwargs,
+) -> None:
+    """Track recommendation outcomes at 30/60/90d.
+
+    Daily job — checks which active recommendations
+    are due for outcome evaluation, fetches current
+    prices, computes return, labels outcome, and
+    persists to PG.  Expires stale (>90d) recs.
+    """
+    import asyncio
+    from datetime import date
+
+    from backend.db.engine import get_session_factory
+    from backend.db.pg_stocks import (
+        expire_stale_recommendations,
+        get_recommendations_due_for_outcome,
+        insert_recommendation_outcome,
+    )
+    from backend.jobs.recommendation_engine import (
+        compute_outcome_label,
+    )
+    from db.duckdb_engine import query_iceberg_df
+    from tools._stock_shared import _require_repo
+
+    _run_start = datetime.now(timezone.utc)
+    today = date.today()
+    session_factory = get_session_factory()
+
+    # ── Fetch due recommendations ─────────────────────
+    async def _get_due():
+        async with session_factory() as s:
+            return (
+                await get_recommendations_due_for_outcome(
+                    s, today,
+                )
+            )
+
+    try:
+        due_recs = asyncio.run(_get_due())
+    except Exception as exc:
+        _logger.error(
+            "[rec-outcomes] Failed to query due "
+            "recs: %s",
+            exc,
+        )
+        _finalize_run(
+            repo, run_id, 0, 0,
+            [f"due query: {exc}"], False,
+            started_at=_run_start,
+        )
+        return
+
+    total = len(due_recs)
+    _logger.info(
+        "[rec-outcomes] %d recs due for outcome",
+        total,
+    )
+    repo.update_scheduler_run(
+        run_id,
+        {"tickers_total": total},
+    )
+
+    if not due_recs:
+        # Still expire stale recs even if none due.
+        try:
+            async def _expire():
+                async with session_factory() as s:
+                    return (
+                        await
+                        expire_stale_recommendations(
+                            s, today,
+                        )
+                    )
+
+            expired = asyncio.run(_expire())
+            _logger.info(
+                "[rec-outcomes] Expired %d stale recs",
+                expired,
+            )
+        except Exception as exc:
+            _logger.warning(
+                "[rec-outcomes] Stale expire "
+                "failed: %s",
+                exc,
+            )
+        _finalize_run(
+            repo, run_id, 0, 0, [], False,
+            started_at=_run_start,
+        )
+        return
+
+    # ── Batch fetch current prices ────────────────────
+    stock_repo = _require_repo()
+    tickers = list({
+        r["ticker"] for r in due_recs if r.get("ticker")
+    })
+    price_map: dict[str, float] = {}
+    if tickers:
+        placeholders = ",".join(
+            [f"'{t}'" for t in tickers],
+        )
+        try:
+            price_df = query_iceberg_df(
+                "stocks.ohlcv",
+                "SELECT ticker, close, date "
+                "FROM ohlcv "
+                f"WHERE ticker IN ({placeholders}) "
+                "QUALIFY ROW_NUMBER() OVER ("
+                "PARTITION BY ticker "
+                "ORDER BY date DESC) = 1",
+            )
+            if not price_df.empty:
+                for _, row in price_df.iterrows():
+                    price_map[row["ticker"]] = float(
+                        row["close"],
+                    )
+        except Exception as exc:
+            _logger.warning(
+                "[rec-outcomes] Batch price fetch "
+                "failed: %s",
+                exc,
+            )
+
+    # ── Compute outcomes ──────────────────────────────
+    done = 0
+    errors: list[str] = []
+    cancelled = False
+
+    for rec in due_recs:
+        if cancel_event and cancel_event.is_set():
+            cancelled = True
+            break
+
+        rec_id = rec.get("id", "")
+        ticker = rec.get("ticker", "")
+        action = rec.get("action", "hold")
+        price_at_rec = rec.get("price_at_rec")
+        days_due = rec.get("days_due", 30)
+
+        try:
+            current_price = price_map.get(ticker)
+            if current_price is None:
+                _logger.info(
+                    "[rec-outcomes] %s: no price "
+                    "for %s, skip",
+                    rec_id,
+                    ticker,
+                )
+                done += 1
+                continue
+
+            if (
+                price_at_rec is None
+                or price_at_rec <= 0
+            ):
+                done += 1
+                continue
+
+            return_pct = (
+                (current_price - price_at_rec)
+                / price_at_rec
+            ) * 100.0
+            label = compute_outcome_label(
+                action, return_pct,
+            )
+            # Benchmark return (use 0 for now;
+            # future: compute from index OHLCV).
+            bench_return = 0.0
+            excess = return_pct - bench_return
+
+            async def _insert_outcome(
+                rid, cp, rp, br, ex, lbl, dd,
+            ):
+                async with session_factory() as s:
+                    await insert_recommendation_outcome(
+                        s, rid, today, dd,
+                        cp, rp, br, ex, lbl,
+                    )
+
+            asyncio.run(
+                _insert_outcome(
+                    rec_id, current_price,
+                    return_pct, bench_return,
+                    excess, label, days_due,
+                ),
+            )
+
+            _logger.info(
+                "[rec-outcomes] %s/%s: %.1f%% -> %s "
+                "(%dd)",
+                ticker,
+                rec_id[:8],
+                return_pct,
+                label,
+                days_due,
+            )
+        except Exception as exc:
+            _logger.warning(
+                "[rec-outcomes] %s failed: %s",
+                rec_id,
+                exc,
+            )
+            errors.append(f"{rec_id}: {exc}")
+
+        done += 1
+        repo.update_scheduler_run(
+            run_id,
+            {"tickers_done": done},
+        )
+
+    # ── Expire stale recommendations ──────────────────
+    try:
+        async def _expire_stale():
+            async with session_factory() as s:
+                return (
+                    await expire_stale_recommendations(
+                        s, today,
+                    )
+                )
+
+        expired = asyncio.run(_expire_stale())
+        _logger.info(
+            "[rec-outcomes] Expired %d stale recs",
+            expired,
+        )
+    except Exception as exc:
+        _logger.warning(
+            "[rec-outcomes] Stale expire failed: %s",
+            exc,
+        )
+
+    _finalize_run(
+        repo, run_id, done, total,
+        errors, cancelled,
+        started_at=_run_start,
+    )
