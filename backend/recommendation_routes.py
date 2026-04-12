@@ -201,6 +201,10 @@ def create_recommendation_router() -> APIRouter:
         response_model=RecommendationResponse,
     )
     async def refresh(
+        market: str = Query(
+            "india",
+            description="india|us|all",
+        ),
         user: UserContext = Depends(
             get_current_user,
         ),
@@ -224,7 +228,7 @@ def create_recommendation_router() -> APIRouter:
         uid = str(user.user_id)
         t0 = _time.monotonic()
 
-        s1 = stage1_prefilter()
+        s1 = stage1_prefilter(scope=market)
         if s1.empty:
             raise HTTPException(
                 status_code=422,
@@ -234,7 +238,9 @@ def create_recommendation_router() -> APIRouter:
                 ),
             )
 
-        s2 = stage2_gap_analysis(uid, s1)
+        s2 = stage2_gap_analysis(
+            uid, s1, scope=market,
+        )
         s3 = stage3_llm_reasoning(s2)
 
         duration = _time.monotonic() - t0
@@ -244,6 +250,7 @@ def create_recommendation_router() -> APIRouter:
             "user_id": uid,
             "run_date": date.today(),
             "run_type": "manual",
+            "scope": market,
             "portfolio_snapshot": (
                 s2.get("portfolio_summary", {})
             ),
@@ -268,8 +275,14 @@ def create_recommendation_router() -> APIRouter:
         }
 
         raw_recs = s3.get("recommendations", [])
+        cand_map = {
+            c["ticker"]: c
+            for c in s2.get("candidates", [])
+        }
         rec_rows = []
         for r in raw_recs:
+            ticker = r.get("ticker")
+            c = cand_map.get(ticker, {})
             rec_rows.append({
                 "id": str(_uuid.uuid4()),
                 "run_id": run_id,
@@ -277,7 +290,7 @@ def create_recommendation_router() -> APIRouter:
                 "category": r.get(
                     "category", "general",
                 ),
-                "ticker": r.get("ticker"),
+                "ticker": ticker,
                 "action": r.get("action", "hold"),
                 "severity": r.get(
                     "severity", "low",
@@ -291,14 +304,17 @@ def create_recommendation_router() -> APIRouter:
                 "data_signals": r.get(
                     "data_signals", {},
                 ),
-                "price_at_rec": r.get(
-                    "price_at_rec",
+                "price_at_rec": (
+                    r.get("price_at_rec")
+                    or c.get("current_price")
                 ),
-                "target_price": r.get(
-                    "target_price",
+                "target_price": (
+                    r.get("target_price")
+                    or c.get("target_price")
                 ),
-                "expected_return_pct": r.get(
-                    "expected_return_pct",
+                "expected_return_pct": (
+                    r.get("expected_return_pct")
+                    or c.get("forecast_3m_pct")
                 ),
                 "index_tags": r.get("index_tags"),
                 "status": "active",

@@ -273,6 +273,7 @@ export default function DashboardPage() {
         />
         <RecommendationsWidget
           data={recommendations}
+          market={marketFilter}
         />
       </div>
 

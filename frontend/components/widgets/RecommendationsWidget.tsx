@@ -26,6 +26,7 @@ interface Props {
     error: string | null;
     mutate?: KeyedMutator<RecommendationResponse>;
   };
+  market?: string;
 }
 
 /* ── Severity colors ───────────────────────────────── */
@@ -52,7 +53,10 @@ function categoryLabel(cat: string): string {
 
 /* ── Widget ────────────────────────────────────────── */
 
-export function RecommendationsWidget({ data }: Props) {
+export function RecommendationsWidget({
+  data,
+  market = "india",
+}: Props) {
   const [open, setOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -60,7 +64,7 @@ export function RecommendationsWidget({ data }: Props) {
     setRefreshing(true);
     try {
       await apiFetch(
-        `${API_URL}/dashboard/portfolio/recommendations/refresh`,
+        `${API_URL}/dashboard/portfolio/recommendations/refresh?market=${market}`,
         { method: "POST" },
       );
       data.mutate?.();
