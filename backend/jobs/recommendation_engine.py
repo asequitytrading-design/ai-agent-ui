@@ -783,6 +783,75 @@ def stage2_gap_analysis(
             holdings_df = holdings_df.merge(
                 enrich, on="ticker", how="left",
             )
+            # Fallback: fill remaining NaN sectors
+            # from company_info for tickers that didn't
+            # pass Stage 1 gates (e.g. low Piotroski).
+            missing = holdings_df[
+                holdings_df["sector"].isna()
+            ]["ticker"].tolist()
+            if missing:
+                try:
+                    from db.duckdb_engine import (
+                        get_connection as _gc2,
+                        _create_view as _cv2,
+                    )
+
+                    conn2 = _gc2()
+                    _cv2(conn2, "stocks.company_info")
+                    _cv2(conn2, "stocks.ohlcv")
+                    placeholders = ", ".join(
+                        f"'{t}'" for t in missing
+                    )
+                    ci = conn2.execute(
+                        "SELECT ticker, sector, "
+                        "industry, market_cap "
+                        "FROM company_info "
+                        "WHERE ticker IN "
+                        f"({placeholders})"
+                    ).fetchdf()
+                    pr = conn2.execute(
+                        "SELECT ticker, close "
+                        "AS current_price FROM ("
+                        "SELECT ticker, close, "
+                        "ROW_NUMBER() OVER ("
+                        "PARTITION BY ticker "
+                        "ORDER BY date DESC) rn "
+                        "FROM ohlcv WHERE close "
+                        "IS NOT NULL AND ticker "
+                        f"IN ({placeholders})"
+                        ") WHERE rn = 1"
+                    ).fetchdf()
+                    conn2.close()
+                    for _, ci_row in ci.iterrows():
+                        t = ci_row["ticker"]
+                        mask = (
+                            holdings_df["ticker"] == t
+                        )
+                        holdings_df.loc[
+                            mask, "sector"
+                        ] = ci_row.get("sector")
+                        holdings_df.loc[
+                            mask, "market_cap"
+                        ] = ci_row.get("market_cap")
+                    for _, pr_row in pr.iterrows():
+                        t = pr_row["ticker"]
+                        mask = (
+                            holdings_df["ticker"] == t
+                        ) & holdings_df[
+                            "current_price"
+                        ].isna()
+                        holdings_df.loc[
+                            mask, "current_price"
+                        ] = pr_row.get(
+                            "current_price",
+                        )
+                except Exception:
+                    _logger.debug(
+                        "Fallback company_info "
+                        "lookup failed",
+                        exc_info=True,
+                    )
+
             # Compute current_value if we got price
             if (
                 "current_price" in holdings_df.columns
