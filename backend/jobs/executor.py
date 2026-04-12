@@ -1735,8 +1735,6 @@ def execute_run_recommendations(
     )
     from db.duckdb_engine import query_iceberg_df
 
-    _FRESHNESS_DAYS = 30
-
     _run_start = datetime.now(timezone.utc)
     today = date.today()
 
@@ -1805,89 +1803,28 @@ def execute_run_recommendations(
             break
 
         try:
-            # ── Freshness gate (30 days) ──────────
+            # ── Quota gate (5 runs / 30 days) ─────
             if not force:
-                try:
-                    from sqlalchemy.ext.asyncio import (
-                        AsyncSession as _FAS,
-                        async_sessionmaker as _fasm,
-                        create_async_engine as _fcae,
-                    )
-                    from sqlalchemy.pool import (
-                        NullPool as _FNP,
-                    )
-                    from config import get_settings as _fgs
+                from jobs.recommendation_engine import (
+                    check_recommendation_quota,
+                )
 
-                    async def _check_fresh():
-                        _fe = _fcae(
-                            _fgs().database_url,
-                            poolclass=_FNP,
-                        )
-                        _ff = _fasm(
-                            _fe, class_=_FAS,
-                        )
-                        async with _ff() as s:
-                            r = await (
-                                get_latest_recommendation_run(
-                                    s, uid,
-                                    scope=scope,
-                                )
-                            )
-                        await _fe.dispose()
-                        return r
-
-                    latest = asyncio.run(
-                        _check_fresh(),
-                    )
-                    if latest:
-                        ca = latest.get("created_at")
-                        if ca:
-                            if isinstance(ca, str):
-                                ca = (
-                                    datetime.fromisoformat(
-                                        ca,
-                                    )
-                                )
-                            if ca.tzinfo is None:
-                                ca = ca.replace(
-                                    tzinfo=timezone.utc,
-                                )
-                            age = (
-                                datetime.now(
-                                    timezone.utc,
-                                )
-                                - ca
-                            )
-                            if (
-                                age.days
-                                < _FRESHNESS_DAYS
-                            ):
-                                _logger.info(
-                                    "[recommendations]"
-                                    " User %s: fresh "
-                                    "(%dd ago, "
-                                    "scope=%s) — skip",
-                                    uid[:8],
-                                    age.days,
-                                    scope,
-                                )
-                                done += 1
-                                repo.update_scheduler_run(
-                                    run_id,
-                                    {
-                                        "tickers_done":
-                                        done,
-                                    },
-                                )
-                                continue
-                except Exception as _fex:
-                    _logger.debug(
-                        "[recommendations] "
-                        "Freshness check failed "
-                        "for %s: %s",
+                quota = check_recommendation_quota(
+                    uid, scope=scope,
+                )
+                if not quota.get("allowed"):
+                    _logger.info(
+                        "[recommendations] User %s: "
+                        "quota reached (%s) — skip",
                         uid[:8],
-                        _fex,
+                        quota.get("reason", ""),
                     )
+                    done += 1
+                    repo.update_scheduler_run(
+                        run_id,
+                        {"tickers_done": done},
+                    )
+                    continue
 
             # Stage 2: per-user gap analysis.
             stage2 = stage2_gap_analysis(

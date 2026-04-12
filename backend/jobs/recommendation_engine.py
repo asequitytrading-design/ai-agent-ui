@@ -156,6 +156,116 @@ def _compute_composite_score(row: dict) -> float:
     return round(composite, 2)
 
 
+# ── Quota gate ────────────────────────────────────
+# Max 5 runs per user per rolling 30-day window.
+# Only superusers can bypass with force=True.
+
+_MAX_RUNS_PER_MONTH = 5
+
+
+def check_recommendation_quota(
+    user_id: str,
+    scope: str = "all",
+) -> dict:
+    """Check if user can generate new recommendations.
+
+    Returns:
+        ``{"allowed": True}`` or
+        ``{"allowed": False, "reason": "...",
+           "runs_used": N, "max": 5,
+           "latest_run_id": "..."}``
+    """
+    import asyncio
+    from datetime import date, datetime, timedelta, timezone
+
+    from sqlalchemy import func, select
+    from sqlalchemy.ext.asyncio import (
+        AsyncSession,
+        async_sessionmaker,
+        create_async_engine,
+    )
+    from sqlalchemy.pool import NullPool
+    from config import get_settings
+    from backend.db.models.recommendation import (
+        RecommendationRun,
+    )
+
+    async def _check():
+        eng = create_async_engine(
+            get_settings().database_url,
+            poolclass=NullPool,
+        )
+        factory = async_sessionmaker(
+            eng, class_=AsyncSession,
+        )
+        cutoff = datetime.now(timezone.utc) - timedelta(
+            days=30,
+        )
+        async with factory() as s:
+            # Count runs in last 30 days for this
+            # user (all scopes combined)
+            count_q = await s.execute(
+                select(
+                    func.count(RecommendationRun.run_id)
+                ).where(
+                    RecommendationRun.user_id == user_id,
+                    RecommendationRun.created_at >= cutoff,
+                )
+            )
+            count = count_q.scalar() or 0
+
+            # Get latest run for this scope
+            latest_q = await s.execute(
+                select(RecommendationRun)
+                .where(
+                    RecommendationRun.user_id == user_id,
+                    RecommendationRun.scope == scope,
+                )
+                .order_by(
+                    RecommendationRun.created_at.desc()
+                )
+                .limit(1)
+            )
+            latest = latest_q.scalar_one_or_none()
+            latest_id = (
+                latest.run_id if latest else None
+            )
+
+        await eng.dispose()
+        return count, latest_id
+
+    try:
+        count, latest_id = asyncio.run(_check())
+    except Exception:
+        # Best-effort — allow on failure
+        _logger.debug(
+            "Quota check failed for %s",
+            user_id[:8],
+            exc_info=True,
+        )
+        return {"allowed": True}
+
+    if count >= _MAX_RUNS_PER_MONTH:
+        return {
+            "allowed": False,
+            "reason": (
+                f"Monthly quota reached: "
+                f"{count}/{_MAX_RUNS_PER_MONTH} "
+                f"runs used in the last 30 days."
+            ),
+            "runs_used": count,
+            "max": _MAX_RUNS_PER_MONTH,
+            "latest_run_id": latest_id,
+        }
+
+    return {
+        "allowed": True,
+        "runs_used": count,
+        "max": _MAX_RUNS_PER_MONTH,
+        "latest_run_id": latest_id,
+    }
+
+
 # ── Stage 1 query ─────────────────────────────────
 
 

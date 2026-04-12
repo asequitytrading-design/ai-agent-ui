@@ -211,64 +211,67 @@ def create_recommendation_router() -> APIRouter:
     ):
         """Trigger a fresh Smart Funnel pipeline run.
 
-        Skips if a run for the same user+scope exists
-        within the last hour.
+        Subject to monthly quota (5 runs / 30 days).
+        Superusers bypass the quota.
         """
         from jobs.recommendation_engine import (
+            check_recommendation_quota,
             stage1_prefilter,
             stage2_gap_analysis,
             stage3_llm_reasoning,
         )
         from backend.db.pg_stocks import (
             expire_old_recommendations,
-            get_latest_recommendation_run,
             get_recommendations_for_run,
             insert_recommendation_run,
             insert_recommendations,
         )
         import time as _time
         import uuid as _uuid
-        from datetime import date, datetime, timedelta
+        from datetime import date
 
         uid = str(user.user_id)
+        is_super = getattr(
+            user, "role", "",
+        ) == "superuser"
 
-        # 1-hour freshness gate for manual refresh
-        factory = _get_session_factory()
-        async with factory() as session:
-            latest = (
-                await get_latest_recommendation_run(
-                    session, uid, scope=market,
-                )
+        # Quota gate (superusers bypass)
+        if not is_super:
+            quota = check_recommendation_quota(
+                uid, scope=market,
             )
-        if latest:
-            ca = latest.get("created_at")
-            if ca:
-                if isinstance(ca, str):
-                    ca = datetime.fromisoformat(ca)
-                if ca.tzinfo is None:
-                    from datetime import timezone
-                    ca = ca.replace(
-                        tzinfo=timezone.utc,
-                    )
-                age = (
-                    datetime.now(
-                        ca.tzinfo or timezone.utc,
-                    )
-                    - ca
+            if not quota.get("allowed"):
+                # Return latest cached run
+                latest_id = quota.get(
+                    "latest_run_id",
                 )
-                if age < timedelta(hours=1):
-                    # Return cached instead
+                if latest_id:
+                    factory = _get_session_factory()
+                    async with factory() as session:
+                        from backend.db.pg_stocks import (
+                            get_latest_recommendation_run,
+                        )
+                        latest = (
+                            await
+                            get_latest_recommendation_run(
+                                session, uid,
+                                scope=market,
+                            )
+                        )
                     async with factory() as session:
                         recs = (
                             await
                             get_recommendations_for_run(
-                                session,
-                                latest["run_id"],
+                                session, latest_id,
                             )
                         )
                     return _build_run_response(
-                        latest, recs,
+                        latest or {}, recs,
                     )
+                raise HTTPException(
+                    status_code=429,
+                    detail=quota.get("reason", ""),
+                )
 
         t0 = _time.monotonic()
 

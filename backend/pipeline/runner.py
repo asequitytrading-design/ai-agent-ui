@@ -1170,43 +1170,27 @@ async def _cmd_recommend(
         eng, class_=AsyncSession,
     )
 
-    _freshness = 30
     generated = 0
     skipped = 0
 
     for uid in user_ids:
-        # Freshness gate
+        # Quota gate (5 runs / 30 days)
         if not force:
-            async with factory() as s:
-                from backend.db.pg_stocks import (
-                    get_latest_recommendation_run,
+            from jobs.recommendation_engine import (
+                check_recommendation_quota,
+            )
+
+            quota = check_recommendation_quota(
+                uid, scope=scope,
+            )
+            if not quota.get("allowed"):
+                _logger.info(
+                    "User %s: %s — skip",
+                    uid[:8],
+                    quota.get("reason", "quota"),
                 )
-                latest = (
-                    await get_latest_recommendation_run(
-                        s, uid, scope=scope,
-                    )
-                )
-            if latest:
-                ca = latest.get("created_at")
-                if ca:
-                    if isinstance(ca, str):
-                        ca = datetime.fromisoformat(ca)
-                    if ca.tzinfo is None:
-                        ca = ca.replace(
-                            tzinfo=timezone.utc,
-                        )
-                    age = (
-                        datetime.now(timezone.utc) - ca
-                    )
-                    if age.days < _freshness:
-                        _logger.info(
-                            "User %s: fresh (%dd) "
-                            "— skip",
-                            uid[:8],
-                            age.days,
-                        )
-                        skipped += 1
-                        continue
+                skipped += 1
+                continue
 
         # Stage 2 + 3
         s2 = stage2_gap_analysis(

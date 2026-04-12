@@ -160,42 +160,53 @@ def generate_recommendations(
     async def _generate():
         from backend.db.pg_stocks import (
             expire_old_recommendations,
-            get_latest_recommendation_run,
             get_recommendations_for_run,
             insert_recommendation_run,
             insert_recommendations,
         )
+        from jobs.recommendation_engine import (
+            check_recommendation_quota,
+        )
 
-        # Check for fresh run (<24h, same scope)
-        async with _factory() as session:
-            latest = (
-                await get_latest_recommendation_run(
-                    session, user_id,
-                    scope=scope,
-                )
+        # Quota gate (5 runs / 30 days)
+        if not force_refresh:
+            quota = check_recommendation_quota(
+                user_id, scope=scope,
             )
-
-        if latest and not force_refresh:
-            ca = latest.get("created_at")
-            if ca:
-                if isinstance(ca, str):
-                    ca = datetime.fromisoformat(ca)
-                if ca.tzinfo is None:
-                    ca = ca.replace(
-                        tzinfo=timezone.utc,
-                    )
-                age = datetime.now(timezone.utc) - ca
-                if age < timedelta(days=1):
+            if not quota.get("allowed"):
+                # Return latest cached run
+                lid = quota.get("latest_run_id")
+                if lid:
+                    async with _factory() as session:
+                        from backend.db.pg_stocks import (
+                            get_latest_recommendation_run,
+                        )
+                        latest = (
+                            await
+                            get_latest_recommendation_run(
+                                session, user_id,
+                                scope=scope,
+                            )
+                        )
                     async with _factory() as session:
                         recs = (
                             await
                             get_recommendations_for_run(
-                                session,
-                                latest["run_id"],
+                                session, lid,
                             )
                         )
                     await _eng.dispose()
-                    return _format_recs(latest, recs)
+                    return _format_recs(
+                        latest or {}, recs,
+                    )
+                await _eng.dispose()
+                return (
+                    "[Source: recommendation_engine]\n"
+                    f"**Quota reached**: "
+                    f"{quota.get('reason', '')}\n"
+                    "Use force_refresh=True to "
+                    "override (superuser only)."
+                )
 
         # Run full pipeline
         from jobs.recommendation_engine import (
