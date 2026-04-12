@@ -2130,10 +2130,13 @@ def create_app(
 
     app.include_router(admin_router)
 
-    # Dashboard + audit + insights endpoints.
+    # Dashboard + audit + insights + recommendation endpoints.
     from audit_routes import create_audit_router
     from dashboard_routes import create_dashboard_router
     from insights_routes import create_insights_router
+    from recommendation_routes import (
+        create_recommendation_router,
+    )
 
     app.include_router(
         create_dashboard_router(),
@@ -2145,6 +2148,10 @@ def create_app(
     )
     app.include_router(
         create_insights_router(),
+        prefix="/v1",
+    )
+    app.include_router(
+        create_recommendation_router(),
         prefix="/v1",
     )
 
