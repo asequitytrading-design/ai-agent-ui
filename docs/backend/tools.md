@@ -6,20 +6,25 @@ The tool framework lives in `backend/tools/`. It provides a registry that decoup
 
 ## File Structure
 
-| File | Purpose |
-|------|---------|
-| `tools/registry.py` | `ToolRegistry` — maps tool names to `BaseTool` instances |
-| `tools/time_tool.py` | `get_current_time` — returns current system datetime |
-| `tools/search_tool.py` | `search_web` — queries SerpAPI for live search results |
-| `tools/agent_tool.py` | `create_search_market_news_tool` — wraps `GeneralAgent` as a `@tool` |
-| `tools/stock_data_tool.py` | 6 stock data tools (delta fetch, parquet, registry) |
-| `tools/price_analysis_tool.py` | `analyse_stock_price` — technical indicators + chart + same-day cache |
-| `tools/forecasting_tool.py` | `forecast_stock` — Prophet forecast + chart + same-day cache |
-| `tools/_sentiment_sources.py` | Multi-source headline fetcher (yfinance, Yahoo RSS, Google RSS) with fuzzy dedup |
-| `tools/_sentiment_scorer.py` | LLM-based sentiment scoring via FallbackLLM with weighted averages |
-| `tools/sentiment_agent.py` | 3 sentiment tools: `score_ticker_sentiment`, `get_cached_sentiment`, `get_market_sentiment` |
-| `tools/__init__.py` | Empty (marks directory as a Python package) |
-| `validation.py` | Shared input validators: `validate_ticker`, `validate_search_query`, `validate_ticker_batch` |
+| File | Tools | Purpose |
+|------|-------|---------|
+| `tools/registry.py` | — | `ToolRegistry` — maps tool names to `BaseTool` instances |
+| `tools/time_tool.py` | `get_current_time` | Current system datetime |
+| `tools/search_tool.py` | `search_web` | SerpAPI live search |
+| `tools/stock_data_tool.py` | `fetch_stock_data`, `get_stock_info`, `load_stock_data`, `get_dividend_history`, `fetch_quarterly_results`, `fetch_multiple_stocks`, `list_available_stocks` | OHLCV fetch, company info, dividends, quarterly statements (7-day freshness, stock_master auto-insert) |
+| `tools/price_analysis_tool.py` | `analyse_stock_price` | Technical indicators + chart (7-day freshness cache) |
+| `tools/forecasting_tool.py` | `forecast_stock` | Prophet forecast + chart (7-day cooldown) |
+| `tools/forecast_tools.py` | `get_forecast_summary`, `get_portfolio_forecast` | Cached forecast retrieval |
+| `tools/portfolio_tools.py` | `get_portfolio_holdings`, `get_portfolio_performance`, `get_portfolio_history`, `get_portfolio_comparison`, `get_sector_allocation`, `get_dividend_projection`, `suggest_rebalancing`, `get_portfolio_summary`, `get_risk_metrics` | Portfolio analysis (9 tools, all Iceberg-only, zero external API) |
+| `tools/news_tools.py` | `get_ticker_news`, `get_analyst_recommendations`, `search_financial_news` | News + analyst data (yfinance, SerpAPI) |
+| `tools/sentiment_agent.py` | `score_ticker_sentiment`, `get_cached_sentiment`, `get_market_sentiment` | LLM headline scoring, market mood |
+| `tools/recommendation_tools.py` | `generate_recommendations`, `get_recommendation_history`, `get_recommendation_performance`, `get_recommendation_detail` | Smart Funnel pipeline, history, outcomes |
+| `tools/sector_discovery_tool.py` | `suggest_sector_stocks` | Sector-based stock discovery |
+| `tools/_sentiment_sources.py` | — | Multi-source headline fetcher (yfinance, Yahoo RSS, Google RSS) |
+| `tools/_sentiment_scorer.py` | — | LLM-based scoring with weighted averages |
+| `tools/_forecast_shared.py` | — | Shared forecast utilities (regressors, macro, OHLCV loading) |
+| `tools/_analysis_shared.py` | — | Shared analysis utilities (OHLCV loading, staleness check) |
+| `validation.py` | — | Shared input validators: `validate_ticker`, `validate_search_query` |
 
 ---
 

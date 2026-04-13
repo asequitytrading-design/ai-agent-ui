@@ -42,7 +42,7 @@ All pages fully migrated from Dash to Next.js.
 |---------|------|-------------|-------|
 | Backend | 8181 | `backend/main.py` | Python 3.12, FastAPI, LangChain 1.x, SQLAlchemy 2.0 async |
 | Frontend | 3000 | `frontend/app/page.tsx` | Next.js 16, React 19, lightweight-charts |
-| PostgreSQL | 5432 | Docker | pgvector/pgvector:pg16 (OLTP: 13 tables + pgvector) |
+| PostgreSQL | 5432 | Docker | pgvector/pgvector:pg16 (OLTP: 17 tables + pgvector) |
 | Redis | 6379 | Docker | Redis 7 Alpine |
 | Docs | 8000 | Docker | MkDocs Material 9 (squidfunk) |
 | Alembic | — | `backend/db/migrations/` | Schema migrations for PostgreSQL |
@@ -142,7 +142,11 @@ append-only analytics.
 | `stocks.registry` | `backend/db/pg_stocks.py` | Upsert |
 | `stocks.scheduled_jobs` | `backend/db/pg_stocks.py` | Upsert (has `force` column) |
 | `stocks.scheduler_runs` | `backend/db/pg_stocks.py` | Insert + row-level UPDATE |
+| `stocks.recommendation_runs` | `backend/db/models/recommendation.py` | Smart Funnel run metadata |
+| `stocks.recommendations` | `backend/db/models/recommendation.py` | Individual recs with data_signals JSONB |
+| `stocks.recommendation_outcomes` | `backend/db/models/recommendation.py` | 30/60/90d outcome checkpoints |
 | `public.user_memories` | `backend/db/models/memory.py` | pgvector semantic memory (768-dim) |
+| `public.conversation_contexts` | `backend/db/models/conversation_context.py` | Chat context persistence (cross-session) |
 | `stock_master` | `backend/db/models/stock_master.py` | Pipeline universe (symbol, yf_ticker, ISIN) |
 | `stock_tags` | `backend/db/models/stock_tag.py` | Temporal tagging (nifty50/100/500) |
 | `ingestion_cursor` | `backend/db/models/ingestion_cursor.py` | Keyset pagination cursor |
@@ -150,7 +154,7 @@ append-only analytics.
 | `pipelines` | `backend/db/models/pipeline.py` | Pipeline chain definitions |
 | `pipeline_steps` | `backend/db/models/pipeline.py` | Ordered steps within pipelines |
 
-### Iceberg tables (12 — append / scoped-delete)
+### Iceberg tables (14 — append / scoped-delete)
 
 `audit_log`, `usage_history`, `company_info`, `dividends`, `ohlcv`,
 `analysis_summary`, `forecast_runs`, `forecasts`, `quarterly_results`,
@@ -165,7 +169,7 @@ Note: `scheduler_runs` and `scheduled_jobs` migrated to PG
 
 - `backend/db/engine.py` — async `session_factory` (asyncpg driver,
   `pool_pre_ping=True`)
-- `backend/db/models/` — 12 SQLAlchemy ORM models (FK cascade,
+- `backend/db/models/` — 16 SQLAlchemy ORM models (FK cascade,
   JSONB, composite PK, indexes, pgvector)
 - `backend/db/migrations/` — Alembic async migrations
 - `auth/repo/repository.py` — `UserRepository` facade
