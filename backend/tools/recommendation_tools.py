@@ -124,7 +124,7 @@ def _format_recs(run: dict, recs: list[dict]) -> str:
 
 @tool
 def generate_recommendations(
-    force_refresh: bool = False,
+    force_refresh: str = "false",
     scope: str = "india",
 ) -> str:
     """Generate portfolio recommendations.
@@ -134,12 +134,16 @@ def generate_recommendations(
     data-driven buy/sell/hold recommendations.
 
     Args:
-        force_refresh: Skip cache and regenerate.
+        force_refresh: "true" to skip cache, "false"
+            to use cached if available.
         scope: Market scope (india/us/all).
 
     Source: Iceberg + PostgreSQL.
     """
     user_id = _get_user_or_error()
+    _force = str(force_refresh).lower() in (
+        "true", "1", "yes",
+    )
 
     from sqlalchemy.ext.asyncio import (
         AsyncSession,
@@ -160,52 +164,56 @@ def generate_recommendations(
     async def _generate():
         from backend.db.pg_stocks import (
             expire_old_recommendations,
+            get_latest_recommendation_run,
             get_recommendations_for_run,
             insert_recommendation_run,
             insert_recommendations,
         )
-        from jobs.recommendation_engine import (
-            check_recommendation_quota,
-        )
 
-        # Quota gate (5 runs / 30 days)
-        if not force_refresh:
+        # ── Step 1: Reuse existing run if available ──
+        # Non-force calls always return the latest
+        # existing run. Only superusers with force
+        # can trigger a new pipeline run.
+        if not _force:
+            async with _factory() as session:
+                latest = (
+                    await get_latest_recommendation_run(
+                        session, user_id,
+                        scope=scope,
+                    )
+                )
+            if latest and latest.get("run_id"):
+                async with _factory() as session:
+                    recs = (
+                        await
+                        get_recommendations_for_run(
+                            session,
+                            latest["run_id"],
+                        )
+                    )
+                if recs:
+                    await _eng.dispose()
+                    return _format_recs(
+                        latest, recs,
+                    )
+
+        # ── Step 2: Quota gate for new generation ────
+        if not _force:
+            from jobs.recommendation_engine import (
+                check_recommendation_quota,
+            )
+
             quota = check_recommendation_quota(
                 user_id, scope=scope,
             )
             if not quota.get("allowed"):
-                # Return latest cached run
-                lid = quota.get("latest_run_id")
-                if lid:
-                    async with _factory() as session:
-                        from backend.db.pg_stocks import (
-                            get_latest_recommendation_run,
-                        )
-                        latest = (
-                            await
-                            get_latest_recommendation_run(
-                                session, user_id,
-                                scope=scope,
-                            )
-                        )
-                    async with _factory() as session:
-                        recs = (
-                            await
-                            get_recommendations_for_run(
-                                session, lid,
-                            )
-                        )
-                    await _eng.dispose()
-                    return _format_recs(
-                        latest or {}, recs,
-                    )
                 await _eng.dispose()
                 return (
                     "[Source: recommendation_engine]\n"
                     f"**Quota reached**: "
                     f"{quota.get('reason', '')}\n"
-                    "Use force_refresh=True to "
-                    "override (superuser only)."
+                    "Only superusers can force-"
+                    "generate beyond the quota."
                 )
 
         # Run full pipeline
