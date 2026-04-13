@@ -11,6 +11,8 @@ _AGENT_MAP: dict[str, str] = {
     "stock_analysis": "stock_analyst",
     "forecast": "forecaster",
     "research": "research",
+    "sentiment": "sentiment",
+    "recommendation": "recommendation",
 }
 
 
