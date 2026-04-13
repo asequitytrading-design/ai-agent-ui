@@ -86,4 +86,6 @@ RECOMMENDATION_CONFIG = SubAgentConfig(
         "analyse_stock_price",
         "get_recommendation_detail",
     ],
+    max_tool_rounds=1,
+    skip_synthesis=True,
 )

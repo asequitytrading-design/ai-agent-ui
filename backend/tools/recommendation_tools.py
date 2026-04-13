@@ -45,18 +45,28 @@ def _get_user_or_error() -> str:
 
 
 def _run_async(coro):
-    """Run an async coroutine from sync tool context."""
+    """Run an async coroutine safely from any context.
+
+    Works in both sync (scheduler) and async (chat/
+    uvicorn) contexts by offloading to a fresh thread
+    when inside a running event loop.
+    """
+    import concurrent.futures
+
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         loop = None
 
     if loop and loop.is_running():
-        # Inside an existing event loop — schedule
-        fut = asyncio.run_coroutine_threadsafe(
-            coro, loop,
-        )
-        return fut.result(timeout=120)
+        # Inside uvicorn's loop — offload to a new
+        # thread with its own loop.
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=1,
+        ) as pool:
+            return pool.submit(
+                asyncio.run, coro,
+            ).result(timeout=120)
     return asyncio.run(coro)
 
 
@@ -353,7 +363,7 @@ def generate_recommendations(
 
 @tool
 def get_recommendation_history(
-    months_back: int = 6,
+    months_back: str = "6",
 ) -> str:
     """Get recommendation run history with hit rates.
 
@@ -361,11 +371,15 @@ def get_recommendation_history(
     each had, and aggregate performance stats.
 
     Args:
-        months_back: How many months to look back.
+        months_back: How many months to look back
+            (e.g. "6" for 6 months).
 
     Source: PostgreSQL.
     """
     user_id = _get_user_or_error()
+    _months = int(months_back) if str(
+        months_back,
+    ).isdigit() else 6
 
     from backend.db.engine import get_session_factory
 
@@ -379,7 +393,7 @@ def get_recommendation_history(
 
         async with factory() as session:
             runs = await _get_hist(
-                session, user_id, months_back,
+                session, user_id, _months,
             )
             stats = await get_recommendation_stats(
                 session, user_id,
@@ -395,7 +409,7 @@ def get_recommendation_history(
         lines = [
             "[Source: postgresql]",
             f"**Recommendation History** "
-            f"(last {months_back} months)\n",
+            f"(last {_months} months)\n",
             "| Date | Health | Score | "
             "Recs | Type |",
             "|------|--------|-------|"

@@ -75,6 +75,13 @@ class SubAgentConfig:
     format_response: (
         Callable[[str, list], str] | None
     ) = None
+    max_tool_rounds: int = 0
+    """Max tool-calling iterations. 0 = use global
+    MAX_ITERATIONS. Set to 1 for agents whose tools
+    return complete responses (e.g. recommendation)."""
+    skip_synthesis: bool = False
+    """Skip the synthesis LLM pass. Set True when
+    tools already return well-formatted output."""
 
 
 def _infer_data_source(
@@ -389,6 +396,12 @@ def _make_sub_agent_node(
         data_sources: list[str] = []
 
         response = None
+        _max_rounds = (
+            config.max_tool_rounds
+            if config.max_tool_rounds > 0
+            else MAX_ITERATIONS
+        )
+        _tool_rounds_done = 0
         for iteration in range(MAX_ITERATIONS):
             events.append({
                 "type": "thinking",
@@ -396,9 +409,18 @@ def _make_sub_agent_node(
                 "agent": config.agent_id,
             })
 
-            response = llm_with_tools.invoke(
-                messages, iteration=iteration + 1,
-            )
+            # After max_tool_rounds, invoke WITHOUT
+            # tools to force text-only response.
+            if _tool_rounds_done >= _max_rounds:
+                response = llm.invoke(
+                    messages,
+                    iteration=iteration + 1,
+                )
+            else:
+                response = llm_with_tools.invoke(
+                    messages,
+                    iteration=iteration + 1,
+                )
             messages.append(response)
 
             if not getattr(
@@ -452,8 +474,12 @@ def _make_sub_agent_node(
                     ToolMessage(
                         content=result,
                         tool_call_id=tc["id"],
+                        name=name,
                     )
                 )
+
+            # Count this as a tool round
+            _tool_rounds_done += 1
 
         # Synthesis pass: if tools were called, re-invoke
         # with synthesis-tier models for higher quality
@@ -468,7 +494,11 @@ def _make_sub_agent_node(
             e.get("type") == "tool_done"
             for e in events
         )
-        if _had_tools and response is not None:
+        if (
+            _had_tools
+            and response is not None
+            and not config.skip_synthesis
+        ):
             syn_llm = _build_synthesis_llm()
             if syn_llm is not None:
                 try:
