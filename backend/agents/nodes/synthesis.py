@@ -182,6 +182,9 @@ def synthesis(state: dict) -> dict:
             if t.strip()
         ]
         from config import get_pool_groups
+        from observability import (
+            get_obs_collector,
+        )
 
         llm = FallbackLLM(
             groq_models=tiers,
@@ -190,6 +193,7 @@ def synthesis(state: dict) -> dict:
             agent_id="synthesis",
             token_budget=get_token_budget(),
             compressor=MessageCompressor(),
+            obs_collector=get_obs_collector(),
             cascade_profile="synthesis",
             pool_groups=get_pool_groups(
                 "synthesis",

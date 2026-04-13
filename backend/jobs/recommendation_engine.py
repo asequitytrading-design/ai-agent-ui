@@ -1287,6 +1287,7 @@ _REQUIRED_REC_FIELDS = {
 def _validate_llm_output(
     output: dict,
     valid_tickers: set,
+    held_tickers: set | None = None,
 ) -> list[str]:
     """Validate LLM JSON response.
 
@@ -1327,6 +1328,19 @@ def _validate_llm_output(
             errors.append(
                 f"rec[{i}]: hallucinated ticker "
                 f"'{ticker}'"
+            )
+        # Action-tier consistency: "accumulate"
+        # only valid for held tickers.
+        action = rec.get("action", "").lower()
+        if (
+            action == "accumulate"
+            and held_tickers is not None
+            and ticker
+            and ticker not in held_tickers
+        ):
+            errors.append(
+                f"rec[{i}]: 'accumulate' used "
+                f"for non-held ticker '{ticker}'"
             )
 
     if "health_score" not in output:
@@ -1560,6 +1574,19 @@ candidates or portfolio_actions arrays.
 - Output MUST be valid parseable JSON. No trailing \
 commas, no comments, no markdown fences.
 
+ACTION DEFINITIONS (match action to tier):
+- "buy" = open a NEW position (for watchlist/discovery \
+tickers the user does NOT currently hold)
+- "accumulate" = add to an EXISTING position (ONLY for \
+tickers in portfolio_actions — stocks the user already \
+holds)
+- "sell" / "reduce" = trim or exit an existing holding
+- "hold" = keep current position unchanged
+- "alert" / "rotate" = flag risk or suggest swap
+CRITICAL: NEVER use "accumulate" for a ticker that is \
+NOT in portfolio_actions. If the user does not hold it, \
+the action MUST be "buy", not "accumulate".
+
 Rules:
 1. Include at least 1 recommendation from each tier \
 (portfolio, watchlist, discovery) IF candidates exist \
@@ -1728,12 +1755,18 @@ def stage3_llm_reasoning(
         )
         parsed = json.loads(text)
 
+        # Build set of actually held tickers
+        held_tickers = {
+            pa["ticker"] for pa in portfolio_actions
+        }
+
         # Validate
         errors = _validate_llm_output(
-            parsed, valid_tickers,
+            parsed, valid_tickers, held_tickers,
         )
 
-        # Remove hallucinated tickers (soft fix)
+        # Remove hallucinated tickers + fix action-tier
+        # mismatches (soft fix)
         if "recommendations" in parsed:
             cleaned = []
             for rec in parsed["recommendations"]:
@@ -1745,6 +1778,20 @@ def stage3_llm_reasoning(
                         tkr,
                     )
                     continue
+                # Fix "accumulate" for non-held tickers
+                act = rec.get("action", "").lower()
+                if (
+                    act == "accumulate"
+                    and tkr
+                    and tkr not in held_tickers
+                ):
+                    _logger.warning(
+                        "Fixing action for %s: "
+                        "accumulate → buy "
+                        "(not in portfolio)",
+                        tkr,
+                    )
+                    rec["action"] = "buy"
                 cleaned.append(rec)
             parsed["recommendations"] = cleaned
 

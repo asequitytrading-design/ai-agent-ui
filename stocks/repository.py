@@ -584,9 +584,10 @@ class StockRepository:
         col2: str,
         val2: Any,
     ) -> pd.DataFrame:
-        """Scan a table with two ``EqualTo`` predicates combined via ``And``.
+        """Scan a table with two ``EqualTo`` predicates
+        combined via ``And``.
 
-        Falls back to full scan with Python filter on any predicate failure.
+        DuckDB primary path with PyIceberg fallback.
 
         Args:
             identifier: Fully-qualified table name.
@@ -598,15 +599,48 @@ class StockRepository:
         Returns:
             Filtered DataFrame or an empty DataFrame.
         """
+        # DuckDB fast path
         try:
-            from pyiceberg.expressions import And, EqualTo
+            from backend.db.duckdb_engine import (
+                query_iceberg_df,
+            )
+
+            view = identifier.split(".")[-1]
+            df = query_iceberg_df(
+                identifier,
+                (
+                    f"SELECT * FROM {view}"
+                    f" WHERE {col1} = ?"
+                    f" AND {col2} = ?"
+                ),
+                [val1, val2],
+            )
+            return df
+        except Exception as exc:
+            _logger.debug(
+                "DuckDB scan_two_filters failed "
+                "for %s: %s",
+                identifier,
+                exc,
+            )
+        # PyIceberg fallback
+        try:
+            from pyiceberg.expressions import (
+                And,
+                EqualTo,
+            )
 
             tbl = self._load_table(identifier)
             if identifier in self._dirty_tables:
                 tbl.refresh()
-                self._dirty_tables.discard(identifier)
+                self._dirty_tables.discard(
+                    identifier,
+                )
             return tbl.scan(
-                row_filter=And(EqualTo(col1, val1), EqualTo(col2, val2))
+                row_filter=And(
+                    EqualTo(col1, val1),
+                    EqualTo(col2, val2),
+                ),
             ).to_pandas()
         except Exception as exc:
             _logger.warning(
@@ -618,32 +652,34 @@ class StockRepository:
             df = self._table_to_df(identifier)
             if df.empty:
                 return df
-            return df[(df[col1] == val1) & (df[col2] == val2)].copy()
+            return df[
+                (df[col1] == val1)
+                & (df[col2] == val2)
+            ].copy()
 
     def _load_table_and_scan(
-        self, identifier: str
+        self, identifier: str,
     ) -> tuple[Any, pd.DataFrame]:
-        """Load a table and materialise its contents, returning both.
+        """Load a table and materialise its contents,
+        returning both.
 
-        Avoids the double load that occurs when code calls ``_table_to_df()``
-        followed by ``_load_table()`` on the same identifier.
+        Uses ``_table_to_df()`` (DuckDB-first) for the
+        DataFrame portion while keeping the PyIceberg
+        table object for callers that need it for writes.
 
         Args:
             identifier: Fully-qualified table name.
 
         Returns:
-            Tuple of ``(table_object, dataframe)``.  The DataFrame is empty
-            on read failure; the table object is always returned.
+            Tuple of ``(table_object, dataframe)``.
+            The DataFrame is empty on read failure;
+            the table object is always returned.
         """
         tbl = self._load_table(identifier)
         if identifier in self._dirty_tables:
             tbl.refresh()
             self._dirty_tables.discard(identifier)
-        try:
-            df = tbl.scan().to_pandas()
-        except Exception as exc:
-            _logger.warning("Could not read table %s: %s", identifier, exc)
-            df = pd.DataFrame()
+        df = self._table_to_df(identifier)
         return tbl, df
 
     def _scan_ticker_date_range(
@@ -655,25 +691,58 @@ class StockRepository:
         end: date | None = None,
         selected_fields: list[str] | None = None,
     ) -> pd.DataFrame:
-        """Scan with ticker + date range predicates at Iceberg level.
+        """Scan with ticker + date range predicates.
 
-        Pushes both ticker equality and date range bounds into the
-        Iceberg scan so partition pruning and file-level min/max
-        statistics can skip irrelevant data files.
-
-        Falls back to ``_scan_ticker`` + pandas filtering on error.
+        DuckDB primary path with PyIceberg fallback.
 
         Args:
             identifier: Fully-qualified table name.
-            ticker: Stock ticker symbol (already uppercased).
-            date_col: Name of the date column to filter on.
-            start: Inclusive start date (``None`` = no lower bound).
-            end: Inclusive end date (``None`` = no upper bound).
-            selected_fields: Optional column projection list.
+            ticker: Stock ticker symbol.
+            date_col: Date column name to filter on.
+            start: Inclusive start date (None = no
+                lower bound).
+            end: Inclusive end date (None = no upper
+                bound).
+            selected_fields: Optional column projection.
 
         Returns:
-            Filtered DataFrame sorted by *date_col* ascending.
+            Filtered DataFrame sorted by *date_col*.
         """
+        # DuckDB fast path
+        try:
+            from backend.db.duckdb_engine import (
+                query_iceberg_df,
+            )
+
+            view = identifier.split(".")[-1]
+            cols = "*"
+            if selected_fields:
+                cols = ", ".join(selected_fields)
+            sql = (
+                f"SELECT {cols} FROM {view}"
+                f" WHERE ticker = ?"
+            )
+            params: list = [ticker]
+            if start is not None:
+                sql += f" AND {date_col} >= ?"
+                params.append(start)
+            if end is not None:
+                sql += f" AND {date_col} <= ?"
+                params.append(end)
+            sql += f" ORDER BY {date_col}"
+            df = query_iceberg_df(
+                identifier, sql, params,
+            )
+            return df
+        except Exception as exc:
+            _logger.debug(
+                "DuckDB ticker_date_range failed "
+                "for %s/%s: %s",
+                identifier,
+                ticker,
+                exc,
+            )
+        # PyIceberg fallback
         try:
             from pyiceberg.expressions import (
                 And,
@@ -685,30 +754,41 @@ class StockRepository:
             tbl = self._load_table(identifier)
             if identifier in self._dirty_tables:
                 tbl.refresh()
-                self._dirty_tables.discard(identifier)
+                self._dirty_tables.discard(
+                    identifier,
+                )
 
             row_filter = EqualTo("ticker", ticker)
             if start is not None:
                 row_filter = And(
                     row_filter,
-                    GreaterThanOrEqual(date_col, start),
+                    GreaterThanOrEqual(
+                        date_col, start,
+                    ),
                 )
             if end is not None:
                 row_filter = And(
                     row_filter,
-                    LessThanOrEqual(date_col, end),
+                    LessThanOrEqual(
+                        date_col, end,
+                    ),
                 )
 
             scan_kwargs: dict[str, Any] = {
                 "row_filter": row_filter,
             }
             if selected_fields:
-                scan_kwargs["selected_fields"] = selected_fields
-            return tbl.scan(**scan_kwargs).to_pandas()
+                scan_kwargs["selected_fields"] = (
+                    selected_fields
+                )
+            return tbl.scan(
+                **scan_kwargs,
+            ).to_pandas()
         except Exception as exc:
             _logger.warning(
-                "Iceberg date-range scan failed for %s "
-                "ticker=%s (%s); falling back.",
+                "Iceberg date-range scan failed "
+                "for %s ticker=%s (%s); "
+                "falling back.",
                 identifier,
                 ticker,
                 exc,
@@ -721,9 +801,19 @@ class StockRepository:
             if df.empty:
                 return df
             if start is not None:
-                df = df[pd.to_datetime(df[date_col]).dt.date >= start]
+                df = df[
+                    pd.to_datetime(
+                        df[date_col],
+                    ).dt.date
+                    >= start
+                ]
             if end is not None:
-                df = df[pd.to_datetime(df[date_col]).dt.date <= end]
+                df = df[
+                    pd.to_datetime(
+                        df[date_col],
+                    ).dt.date
+                    <= end
+                ]
             return df
 
     def _scan_date_range(
@@ -733,14 +823,9 @@ class StockRepository:
         start: date | None = None,
         end: date | None = None,
     ) -> pd.DataFrame:
-        """Scan with date range predicates only (no ticker).
+        """Scan with date range predicates only.
 
-        Pushes date bounds into the Iceberg scan for
-        partition pruning on date-partitioned tables
-        like ``llm_usage``.
-
-        Falls back to full scan + pandas filtering on
-        error.
+        DuckDB primary path with PyIceberg fallback.
 
         Args:
             identifier: Fully-qualified table name.
@@ -751,6 +836,41 @@ class StockRepository:
         Returns:
             Filtered DataFrame.
         """
+        # DuckDB fast path
+        try:
+            from backend.db.duckdb_engine import (
+                query_iceberg_df,
+            )
+
+            view = identifier.split(".")[-1]
+            clauses: list[str] = []
+            params: list = []
+            if start is not None:
+                clauses.append(f"{date_col} >= ?")
+                params.append(start)
+            if end is not None:
+                clauses.append(f"{date_col} <= ?")
+                params.append(end)
+
+            if clauses:
+                where = " AND ".join(clauses)
+                sql = (
+                    f"SELECT * FROM {view}"
+                    f" WHERE {where}"
+                )
+            else:
+                sql = f"SELECT * FROM {view}"
+            return query_iceberg_df(
+                identifier, sql, params,
+            )
+        except Exception as exc:
+            _logger.debug(
+                "DuckDB date_range failed for "
+                "%s: %s",
+                identifier,
+                exc,
+            )
+        # PyIceberg fallback
         try:
             from pyiceberg.expressions import (
                 And,
@@ -761,16 +881,26 @@ class StockRepository:
             tbl = self._load_table(identifier)
             if identifier in self._dirty_tables:
                 tbl.refresh()
-                self._dirty_tables.discard(identifier)
+                self._dirty_tables.discard(
+                    identifier,
+                )
 
             filters = []
             if start is not None:
-                filters.append(GreaterThanOrEqual(date_col, start))
+                filters.append(
+                    GreaterThanOrEqual(
+                        date_col, start,
+                    ),
+                )
             if end is not None:
-                filters.append(LessThanOrEqual(date_col, end))
+                filters.append(
+                    LessThanOrEqual(date_col, end),
+                )
 
             if len(filters) == 2:
-                row_filter = And(filters[0], filters[1])
+                row_filter = And(
+                    filters[0], filters[1],
+                )
             elif len(filters) == 1:
                 row_filter = filters[0]
             else:
@@ -781,7 +911,8 @@ class StockRepository:
             ).to_pandas()
         except Exception as exc:
             _logger.warning(
-                "Iceberg date-range scan failed for " "%s (%s); falling back.",
+                "Iceberg date-range scan failed "
+                "for %s (%s); falling back.",
                 identifier,
                 exc,
             )
@@ -1025,31 +1156,43 @@ class StockRepository:
         self._delete_rows(identifier, delete_filter)
 
     def get_latest_company_info_if_fresh(
-        self, ticker: str, as_of_date: date
+        self,
+        ticker: str,
+        as_of_date: date,
+        max_age_days: int = 7,
     ) -> dict[str, Any] | None:
-        """Return the latest company info snapshot if fetched on *as_of_date*.
+        """Return the latest company info if fresh.
 
-        Used as a cache check: callers can skip a Yahoo Finance call when the
-        most recent snapshot was already fetched today.
+        Used as a cache check: callers can skip a
+        Yahoo Finance call when the most recent
+        snapshot was fetched within *max_age_days*.
 
         Args:
             ticker: Stock ticker symbol.
-            as_of_date: Date to check freshness
-                against (typically ``date.today()``).
+            as_of_date: Reference date (typically
+                ``date.today()``).
+            max_age_days: Maximum age in days for
+                the snapshot to be considered fresh.
+                Default 7 covers weekends + holidays.
 
         Returns:
-            Dict of company info fields if the latest snapshot's ``fetched_at``
-            date matches *as_of_date*, otherwise ``None``.
+            Dict of company info fields if fresh,
+            otherwise ``None``.
         """
-        df = self._scan_ticker(_COMPANY_INFO, ticker.upper())
+        df = self._scan_ticker(
+            _COMPANY_INFO, ticker.upper(),
+        )
         if df.empty:
             return None
-        latest = df.sort_values("fetched_at", ascending=False).iloc[0]
+        latest = df.sort_values(
+            "fetched_at", ascending=False,
+        ).iloc[0]
         fetched_at = latest.get("fetched_at")
         if fetched_at is None:
             return None
         fetched_date = _to_date(fetched_at)
-        if fetched_date != as_of_date:
+        age = (as_of_date - fetched_date).days
+        if age > max_age_days:
             return None
         return latest.to_dict()
 
@@ -1057,40 +1200,71 @@ class StockRepository:
         self,
         sector: str,
     ) -> pd.DataFrame:
-        """Return latest company info snapshot per ticker
-        for a given sector.
+        """Return latest company info snapshot per
+        ticker for a given sector.
 
-        Uses ``EqualTo("sector", sector)`` predicate push-down
-        where possible, falling back to in-memory filtering.
+        DuckDB primary path with PyIceberg fallback.
 
         Args:
-            sector: Sector name (e.g. ``"Financial Services"``).
+            sector: Sector name
+                (e.g. ``"Financial Services"``).
 
         Returns:
             DataFrame with one row per ticker (latest
             ``fetched_at``), or empty DataFrame.
         """
+        df = pd.DataFrame()
+        # DuckDB fast path
         try:
-            from pyiceberg.expressions import EqualTo
-
-            tbl = self._load_table(_COMPANY_INFO)
-            if _COMPANY_INFO in self._dirty_tables:
-                tbl.refresh()
-                self._dirty_tables.discard(_COMPANY_INFO)
-            scan = tbl.scan(
-                row_filter=EqualTo("sector", sector),
+            from backend.db.duckdb_engine import (
+                query_iceberg_df,
             )
-            df = scan.to_pandas()
+
+            df = query_iceberg_df(
+                _COMPANY_INFO,
+                "SELECT * FROM company_info"
+                " WHERE sector = ?",
+                [sector],
+            )
         except Exception as exc:
-            _logger.warning(
-                "Sector predicate push-down failed "
-                "for '%s' (%s); falling back.",
-                sector,
+            _logger.debug(
+                "DuckDB get_stocks_by_sector "
+                "failed: %s",
                 exc,
             )
-            df = self._table_to_df(_COMPANY_INFO)
-            if not df.empty:
-                df = df[df["sector"].str.lower() == sector.lower()].copy()
+        # PyIceberg fallback
+        if df.empty:
+            try:
+                from pyiceberg.expressions import (
+                    EqualTo,
+                )
+
+                tbl = self._load_table(_COMPANY_INFO)
+                if _COMPANY_INFO in self._dirty_tables:
+                    tbl.refresh()
+                    self._dirty_tables.discard(
+                        _COMPANY_INFO,
+                    )
+                df = tbl.scan(
+                    row_filter=EqualTo(
+                        "sector", sector,
+                    ),
+                ).to_pandas()
+            except Exception as exc:
+                _logger.warning(
+                    "Sector predicate failed "
+                    "for '%s' (%s); full scan.",
+                    sector,
+                    exc,
+                )
+                df = self._table_to_df(
+                    _COMPANY_INFO,
+                )
+                if not df.empty:
+                    df = df[
+                        df["sector"].str.lower()
+                        == sector.lower()
+                    ].copy()
 
         if df.empty:
             return df
@@ -1325,36 +1499,66 @@ class StockRepository:
             df.index
         ).date  # numpy array of date objects
 
-        # Fix #1 + #2: load table once; predicate push-down for existing dates
+        # Dedup: fetch existing dates for this ticker
+        existing_dates: set = set()
+        tbl = self._load_table(_OHLCV)
+        # DuckDB fast path
         try:
-            from pyiceberg.expressions import EqualTo
-
-            tbl = self._load_table(_OHLCV)
-            existing_arrow = tbl.scan(
-                row_filter=EqualTo("ticker", ticker),
-                selected_fields=("date",),
-            ).to_arrow()
-            if len(existing_arrow) > 0:
-                existing_dates: set = {
-                    _to_date(d) for d in existing_arrow["date"].to_pylist()
-                }
-            else:
-                existing_dates = set()
-        except Exception as exc:
-            _logger.warning(
-                "OHLCV predicate scan failed for %s (%s); falling back.",
-                ticker,
-                exc,
+            from backend.db.duckdb_engine import (
+                query_iceberg_df,
             )
-            tbl = self._load_table(_OHLCV)
-            full_df = tbl.scan().to_pandas()
-            if not full_df.empty:
-                mask = full_df["ticker"] == ticker
+
+            edf = query_iceberg_df(
+                _OHLCV,
+                "SELECT date FROM ohlcv"
+                " WHERE ticker = ?",
+                [ticker],
+            )
+            if not edf.empty:
                 existing_dates = {
-                    _to_date(d) for d in full_df.loc[mask, "date"]
+                    _to_date(d)
+                    for d in edf["date"]
                 }
-            else:
-                existing_dates = set()
+        except Exception:
+            pass
+        # PyIceberg fallback
+        if not existing_dates:
+            try:
+                from pyiceberg.expressions import (
+                    EqualTo,
+                )
+
+                existing_arrow = tbl.scan(
+                    row_filter=EqualTo(
+                        "ticker", ticker,
+                    ),
+                    selected_fields=("date",),
+                ).to_arrow()
+                if len(existing_arrow) > 0:
+                    existing_dates = {
+                        _to_date(d)
+                        for d in existing_arrow[
+                            "date"
+                        ].to_pylist()
+                    }
+            except Exception as exc:
+                _logger.warning(
+                    "OHLCV dedup scan failed for "
+                    "%s (%s); full scan.",
+                    ticker,
+                    exc,
+                )
+                full_df = tbl.scan().to_pandas()
+                if not full_df.empty:
+                    mask = (
+                        full_df["ticker"] == ticker
+                    )
+                    existing_dates = {
+                        _to_date(d)
+                        for d in full_df.loc[
+                            mask, "date"
+                        ]
+                    }
 
         # Fix #3: vectorised new-row selection using boolean mask
         keep = [d not in existing_dates for d in all_dates]
@@ -1592,37 +1796,66 @@ class StockRepository:
         if df.empty:
             return 0
 
-        # Fix #1 + #2: load table once;
-        # predicate push-down for existing ex_dates
+        # Dedup: fetch existing ex_dates for ticker
+        existing_dates: set = set()
+        tbl = self._load_table(_DIVIDENDS)
+        # DuckDB fast path
         try:
-            from pyiceberg.expressions import EqualTo
-
-            tbl = self._load_table(_DIVIDENDS)
-            existing_arrow = tbl.scan(
-                row_filter=EqualTo("ticker", ticker),
-                selected_fields=("ex_date",),
-            ).to_arrow()
-            if len(existing_arrow) > 0:
-                existing_dates: set = {
-                    _to_date(d) for d in existing_arrow["ex_date"].to_pylist()
-                }
-            else:
-                existing_dates = set()
-        except Exception as exc:
-            _logger.warning(
-                "Dividends predicate scan failed for %s (%s); falling back.",
-                ticker,
-                exc,
+            from backend.db.duckdb_engine import (
+                query_iceberg_df,
             )
-            tbl = self._load_table(_DIVIDENDS)
-            full_df = tbl.scan().to_pandas()
-            if not full_df.empty:
-                mask = full_df["ticker"] == ticker
+
+            edf = query_iceberg_df(
+                _DIVIDENDS,
+                "SELECT ex_date FROM dividends"
+                " WHERE ticker = ?",
+                [ticker],
+            )
+            if not edf.empty:
                 existing_dates = {
-                    _to_date(d) for d in full_df.loc[mask, "ex_date"]
+                    _to_date(d)
+                    for d in edf["ex_date"]
                 }
-            else:
-                existing_dates = set()
+        except Exception:
+            pass
+        # PyIceberg fallback
+        if not existing_dates:
+            try:
+                from pyiceberg.expressions import (
+                    EqualTo,
+                )
+
+                existing_arrow = tbl.scan(
+                    row_filter=EqualTo(
+                        "ticker", ticker,
+                    ),
+                    selected_fields=("ex_date",),
+                ).to_arrow()
+                if len(existing_arrow) > 0:
+                    existing_dates = {
+                        _to_date(d)
+                        for d in existing_arrow[
+                            "ex_date"
+                        ].to_pylist()
+                    }
+            except Exception as exc:
+                _logger.warning(
+                    "Dividends dedup scan failed "
+                    "for %s (%s); full scan.",
+                    ticker,
+                    exc,
+                )
+                full_df = tbl.scan().to_pandas()
+                if not full_df.empty:
+                    mask = (
+                        full_df["ticker"] == ticker
+                    )
+                    existing_dates = {
+                        _to_date(d)
+                        for d in full_df.loc[
+                            mask, "ex_date"
+                        ]
+                    }
 
         now = _now_utc()
         # Fix #3: build lists directly without iterrows materialising full rows
@@ -3346,41 +3579,81 @@ class StockRepository:
             "daily_trend": [],
         }
         try:
-            from pyiceberg.expressions import (
-                EqualTo,
-                GreaterThanOrEqual,
-            )
-
             cutoff_date = (
-                datetime.now(tz=timezone.utc) - timedelta(days=days)
+                datetime.now(tz=timezone.utc)
+                - timedelta(days=days)
             ).date()
-            row_filter: Any = GreaterThanOrEqual(
-                "request_date",
-                cutoff_date,
-            )
-            if user_id is not None:
-                from pyiceberg.expressions import And
-
-                row_filter = And(
-                    row_filter,
-                    EqualTo("user_id", user_id),
-                )
+            df = pd.DataFrame()
+            # DuckDB fast path
             try:
-                tbl = self._load_table(
-                    self._LLM_USAGE,
+                from backend.db.duckdb_engine import (
+                    query_iceberg_df,
                 )
-                if self._LLM_USAGE in (self._dirty_tables):
-                    tbl.refresh()
-                    self._dirty_tables.discard(self._LLM_USAGE)
-                df = tbl.scan(
-                    row_filter=row_filter,
-                ).to_pandas()
+
+                sql = (
+                    "SELECT * FROM llm_usage"
+                    " WHERE request_date >= ?"
+                )
+                params: list = [cutoff_date]
+                if user_id is not None:
+                    sql += " AND user_id = ?"
+                    params.append(user_id)
+                df = query_iceberg_df(
+                    self._LLM_USAGE,
+                    sql,
+                    params,
+                )
             except Exception:
-                df = self._table_to_df(
-                    self._LLM_USAGE,
-                )
-                if not df.empty and (user_id is not None):
-                    df = df[df["user_id"] == user_id]
+                pass
+            # PyIceberg fallback
+            if df.empty:
+                try:
+                    from pyiceberg.expressions import (
+                        EqualTo,
+                        GreaterThanOrEqual,
+                    )
+
+                    row_filter: Any = (
+                        GreaterThanOrEqual(
+                            "request_date",
+                            cutoff_date,
+                        )
+                    )
+                    if user_id is not None:
+                        from pyiceberg.expressions import (
+                            And,
+                        )
+
+                        row_filter = And(
+                            row_filter,
+                            EqualTo(
+                                "user_id", user_id,
+                            ),
+                        )
+                    tbl = self._load_table(
+                        self._LLM_USAGE,
+                    )
+                    if self._LLM_USAGE in (
+                        self._dirty_tables
+                    ):
+                        tbl.refresh()
+                        self._dirty_tables.discard(
+                            self._LLM_USAGE,
+                        )
+                    df = tbl.scan(
+                        row_filter=row_filter,
+                    ).to_pandas()
+                except Exception:
+                    df = self._table_to_df(
+                        self._LLM_USAGE,
+                    )
+                    if (
+                        not df.empty
+                        and user_id is not None
+                    ):
+                        df = df[
+                            df["user_id"] == user_id
+                        ]
             if df.empty:
                 return empty
 
@@ -3463,31 +3736,57 @@ class StockRepository:
     ) -> pd.DataFrame:
         """Return current holdings for *user_id*.
 
-        Reads all BUY transactions, groups by ticker,
-        and computes total quantity and weighted avg
-        price.
+        DuckDB primary path with PyIceberg fallback.
 
         Returns:
             DataFrame with columns: ticker, quantity,
             avg_price, currency, market, invested.
         """
+        df = pd.DataFrame()
+        # DuckDB fast path
         try:
-            from pyiceberg.expressions import (
-                And,
-                EqualTo,
+            from backend.db.duckdb_engine import (
+                query_iceberg_df,
             )
 
-            tbl = self._load_table(_PORTFOLIO)
-            df = tbl.scan(
-                row_filter=And(
-                    EqualTo("user_id", user_id),
-                    EqualTo("side", "BUY"),
-                ),
-            ).to_pandas()
-        except Exception:
-            df = self._table_to_df(_PORTFOLIO)
-            if not df.empty:
-                df = df[(df["user_id"] == user_id) & (df["side"] == "BUY")]
+            df = query_iceberg_df(
+                _PORTFOLIO,
+                "SELECT * FROM"
+                " portfolio_transactions"
+                " WHERE user_id = ?"
+                " AND side = ?",
+                [user_id, "BUY"],
+            )
+        except Exception as exc:
+            _logger.debug(
+                "DuckDB portfolio_holdings "
+                "failed: %s",
+                exc,
+            )
+        # PyIceberg fallback
+        if df.empty:
+            try:
+                from pyiceberg.expressions import (
+                    And,
+                    EqualTo,
+                )
+
+                tbl = self._load_table(_PORTFOLIO)
+                df = tbl.scan(
+                    row_filter=And(
+                        EqualTo(
+                            "user_id", user_id,
+                        ),
+                        EqualTo("side", "BUY"),
+                    ),
+                ).to_pandas()
+            except Exception:
+                df = self._table_to_df(_PORTFOLIO)
+                if not df.empty:
+                    df = df[
+                        (df["user_id"] == user_id)
+                        & (df["side"] == "BUY")
+                    ]
 
         if df.empty:
             return pd.DataFrame(
@@ -3520,9 +3819,30 @@ class StockRepository:
     ) -> pd.DataFrame:
         """Return all portfolio transactions for user.
 
-        Returns:
-            DataFrame with all transaction rows.
+        DuckDB primary path with PyIceberg fallback.
         """
+        # DuckDB fast path
+        try:
+            from backend.db.duckdb_engine import (
+                query_iceberg_df,
+            )
+
+            df = query_iceberg_df(
+                _PORTFOLIO,
+                "SELECT * FROM"
+                " portfolio_transactions"
+                " WHERE user_id = ?",
+                [user_id],
+            )
+            if not df.empty:
+                return df
+        except Exception as exc:
+            _logger.debug(
+                "DuckDB portfolio_transactions "
+                "failed: %s",
+                exc,
+            )
+        # PyIceberg fallback
         try:
             from pyiceberg.expressions import (
                 EqualTo,
@@ -3539,7 +3859,9 @@ class StockRepository:
             df = self._table_to_df(_PORTFOLIO)
             if df.empty:
                 return df
-            return df[df["user_id"] == user_id].copy()
+            return df[
+                df["user_id"] == user_id
+            ].copy()
 
     def add_portfolio_transaction(
         self,
@@ -3936,26 +4258,52 @@ class StockRepository:
         """
         try:
             self._ensure_chat_audit_table()
-            from pyiceberg.expressions import EqualTo
+            df = pd.DataFrame()
+            # DuckDB fast path
+            try:
+                from backend.db.duckdb_engine import (
+                    query_iceberg_df,
+                )
 
-            tbl = self._load_table(_CHAT_AUDIT_LOG)
-            if _CHAT_AUDIT_LOG in self._dirty_tables:
-                tbl.refresh()
-                self._dirty_tables.discard(
+                df = query_iceberg_df(
+                    _CHAT_AUDIT_LOG,
+                    "SELECT * FROM chat_audit_log"
+                    " WHERE user_id = ?",
+                    [user_id],
+                )
+            except Exception:
+                pass
+            # PyIceberg fallback
+            if df.empty:
+                from pyiceberg.expressions import (
+                    EqualTo,
+                )
+
+                tbl = self._load_table(
                     _CHAT_AUDIT_LOG,
                 )
-            df = tbl.scan(
-                row_filter=EqualTo(
-                    "user_id",
-                    user_id,
-                ),
-            ).to_pandas()
+                if _CHAT_AUDIT_LOG in (
+                    self._dirty_tables
+                ):
+                    tbl.refresh()
+                    self._dirty_tables.discard(
+                        _CHAT_AUDIT_LOG,
+                    )
+                df = tbl.scan(
+                    row_filter=EqualTo(
+                        "user_id",
+                        user_id,
+                    ),
+                ).to_pandas()
         except Exception as exc:
             _logger.warning(
-                "list_chat_sessions scan failed: %s",
+                "list_chat_sessions scan "
+                "failed: %s",
                 exc,
             )
-            df = self._table_to_df(_CHAT_AUDIT_LOG)
+            df = self._table_to_df(
+                _CHAT_AUDIT_LOG,
+            )
             if not df.empty:
                 df = df[df["user_id"] == user_id].copy()
 
@@ -4033,26 +4381,54 @@ class StockRepository:
         """
         try:
             self._ensure_chat_audit_table()
-            from pyiceberg.expressions import (
-                And,
-                EqualTo,
-            )
+            df = pd.DataFrame()
+            # DuckDB fast path
+            try:
+                from backend.db.duckdb_engine import (
+                    query_iceberg_df,
+                )
 
-            tbl = self._load_table(_CHAT_AUDIT_LOG)
-            if _CHAT_AUDIT_LOG in self._dirty_tables:
-                tbl.refresh()
-                self._dirty_tables.discard(
+                df = query_iceberg_df(
+                    _CHAT_AUDIT_LOG,
+                    "SELECT * FROM chat_audit_log"
+                    " WHERE user_id = ?"
+                    " AND session_id = ?",
+                    [user_id, session_id],
+                )
+            except Exception:
+                pass
+            # PyIceberg fallback
+            if df.empty:
+                from pyiceberg.expressions import (
+                    And,
+                    EqualTo,
+                )
+
+                tbl = self._load_table(
                     _CHAT_AUDIT_LOG,
                 )
-            df = tbl.scan(
-                row_filter=And(
-                    EqualTo("user_id", user_id),
-                    EqualTo("session_id", session_id),
-                ),
-            ).to_pandas()
+                if _CHAT_AUDIT_LOG in (
+                    self._dirty_tables
+                ):
+                    tbl.refresh()
+                    self._dirty_tables.discard(
+                        _CHAT_AUDIT_LOG,
+                    )
+                df = tbl.scan(
+                    row_filter=And(
+                        EqualTo(
+                            "user_id", user_id,
+                        ),
+                        EqualTo(
+                            "session_id",
+                            session_id,
+                        ),
+                    ),
+                ).to_pandas()
         except Exception as exc:
             _logger.warning(
-                "get_chat_session_detail scan " "failed: %s",
+                "get_chat_session_detail scan "
+                "failed: %s",
                 exc,
             )
             df = self._table_to_df(
@@ -4215,8 +4591,7 @@ class StockRepository:
         # Check if gap already exists
         try:
             tbl = self._load_table(self._DATA_GAPS)
-            scan = tbl.scan()
-            df = scan.to_pandas()
+            df = self._table_to_df(self._DATA_GAPS)
             existing = df[
                 (df["ticker"] == ticker)
                 & (df["data_type"] == data_type)
@@ -4260,8 +4635,7 @@ class StockRepository:
         """Increment query_count for an existing gap."""
         try:
             tbl = self._load_table(self._DATA_GAPS)
-            scan = tbl.scan()
-            df = scan.to_pandas()
+            df = self._table_to_df(self._DATA_GAPS)
             mask = (
                 (df["ticker"] == ticker)
                 & (df["data_type"] == data_type)
@@ -4291,9 +4665,7 @@ class StockRepository:
     ) -> list[dict]:
         """Get all unresolved data gaps."""
         try:
-            tbl = self._load_table(self._DATA_GAPS)
-            scan = tbl.scan()
-            df = scan.to_pandas()
+            df = self._table_to_df(self._DATA_GAPS)
             unresolved = df[df["resolved_at"].isna()]
             return unresolved.to_dict("records")
         except Exception:
@@ -4309,8 +4681,7 @@ class StockRepository:
 
         try:
             tbl = self._load_table(self._DATA_GAPS)
-            scan = tbl.scan()
-            df = scan.to_pandas()
+            df = self._table_to_df(self._DATA_GAPS)
             mask = df["id"] == gap_id
             if mask.any():
                 df.loc[mask, "resolved_at"] = datetime.now(timezone.utc)

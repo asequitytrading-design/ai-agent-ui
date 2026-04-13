@@ -69,6 +69,10 @@ def _get_classifier_llm():
             s.ollama_model if s.ollama_enabled
             else None
         )
+        from observability import (
+            get_obs_collector,
+        )
+
         return FallbackLLM(
             groq_models=tiers,
             anthropic_model=None,
@@ -76,6 +80,7 @@ def _get_classifier_llm():
             agent_id="classifier",
             token_budget=get_token_budget(),
             compressor=MessageCompressor(),
+            obs_collector=get_obs_collector(),
             cascade_profile="tool",
             ollama_model=ollama,
             ollama_first=True,

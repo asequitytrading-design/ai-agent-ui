@@ -210,12 +210,14 @@ def _make_sub_agent_node(
         cleaned = []
         for m in msgs:
             if isinstance(m, ToolMessage):
-                # Convert tool result to human message
+                # Convert tool result to plain text.
+                # CRITICAL: avoid "[Tool result" or
+                # any tool-like prefix — gpt-oss models
+                # hallucinate tool calls from these.
                 cleaned.append(
                     HumanMessage(
                         content=(
-                            f"[Tool result for "
-                            f"{m.name}]: "
+                            f"Data from {m.name}:\n"
                             f"{m.content}"
                         ),
                     )
@@ -261,6 +263,10 @@ def _make_sub_agent_node(
                 ).split(",")
                 if t.strip()
             ]
+            from observability import (
+                get_obs_collector,
+            )
+
             return FallbackLLM(
                 groq_models=tiers,
                 anthropic_model="claude-sonnet-4-6",
@@ -268,6 +274,7 @@ def _make_sub_agent_node(
                 agent_id=config.agent_id,
                 token_budget=get_token_budget(),
                 compressor=MessageCompressor(),
+                obs_collector=get_obs_collector(),
                 cascade_profile="synthesis",
                 pool_groups=get_pool_groups(
                     "synthesis",
@@ -480,6 +487,32 @@ def _make_sub_agent_node(
 
             # Count this as a tool round
             _tool_rounds_done += 1
+
+            # For skip_synthesis agents: tool output IS
+            # the final answer. Break immediately after
+            # first tool round to prevent the LLM from
+            # hallucinating a "presentation" of the
+            # tool output.
+            if (
+                config.skip_synthesis
+                and _tool_rounds_done >= _max_rounds
+            ):
+                # Use last ToolMessage as final response
+                last_tool_msg = messages[-1]
+                if isinstance(last_tool_msg, ToolMessage):
+                    return {
+                        "messages": [
+                            AIMessage(
+                                content=last_tool_msg.content,
+                            ),
+                        ],
+                        "tool_events": events,
+                        "final_response": (
+                            last_tool_msg.content
+                        ),
+                        "data_sources_used": data_sources,
+                        "current_agent": config.agent_id,
+                    }
 
         # Synthesis pass: if tools were called, re-invoke
         # with synthesis-tier models for higher quality

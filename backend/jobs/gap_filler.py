@@ -285,6 +285,10 @@ def _get_scoring_llm():
 
         ollama = settings.ollama_model if settings.ollama_enabled else None
 
+        from observability import (
+            get_obs_collector,
+        )
+
         return FallbackLLM(
             groq_models=tiers,
             anthropic_model=anthropic,
@@ -292,6 +296,7 @@ def _get_scoring_llm():
             agent_id="sentiment_batch",
             token_budget=get_token_budget(),
             compressor=MessageCompressor(),
+            obs_collector=get_obs_collector(),
             cascade_profile="tool",
             ollama_model=ollama,
             ollama_first=False,

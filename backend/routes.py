@@ -558,9 +558,23 @@ def create_app(
 
             ctx = context_store.get(session_id)
             if ctx is None:
-                ctx = ConversationContext(
-                    session_id=session_id,
+                # Try to resume from user's last session
+                ctx = context_store.get_latest_for_user(
+                    user_id,
                 )
+                if ctx is not None:
+                    # Carry over context to new session
+                    ctx.session_id = session_id
+                    _logger.debug(
+                        "Resumed context from prior "
+                        "session for user %s",
+                        user_id,
+                    )
+                else:
+                    ctx = ConversationContext(
+                        session_id=session_id,
+                    )
+                ctx.user_id = user_id
                 # Populate user profile on first turn.
                 try:
                     user_ctx = _build_user_context(
@@ -578,6 +592,9 @@ def create_app(
                 except Exception:
                     pass
 
+            # Ensure user_id is always set
+            if not ctx.user_id:
+                ctx.user_id = user_id
             ctx.last_agent = agent
             ctx.last_intent = intent
             ctx.last_response = response[:500]

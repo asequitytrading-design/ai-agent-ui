@@ -115,6 +115,158 @@ def _lookup_stock_master(symbol: str) -> dict | None:
         return None
 
 
+def _ensure_stock_master(
+    ticker: str,
+    info: dict | None = None,
+) -> None:
+    """Upsert ticker into stock_master if missing.
+
+    Called after successful yfinance fetch so the
+    pipeline scheduler picks up chat-discovered
+    tickers for daily refresh, Piotroski scoring,
+    and recommendations.
+
+    Args:
+        ticker: yfinance ticker (e.g. ``"AAPL"``,
+            ``"RELIANCE.NS"``).
+        info: Optional yfinance ``.info`` dict for
+            metadata enrichment.
+    """
+    try:
+        from backend.db.models.stock_master import (
+            StockMaster,
+        )
+        from market_utils import detect_market
+        from sqlalchemy import select
+        from sqlalchemy.ext.asyncio import (
+            AsyncSession,
+            create_async_engine,
+        )
+        from sqlalchemy.orm import sessionmaker
+        from sqlalchemy.pool import NullPool
+
+        from config import get_settings
+
+        market = detect_market(ticker)
+        if market == "india":
+            symbol = ticker.replace(
+                ".NS", "",
+            ).replace(".BO", "")
+            exchange = "NSE"
+            currency = "INR"
+        else:
+            symbol = ticker
+            exchange = "US"
+            currency = "USD"
+
+        name = symbol
+        sector = None
+        industry = None
+        market_cap = None
+        if info:
+            name = (
+                info.get("longName")
+                or info.get("shortName")
+                or symbol
+            )
+            sector = info.get("sector")
+            industry = info.get("industry")
+            mc = info.get("marketCap")
+            if mc is not None:
+                try:
+                    market_cap = int(mc)
+                except (ValueError, TypeError):
+                    pass
+            ccy = info.get("currency")
+            if ccy:
+                currency = ccy
+
+        async def _upsert():
+            eng = create_async_engine(
+                get_settings().database_url,
+                poolclass=NullPool,
+            )
+            async with AsyncSession(eng) as sess:
+                row = (
+                    await sess.execute(
+                        select(StockMaster).where(
+                            StockMaster.symbol
+                            == symbol,
+                        ),
+                    )
+                ).scalar_one_or_none()
+                if row is None:
+                    sess.add(
+                        StockMaster(
+                            symbol=symbol,
+                            name=name,
+                            exchange=exchange,
+                            yf_ticker=ticker,
+                            nse_symbol=(
+                                symbol
+                                if market == "india"
+                                else None
+                            ),
+                            sector=sector,
+                            industry=industry,
+                            market_cap=market_cap,
+                            currency=currency,
+                            is_active=True,
+                        ),
+                    )
+                    _logger.info(
+                        "stock_master: inserted %s "
+                        "(source=chat)",
+                        ticker,
+                    )
+                else:
+                    # Update metadata if richer
+                    changed = False
+                    for attr, val in (
+                        ("sector", sector),
+                        ("industry", industry),
+                        ("market_cap", market_cap),
+                        ("name", name),
+                    ):
+                        if (
+                            val
+                            and getattr(row, attr)
+                            != val
+                        ):
+                            setattr(row, attr, val)
+                            changed = True
+                    if changed:
+                        _logger.debug(
+                            "stock_master: updated "
+                            "%s metadata",
+                            ticker,
+                        )
+                await sess.commit()
+            await eng.dispose()
+
+        import concurrent.futures
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop and loop.is_running():
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=1,
+            ) as pool:
+                pool.submit(
+                    asyncio.run, _upsert(),
+                ).result(timeout=10)
+        else:
+            asyncio.run(_upsert())
+    except Exception:
+        _logger.debug(
+            "stock_master upsert failed for %s",
+            ticker,
+            exc_info=True,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Public @tool functions
 # ---------------------------------------------------------------------------
@@ -187,6 +339,11 @@ def fetch_stock_data(ticker: str, period: str = "10y") -> str:
             _update_registry(ticker, df, file_path)
             repo = _require_repo()
             repo.insert_ohlcv(ticker, df)
+            # Auto-register in stock_master for
+            # pipeline discovery (no info dict here,
+            # get_stock_info will enrich later).
+            if not master:
+                _ensure_stock_master(ticker)
             d_min = df.index.min().date()
             d_max = df.index.max().date()
             msg = (
@@ -341,6 +498,8 @@ def get_stock_info(ticker: str) -> str:
             "currency": info.get("currency", "USD"),
         }
         repo.insert_company_info(ticker, info)
+        # Enrich stock_master with sector/industry
+        _ensure_stock_master(ticker, info)
         return json.dumps(result, indent=2)
 
     except Exception as e:
@@ -479,6 +638,52 @@ def get_dividend_history(ticker: str) -> str:
         ticker,
     )
     _ss._DATA_PROCESSED.mkdir(parents=True, exist_ok=True)
+
+    # Iceberg freshness: return cached dividends if
+    # last entry is within 7 days.
+    try:
+        repo_chk = _require_repo()
+        cached_df = repo_chk.get_dividends(ticker)
+        if not cached_df.empty:
+            last_ex = pd.to_datetime(
+                cached_df["ex_date"],
+            ).max()
+            if last_ex is not None:
+                age = (
+                    pd.Timestamp.now() - last_ex
+                ).days
+                # Dividends are quarterly/annual —
+                # 7-day cache avoids redundant fetches
+                # while still catching new declarations.
+                if age <= 90:
+                    n = len(cached_df)
+                    d_min = cached_df[
+                        "ex_date"
+                    ].min()
+                    d_max = cached_df[
+                        "ex_date"
+                    ].max()
+                    curr_sym = _currency_symbol(
+                        _load_currency(ticker),
+                    )
+                    last_amt = float(
+                        cached_df.sort_values(
+                            "ex_date",
+                        )["dividend_amount"].iloc[
+                            -1
+                        ],
+                    )
+                    return (
+                        f"[Source: iceberg]\n"
+                        f"Dividend history for "
+                        f"{ticker}: {n} payments. "
+                        f"Date range: {d_min} to "
+                        f"{d_max}. Most recent: "
+                        f"{curr_sym}{last_amt:.4f}"
+                        f" on {d_max}."
+                    )
+    except Exception:
+        pass
 
     try:
         dividends = yf.Ticker(ticker).dividends

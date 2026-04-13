@@ -90,6 +90,7 @@ _INTENT_MAP: dict[str, set[str]] = {
     },
     "recommendation": {
         "recommend",
+        "recommendation",
         "recommendations",
         "suggestion",
         "suggestions",
