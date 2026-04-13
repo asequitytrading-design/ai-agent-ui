@@ -179,3 +179,17 @@ for _key, _val in _env_exports.items():
 
 _server = ChatServer(_settings)
 app = _server.app
+
+# SIGTERM handler: flush observability before Docker
+# sends SIGKILL (default 10s grace period).
+import signal
+
+
+def _sigterm_handler(signum, frame):
+    """Flush pending events on SIGTERM."""
+    if _server.obs_collector is not None:
+        logger.info("SIGTERM: flushing observability")
+        _server.obs_collector.flush_sync()
+
+
+signal.signal(signal.SIGTERM, _sigterm_handler)

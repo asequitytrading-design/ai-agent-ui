@@ -1525,6 +1525,14 @@ You are a portfolio recommendation engine. Given the \
 user's portfolio state, candidate stocks, and gap \
 analysis, select 5-8 actionable recommendations.
 
+CRITICAL:
+- ONLY use tickers from the candidates list provided. \
+Do NOT invent or hallucinate ticker symbols.
+- Every ticker in your output MUST appear in the \
+candidates or portfolio_actions arrays.
+- Output MUST be valid parseable JSON. No trailing \
+commas, no comments, no markdown fences.
+
 Rules:
 1. Include at least 1 recommendation from each tier \
 (portfolio, watchlist, discovery) IF candidates exist \
@@ -1631,6 +1639,9 @@ def stage3_llm_reasoning(
         ),
         "cap_gaps": gap_analysis.get("cap_gaps", {}),
     }
+    # Add valid tickers reminder to reduce hallucination
+    valid_list = sorted(valid_tickers)
+    context["VALID_TICKERS"] = valid_list
     user_message = json.dumps(
         context, default=str, indent=2,
     )
@@ -1682,6 +1693,12 @@ def stage3_llm_reasoning(
         if text.endswith("```"):
             text = text[:-3].rstrip()
 
+        # JSON repair: fix trailing commas
+        import re
+
+        text = re.sub(
+            r",\s*([}\]])", r"\1", text,
+        )
         parsed = json.loads(text)
 
         # Validate

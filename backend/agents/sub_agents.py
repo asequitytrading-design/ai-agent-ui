@@ -190,6 +190,46 @@ def _make_sub_agent_node(
             agent_id.
     """
 
+    def _strip_tool_metadata(
+        msgs: list,
+    ) -> list:
+        """Strip tool_calls and ToolMessages for synthesis.
+
+        gpt-oss models hallucinate tool calls when they
+        see tool-formatted messages (ASETPLTFRM-297).
+        Convert tool results to plain text so the
+        synthesis LLM only sees content.
+        """
+        cleaned = []
+        for m in msgs:
+            if isinstance(m, ToolMessage):
+                # Convert tool result to human message
+                cleaned.append(
+                    HumanMessage(
+                        content=(
+                            f"[Tool result for "
+                            f"{m.name}]: "
+                            f"{m.content}"
+                        ),
+                    )
+                )
+            elif isinstance(m, AIMessage):
+                if getattr(m, "tool_calls", None):
+                    # Strip tool_calls, keep content
+                    if m.content:
+                        cleaned.append(
+                            AIMessage(
+                                content=m.content,
+                            )
+                        )
+                    # else: skip empty AI messages that
+                    # were just tool call wrappers
+                else:
+                    cleaned.append(m)
+            else:
+                cleaned.append(m)
+        return cleaned
+
     def _build_synthesis_llm():
         """Create synthesis-tier FallbackLLM."""
         try:
@@ -418,6 +458,12 @@ def _make_sub_agent_node(
         # Synthesis pass: if tools were called, re-invoke
         # with synthesis-tier models for higher quality
         # final text (gpt-oss-120b > llama-3.3-70b).
+        #
+        # IMPORTANT: Strip tool_calls from AIMessages
+        # and convert ToolMessages to HumanMessages
+        # before sending to synthesis.  gpt-oss models
+        # hallucinate tool calls when they see tool-
+        # formatted messages (ASETPLTFRM-297).
         _had_tools = any(
             e.get("type") == "tool_done"
             for e in events
@@ -430,8 +476,12 @@ def _make_sub_agent_node(
                         "Synthesis pass for %s",
                         config.agent_id,
                     )
-                    response = syn_llm.invoke(
+                    # Build clean messages for synthesis
+                    syn_msgs = _strip_tool_metadata(
                         messages,
+                    )
+                    response = syn_llm.invoke(
+                        syn_msgs,
                         iteration=iteration + 2,
                     )
                     messages.append(response)

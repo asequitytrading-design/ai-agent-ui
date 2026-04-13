@@ -51,7 +51,7 @@ _DOWN_FAILURES = 4  # ≥4 failures → down
 _LATENCY_WINDOW = 100
 
 # Batch size for Iceberg writes.
-_FLUSH_INTERVAL = 30  # seconds
+_FLUSH_INTERVAL = 10  # seconds (reduced from 30 to minimize data loss on restart)
 _FLUSH_BATCH = 50  # max events per flush
 
 # ── Singleton accessor ────────────────────────────
