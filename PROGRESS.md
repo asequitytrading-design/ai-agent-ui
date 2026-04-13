@@ -2,6 +2,54 @@
 
 ---
 
+# Session: Apr 13, 2026 — Sprint 6: Chat Agent Hardening + Portfolio History
+
+## Branch: `feature/sprint6`
+
+### Chat Agent Fixes
+- Keyword routing: added "recommendation" singular to intent map (fixes portfolio/recommendation tie at score 1:1)
+- Skip LLM presentation: `skip_synthesis` agents return raw ToolMessage content directly (prevents hallucinated empty rows)
+- Action-tier validation: "accumulate" only for held tickers, auto-correct to "buy" in post-processing
+- Stage 3 LLM prompt: explicit ACTION DEFINITIONS section (buy=new, accumulate=existing, reduce=trim)
+- Synthesis hallucination: `[Tool result for X]:` → `Data from X:` prefix in `_strip_tool_metadata()` (prevents gpt-oss tool call hallucination)
+- Stock analyst news fallback: `_format_stock_response` auto-calls `get_ticker_news` + `get_analyst_recommendations` when LLM skips STEP 3
+
+### Conversation Context PG Persistence (ASETPLTFRM-303)
+- New `conversation_contexts` PG table (session_id PK, user_id + updated_at indexed)
+- `ConversationContextStore`: in-memory cache + synchronous PG persistence (async NullPool)
+- Cross-session resume: `get_latest_for_user(user_id)` loads last context on new session
+- Both HTTP (routes.py) and WebSocket (ws.py) handlers updated
+- Daemon thread save failed (event loop conflicts) → switched to sync save (~5ms)
+
+### DuckDB Migration — Complete (16 methods)
+- Phase 1 (internal helpers): `_scan_two_filters`, `_load_table_and_scan`, `_scan_ticker_date_range`, `_scan_date_range`
+- Phase 2 (public methods): `get_stocks_by_sector`, `get_portfolio_holdings`, `get_portfolio_transactions`, `list_chat_sessions`, `get_chat_session_detail`, `insert_ohlcv` read, `insert_dividends` read, `get_dashboard_llm_usage`
+- Phase 3 (data gaps): 4 methods delegate to `_table_to_df()` (already DuckDB-first)
+
+### Observability
+- `obs_collector` added to 7 FallbackLLM instances: sub_agents synthesis, graph synthesis node, topic_classifier, conversation_context summary, memory_extractor, sentiment_agent, gap_filler
+- Verified: gpt-oss-120b now tracked in dashboard after synthesis pass
+
+### Iceberg Freshness & stock_master
+- company_info freshness: 7 days (was same-day), via `max_age_days` param
+- analysis_summary: 7 days (was same-day)
+- dividends: 90-day cache before yfinance call (was no check)
+- `_ensure_stock_master(ticker, info)`: auto-upsert into stock_master after yfinance fetch from chat
+- Verified: NVDA, PLTR auto-inserted with sector/industry/market_cap
+
+### Historical Portfolio Tools (ASETPLTFRM-296)
+- `get_portfolio_history`: daily value series with period (1W/1M/3M/6M/1Y/ALL) or ISO date range
+- `get_portfolio_comparison`: side-by-side period metrics + top movers
+- Shared `_compute_daily_portfolio()` + `_parse_period()` helpers
+- Registered in bootstrap.py and portfolio agent config
+
+### Jira
+- ASETPLTFRM-303: Done (conversation context persistence)
+- ASETPLTFRM-297: Done (synthesis hallucination + observability)
+- ASETPLTFRM-296: In Progress (portfolio history tools — awaiting testing)
+
+---
+
 # Session: Apr 12-13, 2026 — Sprint 6: LLM Portfolio Recommendations (ASETPLTFRM-298)
 
 ## Branch: `feature/sprint6` | ~45 commits

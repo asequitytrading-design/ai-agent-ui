@@ -1,16 +1,17 @@
 # AI Agent UI
 
-A fullstack agentic chat application with stock analysis, Prophet forecasting, and portfolio management. LangChain ReAct agents with memory-augmented multi-turn conversations. Hybrid PostgreSQL + Apache Iceberg data layer with DuckDB read acceleration. Automated pipeline orchestration for 752 stocks across India and US markets.
+A fullstack agentic chat application with stock analysis, Prophet forecasting, and portfolio management. LangGraph supervisor with 6 sub-agents, memory-augmented multi-turn conversations with PG-persisted context. Hybrid PostgreSQL + Apache Iceberg data layer with DuckDB read acceleration. Smart Funnel recommendation engine. Automated pipeline orchestration for 752 stocks across India and US markets.
 
 ---
 
 ## Features
 
-- **5 AI sub-agents** — Portfolio, Stock Analyst, Forecaster, Research, Sentiment (LangGraph supervisor routing)
-- **Memory-augmented chat** — pgvector semantic memory (768-dim), per-user facts + rolling summary
+- **6 AI sub-agents** — Portfolio, Stock Analyst, Forecaster, Research, Sentiment, Recommendation (LangGraph supervisor routing)
+- **Memory-augmented chat** — pgvector semantic memory (768-dim), per-user facts + PG-persisted conversation context (cross-session resume)
 - **Round-robin LLM pools** — 6 Groq models (~2.3M TPD), Ollama local fallback, Anthropic paid tier
 - **Prophet forecasting** — 3/6/9-month targets, 80% confidence bands, XGBoost ensemble correction, backtest overlay
-- **Portfolio dashboard** — TradingView charts, sector allocation, P&L trend, news sentiment, recommendations
+- **Portfolio dashboard** — TradingView charts, sector allocation, P&L trend, news sentiment, recommendations widget
+- **Smart Funnel recommendations** — 3-stage pipeline (DuckDB pre-filter → gap analysis → LLM reasoning), market-scoped, unified quota
 - **Piotroski F-Score** — fundamental scoring (747 stocks), market filter (India/US)
 - **Sentiment scoring** — LLM headline analysis, hot/learning/cold tiers, market fallback
 - **Pipeline orchestration** — 4-step pipelines (Data Refresh → Analytics → Sentiment → Piotroski), force run, DAG viz
@@ -29,7 +30,7 @@ A fullstack agentic chat application with stock analysis, Prophet forecasting, a
 |---------|-------|------|
 | **Frontend** | Next.js 16 + React 19 + Tailwind 4 + lightweight-charts v5 | 3000 |
 | **Backend** | FastAPI + LangChain 1.2 + SQLAlchemy 2.0 async | 8181 |
-| **PostgreSQL** | pgvector:pg16 (13 OLTP tables + pgvector) | 5432 |
+| **PostgreSQL** | pgvector:pg16 (14 OLTP tables + pgvector) | 5432 |
 | **Redis** | Redis 7 Alpine | 6379 |
 | **Docs** | MkDocs Material 9 | 8000 |
 
@@ -90,12 +91,12 @@ graph TD
 
     subgraph Agents["LangGraph"]
         GD["Guardrail + Router"]
-        SA["5 Sub-Agents<br/><i>ReAct loop</i>"]
+        SA["6 Sub-Agents<br/><i>ReAct loop</i>"]
         SYN["Synthesis Pass"]
     end
 
     subgraph Data["Data Layer"]
-        PG["PostgreSQL 16<br/><i>13 tables + pgvector</i>"]
+        PG["PostgreSQL 16<br/><i>14 tables + pgvector</i>"]
         IC["Iceberg<br/><i>12 tables (1.4M OHLCV rows)</i>"]
         DK["DuckDB<br/><i>fast reads + metadata cache</i>"]
         RD["Redis 7<br/><i>cache + token deny-list</i>"]
@@ -114,7 +115,7 @@ graph TD
 
 ## Database
 
-### PostgreSQL (13 tables — OLTP, row-level CRUD)
+### PostgreSQL (14 tables — OLTP, row-level CRUD)
 
 | Table | Purpose |
 |-------|---------|
@@ -122,9 +123,12 @@ graph TD
 | `auth.user_tickers` | Portfolio/watchlist links |
 | `auth.payment_transactions` | Razorpay/Stripe ledger |
 | `public.user_memories` | pgvector semantic memory (768-dim) |
+| `public.conversation_contexts` | Chat context persistence (cross-session resume) |
 | `stocks.registry` | Ticker registry (yf_ticker, market) |
 | `stocks.scheduled_jobs` | Cron job definitions (force flag) |
 | `stocks.scheduler_runs` | Execution records (status, progress) |
+| `stocks.recommendation_runs` | Smart Funnel run metadata + portfolio snapshot |
+| `stocks.recommendations` | Individual recs with data_signals JSONB |
 | `stock_master` | Pipeline universe (symbol, ISIN, yf_ticker) |
 | `stock_tags` | Temporal tags (nifty50, largecap, etc.) |
 | `ingestion_cursor` | Keyset pagination cursor |
@@ -154,6 +158,8 @@ DuckDB serves as the primary read engine with in-memory metadata cache.
 | Forecasts | forecast run_date | `< 7 days old` | Weekly |
 | Forecast CV | accuracy metrics | `< 30 days old` | Monthly (auto) |
 | Piotroski F-Score | none | always recomputes | Monthly |
+| Recommendations | recommendation_runs | `< 30 days` | Monthly |
+| Rec Outcomes | outcome checkpoints | daily price check | Daily |
 
 ### Pipeline (India Daily — 4 steps, ~10 min)
 

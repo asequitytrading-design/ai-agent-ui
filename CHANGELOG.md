@@ -5,6 +5,34 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.7.0] — 2026-04-13: Chat Agent Hardening + Recommendations (Sprint 6)
+
+### Added
+
+- **Smart Funnel Recommendation Engine** (ASETPLTFRM-298): 3-stage pipeline (DuckDB pre-filter → gap analysis → LLM reasoning), 3 PG tables, 6th LangGraph sub-agent, 4 chat tools, 5 API endpoints, scheduler jobs, CLI command
+- **Conversation Context PG Persistence** (ASETPLTFRM-303): new `conversation_contexts` table, cross-session resume via `get_latest_for_user()`, async NullPool save
+- **Historical Portfolio Tools** (ASETPLTFRM-296): `get_portfolio_history` (daily value series with period/date range), `get_portfolio_comparison` (side-by-side period metrics + top movers)
+- **stock_master auto-insert**: chat-discovered tickers auto-added to `stock_master` for pipeline scheduler pickup
+- **Stock analyst news fallback**: deterministic `get_ticker_news` + `get_analyst_recommendations` call if LLM skips STEP 3
+- **Observability**: `obs_collector` added to 7 FallbackLLM instances that were missing it (synthesis, classifier, summary, fact_extractor, sentiment, gap_filler)
+
+### Fixed
+
+- **Recommendation routing**: added "recommendation" (singular) to intent keyword map — fixes tie with "portfolio"
+- **Recommendation hallucination**: skip LLM presentation pass for `skip_synthesis` agents — return raw tool output directly
+- **Action-tier consistency**: "accumulate" only for held tickers; auto-correct to "buy" for non-held via validation + post-processing
+- **Synthesis tool hallucination** (ASETPLTFRM-297): changed `[Tool result for X]:` prefix to `Data from X:` — prevents gpt-oss models hallucinating tool calls during synthesis
+- **Iceberg freshness**: company_info 7 days (was same-day), analysis_summary 7 days, dividends 90-day cache before yfinance
+
+### Changed
+
+- **DuckDB migration complete**: all 16 remaining PyIceberg reads in `stocks/repository.py` migrated to DuckDB-first with PyIceberg fallback (internal helpers, portfolio, chat sessions, llm_usage, data gaps, insert dedup checks)
+- **Recommendation engine**: Stage 3 LLM prompt now includes explicit ACTION DEFINITIONS (buy vs accumulate vs reduce)
+- Pipeline orchestration: India + USA daily pipelines with DAG visualization
+- Forecast pipeline: batch OHLCV 167s→0.87s, bulk writes 11.5min→2s
+
+---
+
 ## [0.6.0] — 2026-04-08: Stock Data Pipeline — Nifty 500 (Sprint 5, Epic ASETPLTFRM-267)
 
 ### Added
