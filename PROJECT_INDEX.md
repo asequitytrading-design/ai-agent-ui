@@ -1,7 +1,7 @@
 # Project Index: AI Agent UI
 
 > AI-agent-optimised codebase map. For human onboarding, see `docs/`.
-> Last refreshed: 2026-04-13 (Sprint 6 — Chat Agent Hardening + Portfolio History)
+> Last refreshed: 2026-04-13 (Sprint 6 — Market Ticker + Chat Agent Hardening)
 
 ---
 
@@ -25,14 +25,15 @@ ai-agent-ui/
 │   │   ├── jobs/          # ohlcv, fundamentals, fill_gaps, seed
 │   │   └── screener/      # Piotroski F-Score
 │   ├── db/                # ORM models, migrations, DuckDB
-│   │   ├── models/        # 16 SQLAlchemy models
-│   │   ├── migrations/    # 9 Alembic async migrations
+│   │   ├── models/        # 18 SQLAlchemy models
+│   │   ├── migrations/    # 10 Alembic async migrations
 │   │   ├── engine.py      # Async session factory
 │   │   ├── duckdb_engine.py # Iceberg read engine + metadata cache
 │   │   └── pg_stocks.py   # PG CRUD (registry, scheduler, pipeline, recs)
 │   ├── config.py          # Settings (Pydantic)
 │   ├── routes.py          # Chat API + admin endpoints
 │   ├── ws.py              # WebSocket chat handler
+│   ├── market_routes.py   # Market ticker (Nifty/Sensex, NSE+Yahoo)
 │   ├── dashboard_routes.py # Dashboard/chart API
 │   ├── insights_routes.py # Screener/analytics API
 │   ├── observability.py   # LLM usage collector + Iceberg flush
@@ -72,15 +73,16 @@ ai-agent-ui/
 
 ## Database (Hybrid PG + Iceberg)
 
-**PostgreSQL (14 tables)**: users, user_tickers, payments, registry,
-scheduled_jobs, scheduler_runs, user_memories (pgvector 768-dim),
-stock_master, stock_tags, ingestion_cursor, ingestion_skipped,
-pipelines, pipeline_steps, conversation_contexts.
+**PostgreSQL (18 tables)**: users, user_tickers, payments, registry,
+scheduled_jobs, scheduler_runs, recommendation_runs, recommendations,
+recommendation_outcomes, market_indices, user_memories (pgvector
+768-dim), conversation_contexts, stock_master, stock_tags,
+ingestion_cursor, ingestion_skipped, pipelines, pipeline_steps.
 
-**Iceberg (12 tables)**: ohlcv (1.4M rows), company_info, dividends,
+**Iceberg (14 tables)**: ohlcv (1.4M rows), company_info, dividends,
 quarterly_results, analysis_summary, forecast_runs, forecasts,
 piotroski_scores, sentiment_scores, llm_pricing, llm_usage,
-portfolio_transactions.
+portfolio_transactions, audit_log, usage_history.
 
 **Rule**: Mutable state → PG. Append-only analytics → Iceberg.
 DuckDB for ALL Iceberg reads (metadata cache, auto-invalidated).
@@ -112,7 +114,7 @@ LLM Cascade: Groq pools (llama-3.3-70b, kimi-k2, qwen3-32b) →
 | `backend/tools/` | 32 | Stock tools: forecast, analysis, sentiment, portfolio, recs |
 | `backend/jobs/` | 7 | Executor registry, pipeline chaining, batch refresh, recs |
 | `backend/pipeline/` | 21 | CLI: download, seed, bulk-download, analytics, forecast, screen |
-| `backend/db/models/` | 16 | SQLAlchemy ORM (PG tables) |
+| `backend/db/models/` | 18 | SQLAlchemy ORM (PG tables) |
 | `stocks/repository.py` | 1 (5.2K lines) | Iceberg CRUD + DuckDB reads + PG bridge |
 | `frontend/hooks/` | 19 | SWR data fetching for all pages |
 | `frontend/components/` | 30+ | Admin, charts, insights, widgets, modals |
@@ -122,8 +124,8 @@ LLM Cascade: Groq pools (llama-3.3-70b, kimi-k2, qwen3-32b) →
 ## Scheduler & Jobs
 
 6 job types: `data_refresh`, `compute_analytics`, `run_sentiment`,
-`run_forecasts`, `run_piotroski`, `recommendations`.
-All accept `force=False`.
+`run_forecasts`, `run_piotroski`, `recommendations`. All accept
+`force=False`. Market ticker runs independently (30s poll, not scheduled).
 
 Freshness gates: daily (OHLCV, analytics, sentiment), weekly
 (forecasts), monthly (CV accuracy auto-refresh via 30-day TTL).
