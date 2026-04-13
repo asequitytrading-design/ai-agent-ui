@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import date, datetime
+from datetime import datetime
 
 import httpx
 import pytz
@@ -62,7 +62,8 @@ async def _needs_seed_today() -> bool:
     if row is None:
         return True
     fetched_date = row.fetched_at.astimezone(IST).date()
-    return fetched_date < date.today()
+    today_ist = datetime.now(IST).date()
+    return fetched_date < today_ist
 
 
 async def _get_nse_client() -> httpx.AsyncClient:
