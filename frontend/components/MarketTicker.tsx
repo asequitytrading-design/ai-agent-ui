@@ -8,6 +8,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { apiFetch } from "@/lib/apiFetch";
+import { API_URL } from "@/lib/config";
 
 interface IndexData {
   price: number;
@@ -86,7 +87,7 @@ export function MarketTicker() {
 
   const fetchIndices = useCallback(async () => {
     try {
-      const res = await apiFetch("/market/indices");
+      const res = await apiFetch(`${API_URL}/market/indices`);
       if (res.ok) {
         const json: MarketIndices = await res.json();
         setData(json);
