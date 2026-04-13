@@ -249,11 +249,21 @@ def guardrail(state: dict) -> dict:
     # If the bot's last response asked a question or
     # offered numbered options, treat the next user
     # message as a follow-up to the same agent.
-    if (
+    #
+    # EXCEPTIONS (prevent trapping loops):
+    # 1. Never follow-up to "decline" — always
+    #    re-evaluate so the user can escape.
+    # 2. If a strong keyword intent is detected,
+    #    the user clearly wants something different
+    #    — override the clarification follow-up.
+    _is_clarif = (
         _ctx
         and _ctx.last_agent
+        and _ctx.last_agent != "decline"
+        and not detected_intent  # no strong keyword
         and _is_clarification(_ctx.last_response)
-    ):
+    )
+    if _is_clarif:
         _logger.info(
             "Clarification follow-up → agent=%s"
             " (last response was a question)",
