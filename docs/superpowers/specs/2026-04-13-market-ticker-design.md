@@ -144,10 +144,14 @@ def is_market_open() -> bool:
 ```
 
 When `is_market_open()` returns `False`:
-- Do NOT call NSE India or Yahoo Finance.
-- Serve PG-persisted data. Override `market_state` to `"CLOSED"`
-  regardless of what was stored (avoids stale "REGULAR" after
-  a mid-session restart).
+- Check PG `fetched_at` — if no row exists OR `fetched_at` is
+  from a previous calendar day (IST), this is the **first call
+  of the day**. Fetch from upstream once to seed storage, then
+  follow normal off-hours behavior.
+- After seeding (or if already seeded today): do NOT call NSE
+  India or Yahoo Finance. Serve PG-persisted data. Override
+  `market_state` to `"CLOSED"` regardless of what was stored
+  (avoids stale "REGULAR" after a mid-session restart).
 - Redis TTL extended to 300s (no point refreshing frequently).
 
 During market hours, `market_state` is taken from Yahoo's
