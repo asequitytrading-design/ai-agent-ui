@@ -15,6 +15,7 @@ import { useChatContext } from "@/providers/ChatProvider";
 import { useLayoutContext } from "@/providers/LayoutProvider";
 import type { UserProfile } from "@/hooks/useEditProfile";
 import { BACKEND_URL } from "@/lib/config";
+import { MarketTicker } from "@/components/MarketTicker";
 
 interface AppHeaderProps {
   profile: UserProfile | null;
@@ -169,6 +170,9 @@ export function AppHeader({
           {pageTitle}
         </h1>
       </div>
+
+      {/* -- Center: market ticker (desktop only) -- */}
+      <MarketTicker />
 
       {/* -- Right: chat toggle + profile chip -- */}
       <div className="flex items-center gap-2">
