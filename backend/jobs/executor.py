@@ -150,6 +150,44 @@ def _scope_filter(
     return tickers
 
 
+def _analyzable_tickers(
+    registry: dict,
+    tickers: list[str],
+) -> list[str]:
+    """Include stocks and ETFs for analytics,
+    sentiment, and forecasts.  Exclude indices
+    and commodities (kept for OHLCV regressors).
+    """
+    return [
+        t
+        for t in tickers
+        if registry.get(t, {}).get(
+            "ticker_type", "stock",
+        )
+        in ("stock", "etf")
+    ]
+
+
+def _has_financials(
+    registry: dict,
+    tickers: list[str],
+) -> list[str]:
+    """Stocks with quarterly financials only.
+
+    Used by Piotroski F-Score which requires
+    income, balance sheet, and cashflow data.
+    ETFs, indices, and commodities are excluded.
+    """
+    return [
+        t
+        for t in tickers
+        if registry.get(t, {}).get(
+            "ticker_type", "stock",
+        )
+        == "stock"
+    ]
+
+
 def _yf_ticker_map(
     registry: dict,
     tickers: list[str],
@@ -349,6 +387,7 @@ def execute_compute_analytics(
     stock_repo = _require_repo()
     registry = repo.get_all_registry()
     tickers = _scope_filter(registry, scope)
+    tickers = _analyzable_tickers(registry, tickers)
     yf_map = _yf_ticker_map(registry, tickers)
 
     # ── Pre-query: skip tickers analysed today ──────────
@@ -815,6 +854,7 @@ def execute_run_sentiment(
     stock_repo = _require_repo()
     registry = repo.get_all_registry()
     tickers = _scope_filter(registry, scope)
+    tickers = _analyzable_tickers(registry, tickers)
     yf_map = _yf_ticker_map(registry, tickers)
 
     today = datetime.now(timezone.utc).date()
@@ -1240,6 +1280,7 @@ def execute_run_forecasts(
     stock_repo = _require_repo()
     registry = repo.get_all_registry()
     tickers = _scope_filter(registry, scope)
+    tickers = _analyzable_tickers(registry, tickers)
     yf_map = _yf_ticker_map(registry, tickers)
     horizon_months = 9
 
@@ -1615,6 +1656,7 @@ def execute_run_piotroski(
 
     registry = repo.get_all_registry()
     tickers = _scope_filter(registry, scope)
+    tickers = _has_financials(registry, tickers)
     yf_map = _yf_ticker_map(registry, tickers)
 
     # Build yf-ticker list for run_screen

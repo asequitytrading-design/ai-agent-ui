@@ -1,0 +1,55 @@
+symbol,name,isin,exchange,series,sector,industry,tags
+NIFTYBEES,Nippon India ETF Nifty 50 BeES,,NSE,EQ,,Index ETF,etf|broad|nifty50
+SETFNIF50,SBI Nifty 50 ETF,,NSE,EQ,,Index ETF,etf|broad|nifty50
+HDFCNIFTY,HDFC Nifty 50 ETF,,NSE,EQ,,Index ETF,etf|broad|nifty50
+NIFTYETF,Mirae Asset Nifty 50 ETF,,NSE,EQ,,Index ETF,etf|broad|nifty50
+BSLNIFTY,Aditya Birla Sun Life Nifty 50 ETF,,NSE,EQ,,Index ETF,etf|broad|nifty50
+IVZINNIFTY,Invesco India Nifty 50 ETF,,NSE,EQ,,Index ETF,etf|broad|nifty50
+HDFCSENSEX,HDFC Sensex ETF,,NSE,EQ,,Index ETF,etf|broad|sensex
+SENSEXETF,Mirae Asset BSE Sensex ETF,,NSE,EQ,,Index ETF,etf|broad|sensex
+HDFCNIF100,HDFC Nifty 100 ETF,,NSE,EQ,,Index ETF,etf|broad|nifty100
+LICNFNHGP,LIC MF Nifty 100 ETF,,NSE,EQ,,Index ETF,etf|broad|nifty100
+JUNIORBEES,Nippon India ETF Nifty Next 50 Junior BeES,,NSE,EQ,,Index ETF,etf|next50
+SETFNN50,SBI Nifty Next 50 ETF,,NSE,EQ,,Index ETF,etf|next50
+ABSLNN50ET,Aditya Birla Sun Life Nifty Next 50 ETF,,NSE,EQ,,Index ETF,etf|next50
+MID150BEES,Nippon India ETF Nifty Midcap 150,,NSE,EQ,,Index ETF,etf|midcap
+MOM100,Motilal Oswal Nifty Midcap 100 ETF,,NSE,EQ,,Index ETF,etf|midcap
+SMALLCAP,Mirae Asset Nifty Smallcap 250 ETF,,NSE,EQ,,Index ETF,etf|smallcap
+BANKBEES,Nippon India ETF Nifty Bank BeES,,NSE,EQ,,Sectoral ETF,etf|sectoral|bank
+SETFNIFBK,SBI Nifty Bank ETF,,NSE,EQ,,Sectoral ETF,etf|sectoral|bank
+PSUBNKBEES,Nippon India ETF Nifty PSU Bank BeES,,NSE,EQ,,Sectoral ETF,etf|sectoral|psubank
+ITBEES,Nippon India ETF Nifty IT,,NSE,EQ,,Sectoral ETF,etf|sectoral|it
+PHARMABEES,Nippon India Nifty Pharma ETF,,NSE,EQ,,Sectoral ETF,etf|sectoral|pharma
+NETFPHARMA,Nippon India Nifty Pharma ETF,,NSE,EQ,,Sectoral ETF,etf|sectoral|pharma
+INFRABEES,Nippon India ETF Nifty Infrastructure BeES,,NSE,EQ,,Sectoral ETF,etf|sectoral|infra
+CONSUMBEES,Nippon India ETF Consumption,,NSE,EQ,,Sectoral ETF,etf|sectoral|consumption
+AUTOBEES,Nippon India Nifty Auto ETF,,NSE,EQ,,Sectoral ETF,etf|sectoral|auto
+MOHEALTH,Motilal Oswal BSE Healthcare ETF,,NSE,EQ,,Sectoral ETF,etf|sectoral|healthcare
+CPSEETF,CPSE ETF,,NSE,EQ,,Thematic ETF,etf|thematic|cpse
+ICICIB22,Bharat 22 ETF,,NSE,EQ,,Thematic ETF,etf|thematic|bharat22
+MOM50,Motilal Oswal M50 Momentum ETF,,NSE,EQ,,Factor ETF,etf|factor|momentum
+MOMENTUM,Aditya Birla Sun Life Nifty 200 Momentum 30 ETF,,NSE,EQ,,Factor ETF,etf|factor|momentum
+ALPHAETF,Mirae Asset Nifty 200 Alpha 30 ETF,,NSE,EQ,,Factor ETF,etf|factor|alpha
+MOVALUE,Motilal Oswal BSE Enhanced Value ETF,,NSE,EQ,,Factor ETF,etf|factor|value
+VALUE,Mirae Asset Nifty 500 Value 50 ETF,,NSE,EQ,,Factor ETF,etf|factor|value
+MOQUALITY,Motilal Oswal BSE Quality ETF,,NSE,EQ,,Factor ETF,etf|factor|quality
+NV20BEES,Nippon India ETF Nifty 50 Value 20,,NSE,EQ,,Factor ETF,etf|factor|value
+EQUAL50,Mirae Asset Nifty50 Equal Weight ETF,,NSE,EQ,,Factor ETF,etf|factor|equalweight
+GOLDBEES,Nippon India ETF Gold BeES,,NSE,EQ,,Commodity ETF,etf|commodity|gold
+GOLD1,Kotak Gold ETF,,NSE,EQ,,Commodity ETF,etf|commodity|gold
+GOLDCASE,Zerodha Gold ETF,,NSE,EQ,,Commodity ETF,etf|commodity|gold
+HDFCGOLD,HDFC Gold ETF,,NSE,EQ,,Commodity ETF,etf|commodity|gold
+TATAGOLD,Tata Gold ETF,,NSE,EQ,,Commodity ETF,etf|commodity|gold
+GROWWGOLD,Groww Gold ETF,,NSE,EQ,,Commodity ETF,etf|commodity|gold
+SILVERBEES,Nippon India Silver ETF,,NSE,EQ,,Commodity ETF,etf|commodity|silver
+HDFCSILVER,HDFC Silver ETF,,NSE,EQ,,Commodity ETF,etf|commodity|silver
+MON100,Motilal Oswal NASDAQ 100 ETF,,NSE,EQ,,International ETF,etf|international|nasdaq
+MONQ50,Motilal Oswal Nasdaq Q 50 ETF,,NSE,EQ,,International ETF,etf|international|nasdaq
+MAFANG,Mirae Asset NYSE FANG+ ETF,,NSE,EQ,,International ETF,etf|international|fang
+MASPTOP50,Mirae Asset S&P 500 Top 50 ETF,,NSE,EQ,,International ETF,etf|international|sp500
+HNGSNGBEES,Nippon India ETF Hang Seng BeES,,NSE,EQ,,International ETF,etf|international|hangseng
+LIQUIDBEES,Nippon India ETF Nifty 1D Rate Liquid BeES,,NSE,EQ,,Debt ETF,etf|debt|liquid
+LIQUID,Mirae Asset Nifty 1D Rate Liquid ETF,,NSE,EQ,,Debt ETF,etf|debt|liquid
+GILT5YBEES,Nippon India ETF Nifty 5yr Benchmark G-Sec,,NSE,EQ,,Debt ETF,etf|debt|gilt
+MOGSEC,Motilal Oswal Nifty 5yr Benchmark G-Sec ETF,,NSE,EQ,,Debt ETF,etf|debt|gilt
+EVINDIA,Mirae Asset Nifty EV and New Age Automotive ETF,,NSE,EQ,,Thematic ETF,etf|thematic|ev

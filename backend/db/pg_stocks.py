@@ -297,6 +297,20 @@ async def update_scheduler_run_pg(
     await session.commit()
 
 
+async def get_scheduler_run_by_id(
+    session: AsyncSession,
+    run_id: str,
+) -> dict | None:
+    """Return a single scheduler run by run_id."""
+    result = await session.execute(
+        select(SchedulerRun).where(
+            SchedulerRun.run_id == run_id,
+        )
+    )
+    row = result.scalar_one_or_none()
+    return _run_to_dict(row) if row else None
+
+
 async def get_scheduler_runs_pg(
     session: AsyncSession,
     days: int = 7,

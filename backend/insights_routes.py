@@ -1156,6 +1156,35 @@ def create_insights_router() -> APIRouter:
         if df.empty:
             return PiotroskiResponse()
 
+        # Patch empty company_name from company_info
+        empty_mask = (
+            df["company_name"].isna()
+            | (df["company_name"] == "")
+            | (df["company_name"] == "None")
+        )
+        if empty_mask.any():
+            try:
+                ci = query_iceberg_df(
+                    "stocks.company_info",
+                    "SELECT ticker, company_name, "
+                    "ROW_NUMBER() OVER ("
+                    "  PARTITION BY ticker "
+                    "  ORDER BY fetched_at DESC"
+                    ") AS rn "
+                    "FROM company_info",
+                )
+                ci = ci[ci["rn"] == 1].set_index(
+                    "ticker",
+                )
+                for idx in df[empty_mask].index:
+                    tk = df.at[idx, "ticker"]
+                    if tk in ci.index:
+                        df.at[idx, "company_name"] = (
+                            ci.at[tk, "company_name"]
+                        )
+            except Exception:
+                pass
+
         latest_date = (
             df["score_date"].max()
             if "score_date" in df.columns

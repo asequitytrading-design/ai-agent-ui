@@ -610,6 +610,9 @@ def create_dashboard_router() -> APIRouter:
                     company_name=company,
                     market=mkt,
                     currency=ccy,
+                    ticker_type=meta.get(
+                        "ticker_type", "stock",
+                    ),
                     current_price=price,
                     last_fetch_date=meta.get("last_fetch_date", "") or None,
                 )

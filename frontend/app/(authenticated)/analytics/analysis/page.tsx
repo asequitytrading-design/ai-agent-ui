@@ -136,10 +136,12 @@ const RANGE_OPTIONS = [
 
 function AnalysisTab({
   ticker,
+  market,
   prefs,
   onPrefsChange,
 }: {
   ticker: string;
+  market?: string;
   prefs: Record<string, unknown>;
   onPrefsChange: (v: Record<string, unknown>) => void;
 }) {
@@ -192,7 +194,7 @@ function AnalysisTab({
       const el = crosshairRef.current;
       if (!el) return;
       if (!data) return; // keep last values visible
-      const s = tickerCurrency(ticker);
+      const s = tickerCurrency(ticker, market);
       const o = data.open ?? 0;
       const h = data.high ?? 0;
       const l = data.low ?? 0;
@@ -486,7 +488,13 @@ function AnalysisTab({
 
 type HorizonId = 3 | 6 | 9;
 
-function ForecastTab({ ticker }: { ticker: string }) {
+function ForecastTab({
+  ticker,
+  market,
+}: {
+  ticker: string;
+  market?: string;
+}) {
   const [ohlcv, setOhlcv] =
     useState<OHLCVResponse | null>(null);
   const [series, setSeries] =
@@ -589,7 +597,7 @@ function ForecastTab({ ticker }: { ticker: string }) {
     } | null) => {
       const el = fcTooltip.current;
       if (!el || !info || info.price == null) return;
-      const s = tickerCurrency(ticker);
+      const s = tickerCurrency(ticker, market);
       const tag = info.isForecast
         ? '<span class="text-emerald-500 text-[9px]">FORECAST</span> '
         : "";
@@ -655,7 +663,7 @@ function ForecastTab({ ticker }: { ticker: string }) {
   const targets = (summary?.targets ?? []).filter(
     (t) => t.horizon_months <= horizon,
   );
-  const sym = tickerCurrency(ticker);
+  const sym = tickerCurrency(ticker, market);
 
   return (
     <div className="space-y-6">
@@ -1828,6 +1836,12 @@ function AnalysisPageInner() {
   >;
 
   const [tickers, setTickers] = useState<string[]>([]);
+  const [tickerMarkets, setTickerMarkets] = useState<
+    Record<string, string>
+  >({});
+  const [tickerTypes, setTickerTypes] = useState<
+    Record<string, string>
+  >({});
   const [selectedTicker, setSelectedTicker] =
     useState<string>("");
   // URL tab param ALWAYS wins (hero buttons).
@@ -1875,11 +1889,24 @@ function AnalysisPageInner() {
         if (cancelled) return;
         const userList: string[] =
           userData.tickers ?? [];
-        const regList: string[] = (
-          regData.tickers ?? []
-        ).map(
-          (t: { ticker: string }) => t.ticker,
+        const regTickers = (regData.tickers ?? []) as {
+          ticker: string;
+          market?: string;
+          ticker_type?: string;
+        }[];
+        const regList: string[] = regTickers.map(
+          (t) => t.ticker,
         );
+        // Build ticker → market/type lookups
+        const mktMap: Record<string, string> = {};
+        const typeMap: Record<string, string> = {};
+        for (const t of regTickers) {
+          if (t.market) mktMap[t.ticker] = t.market;
+          if (t.ticker_type)
+            typeMap[t.ticker] = t.ticker_type;
+        }
+        setTickerMarkets(mktMap);
+        setTickerTypes(typeMap);
         // Merge: user tickers first, then registry
         const seen = new Set(
           userList.map((t: string) =>
@@ -1933,11 +1960,24 @@ function AnalysisPageInner() {
   const [showTickerDropdown, setShowTickerDropdown] =
     useState(false);
 
+  const isForecastTab =
+    activeTab === "forecast" ||
+    activeTab === "portfolio-forecast";
+
   const filteredTickers = useMemo(() => {
-    if (!tickerSearch.trim()) return tickers;
+    let list = tickers;
+    // Hide index/commodity on forecast tabs
+    // (keep stocks + ETFs)
+    if (isForecastTab) {
+      list = list.filter((t) => {
+        const tt = tickerTypes[t] ?? "stock";
+        return tt === "stock" || tt === "etf";
+      });
+    }
+    if (!tickerSearch.trim()) return list;
     const q = tickerSearch.trim().toUpperCase();
-    return tickers.filter((t) => t.includes(q));
-  }, [tickers, tickerSearch]);
+    return list.filter((t) => t.includes(q));
+  }, [tickers, tickerSearch, isForecastTab, tickerTypes]);
 
   const selectTicker = useCallback(
     (t: string) => {
@@ -1948,6 +1988,33 @@ function AnalysisPageInner() {
     },
     [updatePrefs],
   );
+
+  // Auto-redirect away from non-stock tickers on
+  // forecast tabs (covers URL-driven navigation).
+  useEffect(() => {
+    const fc =
+      activeTab === "forecast" ||
+      activeTab === "portfolio-forecast";
+    if (!fc || !selectedTicker) return;
+    if (Object.keys(tickerTypes).length === 0) return;
+    const tt = tickerTypes[selectedTicker] ?? "stock";
+    if (tt === "stock" || tt === "etf") return;
+    const first = tickers.find((t) => {
+      const tp = tickerTypes[t] ?? "stock";
+      return tp === "stock" || tp === "etf";
+    });
+    if (first && first !== selectedTicker) {
+      setSelectedTicker(first);
+      setTickerSearch("");
+      updatePrefs("chart", { ticker: first });
+    }
+  }, [
+    activeTab,
+    selectedTicker,
+    tickerTypes,
+    tickers,
+    updatePrefs,
+  ]);
 
   // Per-ticker refresh (stock analysis tabs)
   type TickerRefreshState =
@@ -2048,6 +2115,27 @@ function AnalysisPageInner() {
               onClick={() => {
                 setActiveTab(tab.id);
                 updatePrefs("chart", { tab: tab.id });
+                // Auto-switch ticker if non-stock
+                // is selected on a forecast tab
+                const isFc =
+                  tab.id === "forecast" ||
+                  tab.id === "portfolio-forecast";
+                if (
+                  isFc &&
+                  selectedTicker &&
+                  !["stock", "etf"].includes(
+                    tickerTypes[selectedTicker] ??
+                      "stock",
+                  )
+                ) {
+                  const first = tickers.find(
+                    (t) =>
+                      ["stock", "etf"].includes(
+                        tickerTypes[t] ?? "stock",
+                      ),
+                  );
+                  if (first) selectTicker(first);
+                }
                 const params = new URLSearchParams(
                   searchParams.toString(),
                 );
@@ -2185,6 +2273,7 @@ function AnalysisPageInner() {
         <AnalysisTab
           key={`${selectedTicker}-${tickerRefreshKey}`}
           ticker={selectedTicker}
+          market={tickerMarkets[selectedTicker]}
           prefs={chartPrefs}
           onPrefsChange={(v) =>
             updatePrefs("chart", v)
@@ -2195,6 +2284,7 @@ function AnalysisPageInner() {
         <ForecastTab
           key={`${selectedTicker}-${tickerRefreshKey}`}
           ticker={selectedTicker}
+          market={tickerMarkets[selectedTicker]}
         />
       )}
       {activeTab === "compare" && <CompareTab />}

@@ -2,6 +2,60 @@
 
 ---
 
+# Session: Apr 14, 2026 — Sprint 6: Data Health Fix + ETF Ingestion + ticker_type
+
+## Data Health Fix Panel (Maintenance page)
+- Built unified `POST /admin/data-health/fix` endpoint — triggers same executors as scheduler
+- Added `GET /admin/data-health/fix/{run_id}/status` for progress polling
+- Frontend: fix buttons on all 5 cards (OHLCV, Analytics, Sentiment, Piotroski, Forecasts) with ProgressBar
+- Parallelized DuckDB health queries (2.4s → 1.4s)
+- Added `invalidate_metadata()` on health scan to avoid stale reads
+
+## ticker_type Classification System
+- Added `ticker_type` column to `stock_registry` (migration `b2c3d4e5f6a7`)
+- Values: `"stock"` (755), `"etf"` (54), `"index"` (4), `"commodity"` (4)
+- `_detect_ticker_type()` in `_stock_registry.py` — checks stock_master tags
+- `_analyzable_tickers()` (stock+etf) for analytics/sentiment/forecasts
+- `_has_financials()` (stock only) for Piotroski
+- Data health uses split totals: `total_analyzable` / `total_financial` / `total_registry`
+
+## ETF Ingestion (54 NSE ETFs)
+- Created `data/universe/nse_etfs.csv` with 54 ETFs across 8 categories
+- Seeded stock_master + bulk-downloaded 10y OHLCV via yfinance
+- Ran analytics (808/809), sentiment (809/809), and forecasts (809/809)
+- Piotroski correctly excludes ETFs (754/755 stocks only)
+
+## Currency Fix for Indian Indices
+- Added `_INDIAN_INDEX_TICKERS` to `detect_market()` for `^NSEI`, `^BSESN`, `^INDIAVIX`
+- Frontend `tickerCurrency()` now receives `market` from registry API
+- `^NSEI` chart shows ₹ instead of $
+
+## Forecast Tab ETF/Index Filtering
+- Forecast tabs exclude indices/commodities from dropdown
+- Auto-redirect: if index selected and user switches to forecast tab, selects first stock/ETF
+- ETFs visible on forecast tabs (they have valid Prophet forecasts)
+
+## Company Name Fixes
+- Fixed 14 empty company_name entries in Iceberg company_info
+- Piotroski insights endpoint patches empty names from company_info at query time
+
+## Jira
+- Created ASETPLTFRM-305: Fix portfolio comparison chat (round-robin synthesis issue) → Sprint 7
+
+## Files Modified (14 files, +1175 / -258 lines)
+backend/routes.py, backend/jobs/executor.py, backend/tools/_stock_registry.py,
+backend/market_utils.py, backend/db/pg_stocks.py, backend/db/models/registry.py,
+backend/insights_routes.py, backend/dashboard_routes.py, backend/dashboard_models.py,
+stocks/repository.py, frontend hooks/useAdminData.ts,
+frontend components/admin/DataHealthPanel.tsx,
+frontend app/analytics/analysis/page.tsx
+
+## New Files
+- `data/universe/nse_etfs.csv` (54 ETFs)
+- `backend/db/migrations/versions/b2c3d4e5f6a7_add_ticker_type_to_registry.py`
+
+---
+
 # Session: Apr 13, 2026 (evening) — Sprint 6: Market Ticker (ASETPLTFRM-304)
 
 ## Branch: `feature/sprint6` | 10 commits | 5 SP

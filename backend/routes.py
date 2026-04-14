@@ -1690,241 +1690,310 @@ def create_app(
         stale_30d = today - timedelta(days=30)
         stale_7d = today - timedelta(days=7)
 
+        # ── Invalidate DuckDB cache so health reads
+        # pick up recent writes (e.g. fix runs). ──
+        from db.duckdb_engine import (
+            invalidate_metadata,
+        )
+
+        invalidate_metadata()
+
         # ── Registry baseline ────────────────────
         try:
             repo = _require_repo()
             registry = repo.get_all_registry()
             all_tickers = set(registry.keys())
             total_registry = len(all_tickers)
+            # Analyzable: stocks + ETFs (for
+            # analytics, sentiment, forecasts)
+            analyzable_tickers = {
+                t
+                for t in all_tickers
+                if registry[t].get(
+                    "ticker_type", "stock",
+                )
+                in ("stock", "etf")
+            }
+            # Financials: stocks only (for Piotroski)
+            financial_tickers = {
+                t
+                for t in all_tickers
+                if registry[t].get(
+                    "ticker_type", "stock",
+                )
+                == "stock"
+            }
         except Exception:
             all_tickers = set()
+            analyzable_tickers = set()
+            financial_tickers = set()
             total_registry = 0
 
         result: dict = {
             "total_registry": total_registry,
+            "total_analyzable": len(
+                analyzable_tickers,
+            ),
+            "total_financial": len(
+                financial_tickers,
+            ),
             "timestamp": time.time(),
         }
 
-        # ── 1. OHLCV health ─────────────────────
-        ohlcv: dict = {
-            "nan_close_count": 0,
-            "nan_close_tickers": [],
-            "missing_latest_count": 0,
-            "stale_count": 0,
-            "stale_tickers": [],
-        }
-        try:
-            nan_df = query_iceberg_df(
-                "stocks.ohlcv",
-                "SELECT count(*) AS cnt "
-                "FROM ohlcv "
-                "WHERE close IS NULL "
-                "OR isnan(close)",
-            )
-            if not nan_df.empty:
-                ohlcv["nan_close_count"] = int(
-                    nan_df["cnt"].iloc[0]
-                )
+        # ── Parallel DuckDB queries ──────────────
+        # Run all 5 health checks concurrently via
+        # ThreadPoolExecutor (DuckDB queries are
+        # CPU-bound but release the GIL for I/O).
+        from concurrent.futures import (
+            ThreadPoolExecutor,
+        )
 
-            nan_tk = query_iceberg_df(
-                "stocks.ohlcv",
-                "SELECT DISTINCT ticker "
-                "FROM ohlcv "
-                "WHERE close IS NULL "
-                "OR isnan(close)",
-            )
-            if not nan_tk.empty:
-                ohlcv["nan_close_tickers"] = sorted(
-                    nan_tk["ticker"].tolist()
+        def _ohlcv_health():
+            """Combined OHLCV: NaN + freshness."""
+            o: dict = {
+                "nan_close_count": 0,
+                "nan_close_tickers": [],
+                "missing_latest_count": 0,
+                "stale_count": 0,
+                "stale_tickers": [],
+            }
+            try:
+                # Single query for NaN stats
+                nan_df = query_iceberg_df(
+                    "stocks.ohlcv",
+                    "SELECT count(*) AS cnt, "
+                    "count(DISTINCT ticker) "
+                    "  AS tk_cnt "
+                    "FROM ohlcv "
+                    "WHERE close IS NULL "
+                    "OR isnan(close)",
                 )
-
-            latest_df = query_iceberg_df(
-                "stocks.ohlcv",
-                "SELECT ticker, MAX(date) AS latest "
-                "FROM ohlcv GROUP BY ticker",
-            )
-            if not latest_df.empty:
-                for _, row in latest_df.iterrows():
-                    d = row["latest"]
-                    if hasattr(d, "date"):
-                        d = d.date()
-                    if d < yesterday:
-                        ohlcv[
-                            "missing_latest_count"
-                        ] += 1
-                    if d < stale_3d:
-                        ohlcv["stale_count"] += 1
-                        ohlcv["stale_tickers"].append(
-                            row["ticker"]
+                if not nan_df.empty:
+                    o["nan_close_count"] = int(
+                        nan_df["cnt"].iloc[0]
+                    )
+                if (
+                    not nan_df.empty
+                    and nan_df["tk_cnt"].iloc[0] > 0
+                ):
+                    tk = query_iceberg_df(
+                        "stocks.ohlcv",
+                        "SELECT DISTINCT ticker "
+                        "FROM ohlcv "
+                        "WHERE close IS NULL "
+                        "OR isnan(close)",
+                    )
+                    if not tk.empty:
+                        o["nan_close_tickers"] = (
+                            sorted(
+                                tk["ticker"].tolist()
+                            )
                         )
-                ohlcv["stale_tickers"] = sorted(
-                    ohlcv["stale_tickers"]
-                )
-        except Exception:
-            _logger.debug(
-                "OHLCV health check failed",
-                exc_info=True,
-            )
-        result["ohlcv"] = ohlcv
 
-        # ── 2. Forecast health ───────────────────
-        forecasts: dict = {
-            "total_tickers": 0,
-            "missing_tickers": [],
-            "extreme_predictions": 0,
-            "high_mape": 0,
-            "stale_count": 0,
-        }
-        try:
-            fc_df = query_iceberg_df(
-                "stocks.forecast_runs",
-                "SELECT ticker, "
-                "MAX(run_date) AS latest, "
-                "MAX(target_3m_pct_change) "
-                "  AS max_pct, "
-                "MIN(target_3m_pct_change) "
-                "  AS min_pct, "
-                "MAX(mape) AS max_mape "
-                "FROM forecast_runs "
-                "GROUP BY ticker",
-            )
-            if not fc_df.empty:
-                fc_tickers = set(
-                    fc_df["ticker"].tolist()
+                # Freshness per ticker
+                latest = query_iceberg_df(
+                    "stocks.ohlcv",
+                    "SELECT ticker, "
+                    "MAX(date) AS latest "
+                    "FROM ohlcv "
+                    "GROUP BY ticker",
                 )
-                forecasts["total_tickers"] = len(
-                    fc_tickers
-                )
-                forecasts["missing_tickers"] = sorted(
-                    all_tickers - fc_tickers
-                )
-                for _, row in fc_df.iterrows():
-                    mx = row.get("max_pct")
-                    mn = row.get("min_pct")
-                    if (
-                        mx is not None and mx > 100
-                    ) or (
-                        mn is not None and mn < -50
+                if not latest.empty:
+                    for _, row in (
+                        latest.iterrows()
                     ):
-                        forecasts[
-                            "extreme_predictions"
-                        ] += 1
-                    mp = row.get("max_mape")
-                    if mp is not None and mp > 25:
-                        forecasts["high_mape"] += 1
-                    d = row["latest"]
-                    if hasattr(d, "date"):
-                        d = d.date()
-                    if d < stale_30d:
-                        forecasts["stale_count"] += 1
-        except Exception:
-            _logger.debug(
-                "Forecast health check failed",
-                exc_info=True,
-            )
-        result["forecasts"] = forecasts
+                        d = row["latest"]
+                        if hasattr(d, "date"):
+                            d = d.date()
+                        if d < yesterday:
+                            o[
+                                "missing_latest_count"
+                            ] += 1
+                        if d < stale_3d:
+                            o["stale_count"] += 1
+                            o[
+                                "stale_tickers"
+                            ].append(row["ticker"])
+                    o["stale_tickers"] = sorted(
+                        o["stale_tickers"]
+                    )
+            except Exception:
+                _logger.debug(
+                    "OHLCV health failed",
+                    exc_info=True,
+                )
+            return o
 
-        # ── 3. Sentiment health ──────────────────
-        sentiment: dict = {
-            "total_tickers": 0,
-            "missing_tickers": [],
-            "stale_count": 0,
-        }
-        try:
-            s_df = query_iceberg_df(
-                "stocks.sentiment_scores",
-                "SELECT ticker, "
-                "MAX(score_date) AS latest "
-                "FROM sentiment_scores "
-                "GROUP BY ticker",
-            )
-            if not s_df.empty:
-                s_tickers = set(
-                    s_df["ticker"].tolist()
+        def _forecast_health():
+            f: dict = {
+                "total_tickers": 0,
+                "missing_tickers": [],
+                "extreme_predictions": 0,
+                "high_mape": 0,
+                "stale_count": 0,
+            }
+            try:
+                df = query_iceberg_df(
+                    "stocks.forecast_runs",
+                    "SELECT ticker, "
+                    "MAX(run_date) AS latest, "
+                    "MAX(target_3m_pct_change)"
+                    "  AS max_pct, "
+                    "MIN(target_3m_pct_change)"
+                    "  AS min_pct, "
+                    "MAX(mape) AS max_mape "
+                    "FROM forecast_runs "
+                    "GROUP BY ticker",
                 )
-                sentiment["total_tickers"] = len(
-                    s_tickers
+                if not df.empty:
+                    tks = set(
+                        df["ticker"].tolist()
+                    )
+                    f["total_tickers"] = len(tks)
+                    f["missing_tickers"] = sorted(
+                        analyzable_tickers - tks
+                    )
+                    for _, r in df.iterrows():
+                        mx = r.get("max_pct")
+                        mn = r.get("min_pct")
+                        if (
+                            mx is not None
+                            and mx > 100
+                        ) or (
+                            mn is not None
+                            and mn < -50
+                        ):
+                            f[
+                                "extreme_predictions"
+                            ] += 1
+                        mp = r.get("max_mape")
+                        if (
+                            mp is not None
+                            and mp > 25
+                        ):
+                            f["high_mape"] += 1
+                        d = r["latest"]
+                        if hasattr(d, "date"):
+                            d = d.date()
+                        if d < stale_30d:
+                            f["stale_count"] += 1
+            except Exception:
+                _logger.debug(
+                    "Forecast health failed",
+                    exc_info=True,
                 )
-                sentiment["missing_tickers"] = sorted(
-                    all_tickers - s_tickers
-                )
-                for _, row in s_df.iterrows():
-                    d = row["latest"]
-                    if hasattr(d, "date"):
-                        d = d.date()
-                    if d < stale_7d:
-                        sentiment["stale_count"] += 1
-        except Exception:
-            _logger.debug(
-                "Sentiment health check failed",
-                exc_info=True,
-            )
-        result["sentiment"] = sentiment
+            return f
 
-        # ── 4. Piotroski health ──────────────────
-        piotroski: dict = {
-            "total_tickers": 0,
-            "missing_tickers": [],
-            "stale_count": 0,
-        }
-        try:
-            p_df = query_iceberg_df(
-                "stocks.piotroski_scores",
-                "SELECT ticker, "
-                "MAX(score_date) AS latest "
-                "FROM piotroski_scores "
-                "GROUP BY ticker",
-            )
-            if not p_df.empty:
-                p_tickers = set(
-                    p_df["ticker"].tolist()
+        def _sentiment_health():
+            s: dict = {
+                "total_tickers": 0,
+                "missing_tickers": [],
+                "stale_count": 0,
+            }
+            try:
+                df = query_iceberg_df(
+                    "stocks.sentiment_scores",
+                    "SELECT ticker, "
+                    "MAX(score_date) AS latest "
+                    "FROM sentiment_scores "
+                    "GROUP BY ticker",
                 )
-                piotroski["total_tickers"] = len(
-                    p_tickers
+                if not df.empty:
+                    tks = set(
+                        df["ticker"].tolist()
+                    )
+                    s["total_tickers"] = len(tks)
+                    s["missing_tickers"] = sorted(
+                        analyzable_tickers - tks
+                    )
+                    for _, r in df.iterrows():
+                        d = r["latest"]
+                        if hasattr(d, "date"):
+                            d = d.date()
+                        if d < stale_7d:
+                            s["stale_count"] += 1
+            except Exception:
+                _logger.debug(
+                    "Sentiment health failed",
+                    exc_info=True,
                 )
-                piotroski["missing_tickers"] = sorted(
-                    all_tickers - p_tickers
-                )
-                for _, row in p_df.iterrows():
-                    d = row["latest"]
-                    if hasattr(d, "date"):
-                        d = d.date()
-                    if d < stale_30d:
-                        piotroski["stale_count"] += 1
-        except Exception:
-            _logger.debug(
-                "Piotroski health check failed",
-                exc_info=True,
-            )
-        result["piotroski"] = piotroski
+            return s
 
-        # ── 5. Analytics health ──────────────────
-        analytics: dict = {
-            "total_tickers": 0,
-            "missing_tickers": [],
-        }
-        try:
-            a_df = query_iceberg_df(
-                "stocks.analysis_summary",
-                "SELECT DISTINCT ticker "
-                "FROM analysis_summary",
-            )
-            if not a_df.empty:
-                a_tickers = set(
-                    a_df["ticker"].tolist()
+        def _piotroski_health():
+            p: dict = {
+                "total_tickers": 0,
+                "missing_tickers": [],
+                "stale_count": 0,
+            }
+            try:
+                df = query_iceberg_df(
+                    "stocks.piotroski_scores",
+                    "SELECT ticker, "
+                    "MAX(score_date) AS latest "
+                    "FROM piotroski_scores "
+                    "GROUP BY ticker",
                 )
-                analytics["total_tickers"] = len(
-                    a_tickers
+                if not df.empty:
+                    tks = set(
+                        df["ticker"].tolist()
+                    )
+                    p["total_tickers"] = len(tks)
+                    p["missing_tickers"] = sorted(
+                        financial_tickers - tks
+                    )
+                    for _, r in df.iterrows():
+                        d = r["latest"]
+                        if hasattr(d, "date"):
+                            d = d.date()
+                        if d < stale_30d:
+                            p["stale_count"] += 1
+            except Exception:
+                _logger.debug(
+                    "Piotroski health failed",
+                    exc_info=True,
                 )
-                analytics["missing_tickers"] = sorted(
-                    all_tickers - a_tickers
+            return p
+
+        def _analytics_health():
+            a: dict = {
+                "total_tickers": 0,
+                "missing_tickers": [],
+            }
+            try:
+                df = query_iceberg_df(
+                    "stocks.analysis_summary",
+                    "SELECT DISTINCT ticker "
+                    "FROM analysis_summary",
                 )
-        except Exception:
-            _logger.debug(
-                "Analytics health check failed",
-                exc_info=True,
-            )
-        result["analytics"] = analytics
+                if not df.empty:
+                    tks = set(
+                        df["ticker"].tolist()
+                    )
+                    a["total_tickers"] = len(tks)
+                    a["missing_tickers"] = sorted(
+                        analyzable_tickers - tks
+                    )
+            except Exception:
+                _logger.debug(
+                    "Analytics health failed",
+                    exc_info=True,
+                )
+            return a
+
+        with ThreadPoolExecutor(
+            max_workers=5,
+        ) as pool:
+            f_ohlcv = pool.submit(_ohlcv_health)
+            f_fc = pool.submit(_forecast_health)
+            f_sent = pool.submit(_sentiment_health)
+            f_pio = pool.submit(_piotroski_health)
+            f_ana = pool.submit(_analytics_health)
+
+        result["ohlcv"] = f_ohlcv.result()
+        result["forecasts"] = f_fc.result()
+        result["sentiment"] = f_sent.result()
+        result["piotroski"] = f_pio.result()
+        result["analytics"] = f_ana.result()
 
         return result
 
@@ -2078,6 +2147,263 @@ def create_app(
         "/admin/data-health/fix-ohlcv",
         _admin_fix_ohlcv,
         methods=["POST"],
+        dependencies=[Depends(superuser_only)],
+    )
+
+    # ── Data Health Fix (unified) ─────────────
+
+    _VALID_TARGETS = {
+        "ohlcv",
+        "analytics",
+        "sentiment",
+        "piotroski",
+        "forecasts",
+    }
+
+    async def _admin_data_health_fix(
+        request: Request,
+    ):
+        """POST /admin/data-health/fix.
+
+        Triggers the same pipeline executors that the
+        scheduler uses.  Returns a run_id immediately;
+        caller polls /fix/{run_id}/status for progress.
+        """
+        import threading
+        import uuid
+        from datetime import datetime, timezone
+
+        from tools._stock_shared import _require_repo
+
+        body = await request.json()
+        target = body.get("target")
+        mode = body.get("mode", "stale_only")
+
+        if target not in _VALID_TARGETS:
+            raise HTTPException(
+                400,
+                "target must be one of: "
+                + ", ".join(sorted(_VALID_TARGETS)),
+            )
+        if mode not in ("stale_only", "force_all"):
+            raise HTTPException(
+                400,
+                "mode must be 'stale_only' or "
+                "'force_all'",
+            )
+
+        repo = _require_repo()
+
+        # Job type mapping
+        job_type_map = {
+            "ohlcv": "data_refresh",
+            "analytics": "compute_analytics",
+            "sentiment": "run_sentiment",
+            "piotroski": "run_piotroski",
+            "forecasts": "run_forecasts",
+        }
+        job_type = job_type_map[target]
+        force = mode == "force_all"
+
+        run_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc)
+        repo.append_scheduler_run(
+            {
+                "run_id": run_id,
+                "job_id": f"fix-{target}",
+                "job_name": f"Fix {target}",
+                "job_type": job_type,
+                "scope": "all",
+                "status": "running",
+                "started_at": now,
+                "completed_at": None,
+                "duration_secs": None,
+                "tickers_total": 0,
+                "tickers_done": 0,
+                "error_message": None,
+                "trigger_type": "fix_panel",
+            }
+        )
+
+        def _run():
+            started = datetime.now(timezone.utc)
+            try:
+                if target == "ohlcv":
+                    _run_ohlcv_fix(
+                        repo, run_id, force,
+                    )
+                else:
+                    from backend.jobs.executor import (
+                        JOB_EXECUTORS,
+                    )
+
+                    fn = JOB_EXECUTORS.get(job_type)
+                    if fn:
+                        fn(
+                            "all",
+                            run_id,
+                            repo,
+                            force=force,
+                        )
+            except Exception as exc:
+                elapsed = (
+                    datetime.now(timezone.utc) - started
+                ).total_seconds()
+                repo.update_scheduler_run(
+                    run_id,
+                    {
+                        "status": "failed",
+                        "completed_at": datetime.now(
+                            timezone.utc,
+                        ),
+                        "duration_secs": elapsed,
+                        "error_message": str(exc)[:500],
+                    },
+                )
+
+        threading.Thread(
+            target=_run, daemon=True,
+        ).start()
+
+        return {"run_id": run_id, "status": "running"}
+
+    def _run_ohlcv_fix(
+        repo, run_id: str, force: bool,
+    ):
+        """Run OHLCV fix using batch_data_refresh.
+
+        In stale_only mode, queries Iceberg for stale
+        tickers and passes only those.  In force mode,
+        passes all registry tickers.
+        """
+        from datetime import date, timedelta
+
+        from backend.jobs.batch_refresh import (
+            batch_data_refresh,
+        )
+        from market_utils import is_indian_market
+
+        registry = repo.get_all_registry()
+
+        if not force:
+            # Identify stale tickers from Iceberg
+            from db.duckdb_engine import (
+                query_iceberg_df,
+            )
+
+            today = date.today()
+            stale_3d = today - timedelta(days=3)
+            stale_tickers: list[str] = []
+            try:
+                df = query_iceberg_df(
+                    "stocks.ohlcv",
+                    "SELECT ticker, "
+                    "MAX(date) AS latest "
+                    "FROM ohlcv GROUP BY ticker",
+                )
+                if not df.empty:
+                    for _, row in df.iterrows():
+                        d = row["latest"]
+                        if hasattr(d, "date"):
+                            d = d.date()
+                        if d < stale_3d:
+                            stale_tickers.append(
+                                row["ticker"]
+                            )
+            except Exception:
+                pass
+
+            # Also include tickers with no OHLCV at all
+            ohlcv_set = set()
+            if not df.empty:
+                ohlcv_set = set(
+                    df["ticker"].tolist()
+                )
+            reg_set = set(registry.keys())
+            missing = reg_set - ohlcv_set
+
+            all_targets = set(stale_tickers) | missing
+            if not all_targets:
+                # Nothing stale — mark done
+                repo.update_scheduler_run(
+                    run_id,
+                    {
+                        "status": "success",
+                        "completed_at": (
+                            __import__("datetime")
+                            .datetime.now(
+                                __import__("datetime")
+                                .timezone.utc
+                            )
+                        ),
+                        "tickers_total": 0,
+                        "tickers_done": 0,
+                    },
+                )
+                return
+            tickers = sorted(all_targets)
+        else:
+            tickers = list(registry.keys())
+
+        # Resolve to yfinance symbols
+        yf_tickers: list[str] = []
+        for t in tickers:
+            if t.endswith((".NS", ".BO")):
+                yf_tickers.append(t)
+            else:
+                meta = registry.get(t, {})
+                mkt = meta.get("market", "")
+                if mkt.upper() in (
+                    "NSE", "BSE", "INDIA",
+                ):
+                    yf_tickers.append(f"{t}.NS")
+                else:
+                    yf_tickers.append(t)
+
+        batch_data_refresh(
+            yf_tickers,
+            repo,
+            run_id,
+            max_workers=5,
+            force=True,
+        )
+
+    async def _admin_fix_status(
+        request: Request,
+        run_id: str,
+    ):
+        """GET /admin/data-health/fix/{run_id}/status."""
+        from tools._stock_shared import _require_repo
+
+        repo = _require_repo()
+        run = repo.get_scheduler_run_by_id(run_id)
+        if not run:
+            raise HTTPException(
+                404, "Run not found",
+            )
+        return {
+            "run_id": run.get("run_id"),
+            "status": run.get("status"),
+            "tickers_total": run.get(
+                "tickers_total", 0,
+            ),
+            "tickers_done": run.get(
+                "tickers_done", 0,
+            ),
+            "errors": run.get("error_message"),
+            "elapsed_s": run.get("duration_secs"),
+        }
+
+    admin_router.add_api_route(
+        "/admin/data-health/fix",
+        _admin_data_health_fix,
+        methods=["POST"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/data-health/fix/{run_id}/status",
+        _admin_fix_status,
+        methods=["GET"],
         dependencies=[Depends(superuser_only)],
     )
 

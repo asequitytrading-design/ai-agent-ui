@@ -135,6 +135,7 @@ class RegistryTicker(BaseModel):
     company_name: str | None = None
     market: str = "us"
     currency: str = "USD"
+    ticker_type: str = "stock"
     current_price: float | None = None
     change: float | None = None
     change_pct: float | None = None

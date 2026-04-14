@@ -4863,6 +4863,9 @@ class StockRepository:
                 "market": str(
                     row.get("market", "us"),
                 ),
+                "ticker_type": str(
+                    row.get("ticker_type", "stock"),
+                ),
                 "file_path": str(
                     Path(__file__).parent.parent
                     / "data"
@@ -4932,6 +4935,7 @@ class StockRepository:
         date_range_start: date,
         date_range_end: date,
         market: str,
+        ticker_type: str = "stock",
     ) -> None:
         """Insert or update registry row (PG-backed).
 
@@ -4942,6 +4946,8 @@ class StockRepository:
             date_range_start: Earliest trading date.
             date_range_end: Most recent trading date.
             market: ``"india"`` or ``"us"``.
+            ticker_type: ``"stock"``, ``"index"``,
+                or ``"commodity"``.
         """
         from backend.db.pg_stocks import (
             upsert_registry as pg_upsert,
@@ -4954,6 +4960,7 @@ class StockRepository:
             "date_range_start": date_range_start,
             "date_range_end": date_range_end,
             "market": market,
+            "ticker_type": ticker_type,
         }
 
         async def _call():
@@ -5178,6 +5185,29 @@ class StockRepository:
                 exc_info=True,
             )
             return []
+
+    def get_scheduler_run_by_id(
+        self,
+        run_id: str,
+    ) -> dict | None:
+        """Return a single scheduler run."""
+        from backend.db.pg_stocks import (
+            get_scheduler_run_by_id as pg_get,
+        )
+
+        async def _call():
+            async with _pg_session() as s:
+                return await pg_get(s, run_id)
+
+        try:
+            return _run_pg(_call)
+        except Exception:
+            _logger.error(
+                "get_scheduler_run_by_id %s failed",
+                run_id,
+                exc_info=True,
+            )
+            return None
 
     def get_scheduler_run_stats(self) -> dict:
         """Return aggregate stats for dashboard."""

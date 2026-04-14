@@ -11,15 +11,16 @@ A fullstack agentic chat application with stock analysis, Prophet forecasting, a
 - **Smart Funnel recommendations** — 3-stage pipeline (DuckDB pre-filter → gap analysis → LLM reasoning), market-scoped (India/US), unified quota system
 - **Prophet forecasting with ensemble correction** — 3/6/9-month price targets with 80% confidence bands, XGBoost ensemble, accuracy-adjusted scoring
 - **Historical portfolio tools** — daily value series, period comparison, time-travel queries with flexible date range support
-- **752-stock pipeline** — automated daily refresh, analytics, sentiment, Piotroski F-Score across India and US markets
+- **817-ticker pipeline** — automated daily refresh for 755 stocks + 54 ETFs + 8 indices/commodities, with analytics, sentiment, Piotroski F-Score across India and US markets
 - **Memory-augmented chat** — pgvector semantic memory retrieval (768-dim); facts + summaries persist and auto-inject into sub-agent prompts
 - **Round-robin model pools** — load-balanced Groq daily token budgets across 6 models (~2.3M TPD combined)
 - **Real-time WebSocket streaming** — live `tool_start` / `tool_done` events give users visibility into the agentic loop as it runs
 - **Dual payment gateways** — Razorpay (INR modal) and Stripe (USD hosted checkout) with pro-rata billing
 - **Docker Compose 5-service orchestration** — `docker compose up -d` starts backend (8181), frontend (3000), PostgreSQL (5432), Redis (6379), and docs (8000)
 - **LLM Observability dashboard** — real-time token tracking, per-model TPD/RPD bars, cascade event log
-- **Piotroski F-Score screening** — fundamental scoring (747 stocks), market filter (India/US), index tags (Nifty 50/100/500)
-- **Data Health dashboard** — 5 health cards with fix buttons, NaN cleanup, backfill from yfinance
+- **Piotroski F-Score screening** — fundamental scoring (755 stocks), market filter (India/US), index tags (Nifty 50/100/500), company name fallback from company_info
+- **54 NSE ETFs** — broad market, sectoral, factor, gold/silver, international, debt ETFs with OHLCV, analytics, sentiment, and Prophet forecasts
+- **Data Health dashboard** — 5 health cards with async fix buttons, live progress bars, parallelized DuckDB queries (~1.4s), per-pipeline ticker filtering (stock+ETF vs stock-only)
 - **Live market ticker** — Nifty 50 + Sensex in header, dual-source (NSE India + Yahoo Finance), 30s refresh, PG-persisted for restart resilience
 
 ---

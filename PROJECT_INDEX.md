@@ -1,7 +1,7 @@
 # Project Index: AI Agent UI
 
 > AI-agent-optimised codebase map. For human onboarding, see `docs/`.
-> Last refreshed: 2026-04-13 (Sprint 6 — Market Ticker + Chat Agent Hardening)
+> Last refreshed: 2026-04-14 (Sprint 6 — Data Health Fix + ETF Ingestion + ticker_type)
 
 ---
 
@@ -26,7 +26,7 @@ ai-agent-ui/
 │   │   └── screener/      # Piotroski F-Score
 │   ├── db/                # ORM models, migrations, DuckDB
 │   │   ├── models/        # 18 SQLAlchemy models
-│   │   ├── migrations/    # 10 Alembic async migrations
+│   │   ├── migrations/    # 11 Alembic async migrations
 │   │   ├── engine.py      # Async session factory
 │   │   ├── duckdb_engine.py # Iceberg read engine + metadata cache
 │   │   └── pg_stocks.py   # PG CRUD (registry, scheduler, pipeline, recs)

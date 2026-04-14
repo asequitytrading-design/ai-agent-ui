@@ -139,7 +139,7 @@ append-only analytics.
 | `auth.users` | `backend/db/models/user.py` | CRUD via `UserRepository` |
 | `auth.user_tickers` | `backend/db/models/user_ticker.py` | Insert + delete |
 | `auth.payment_transactions` | `backend/db/models/payment.py` | Insert + update |
-| `stocks.registry` | `backend/db/pg_stocks.py` | Upsert |
+| `stocks.registry` | `backend/db/pg_stocks.py` | Upsert (has `ticker_type`: stock/etf/index/commodity) |
 | `stocks.scheduled_jobs` | `backend/db/pg_stocks.py` | Upsert (has `force` column) |
 | `stocks.scheduler_runs` | `backend/db/pg_stocks.py` | Insert + row-level UPDATE |
 | `stocks.recommendation_runs` | `backend/db/models/recommendation.py` | Smart Funnel run metadata |
@@ -358,6 +358,18 @@ Run `list_memories` to browse all topics. Key categories:
 - **Market ticker**: `MarketTicker` in `AppHeader.tsx` center.
   NSE India + Yahoo Finance dual-source, 30s poll, PG+Redis.
   Off-hours: zero upstream calls (serves PG data).
+- **ticker_type**: `stock_registry.ticker_type` classifies
+  tickers: `stock` (755), `etf` (54), `index` (4),
+  `commodity` (4). `_analyzable_tickers()` (stock+etf)
+  for analytics/sentiment/forecast. `_has_financials()`
+  (stock only) for Piotroski. Data health uses split
+  totals per card.
+- **ETF bulk-download**: `--tickers` flag expects symbols
+  WITHOUT `.NS` suffix. Script auto-appends from
+  `stock_master.yf_ticker`. Double-suffix = 404.
+- **DuckDB stale reads**: Data health calls
+  `invalidate_metadata()` before queries. Without it,
+  fix results don't show until next container restart.
 
 ### Testing & Config
 

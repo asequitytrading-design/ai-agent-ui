@@ -1,6 +1,6 @@
 # AI Agent UI
 
-A fullstack agentic chat application with stock analysis, Prophet forecasting, and portfolio management. LangGraph supervisor with 6 sub-agents, memory-augmented multi-turn conversations with PG-persisted context. Hybrid PostgreSQL + Apache Iceberg data layer with DuckDB read acceleration. Smart Funnel recommendation engine. Automated pipeline orchestration for 752 stocks across India and US markets.
+A fullstack agentic chat application with stock analysis, Prophet forecasting, and portfolio management. LangGraph supervisor with 6 sub-agents, memory-augmented multi-turn conversations with PG-persisted context. Hybrid PostgreSQL + Apache Iceberg data layer with DuckDB read acceleration. Smart Funnel recommendation engine. Automated pipeline orchestration for 817 tickers (755 stocks + 54 ETFs + 8 indices/commodities) across India and US markets.
 
 ---
 
@@ -12,12 +12,14 @@ A fullstack agentic chat application with stock analysis, Prophet forecasting, a
 - **Prophet forecasting** — 3/6/9-month targets, 80% confidence bands, XGBoost ensemble correction, backtest overlay
 - **Portfolio dashboard** — TradingView charts, sector allocation, P&L trend, news sentiment, recommendations widget
 - **Smart Funnel recommendations** — 3-stage pipeline (DuckDB pre-filter → gap analysis → LLM reasoning), market-scoped, unified quota
-- **Piotroski F-Score** — fundamental scoring (747 stocks), market filter (India/US)
+- **54 NSE ETFs** — broad market, sectoral, factor, gold/silver, international, debt ETFs with OHLCV, analytics, sentiment, and Prophet forecasts
+- **Piotroski F-Score** — fundamental scoring (755 stocks), market filter (India/US)
 - **Sentiment scoring** — LLM headline analysis, hot/learning/cold tiers, market fallback
 - **Pipeline orchestration** — 4-step pipelines (Data Refresh → Analytics → Sentiment → Piotroski), force run, DAG viz
 - **Scheduler** — cron jobs with freshness gates, CV reuse (30-day TTL), catchup on restart
-- **Data Health dashboard** — 5 health cards with fix buttons, NaN cleanup, backfill from yfinance
-- **Insights screener** — 752 stocks with sentiment, RSI, MACD, Sharpe, tag/index filters (Nifty 50/100/500, cap sizes)
+- **Data Health dashboard** — 5 health cards with async fix buttons, live progress bars, parallelized DuckDB queries (~1.4s)
+- **Insights screener** — 809 tickers with sentiment, RSI, MACD, Sharpe, tag/index filters (Nifty 50/100/500, cap sizes)
+- **Live market ticker** — Nifty 50 + Sensex in header, dual-source (NSE India + Yahoo Finance), 30s refresh
 - **Dual payment gateways** — Razorpay (INR) + Stripe (USD)
 - **Docker Compose** — 5 services, single command start
 - **19 CLI pipeline commands** — seed, download, analytics, sentiment, forecast, screen, refresh
@@ -30,7 +32,7 @@ A fullstack agentic chat application with stock analysis, Prophet forecasting, a
 |---------|-------|------|
 | **Frontend** | Next.js 16 + React 19 + Tailwind 4 + lightweight-charts v5 | 3000 |
 | **Backend** | FastAPI + LangChain 1.2 + SQLAlchemy 2.0 async | 8181 |
-| **PostgreSQL** | pgvector:pg16 (14 OLTP tables + pgvector) | 5432 |
+| **PostgreSQL** | pgvector:pg16 (18 OLTP tables + pgvector) | 5432 |
 | **Redis** | Redis 7 Alpine | 6379 |
 | **Docs** | MkDocs Material 9 | 8000 |
 
@@ -96,8 +98,8 @@ graph TD
     end
 
     subgraph Data["Data Layer"]
-        PG["PostgreSQL 16<br/><i>14 tables + pgvector</i>"]
-        IC["Iceberg<br/><i>12 tables (1.4M OHLCV rows)</i>"]
+        PG["PostgreSQL 16<br/><i>18 tables + pgvector</i>"]
+        IC["Iceberg<br/><i>14 tables (1.4M OHLCV rows)</i>"]
         DK["DuckDB<br/><i>fast reads + metadata cache</i>"]
         RD["Redis 7<br/><i>cache + token deny-list</i>"]
     end
@@ -113,9 +115,147 @@ graph TD
 
 ---
 
+## ReAct Agent Loop
+
+Each sub-agent uses a ReAct (Reason + Act) loop with tool calling. The supervisor routes to the right agent, which iterates until it has enough data to synthesize a response.
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant G as Guardrail
+    participant R as Router
+    participant S as Supervisor
+    participant A as Sub-Agent
+    participant L as LLM (Groq)
+    participant T as Tools
+
+    U->>G: message via WebSocket
+    G->>G: content safety + ticker extraction
+    G->>R: intent classification
+    R->>S: route to agent (portfolio/stock/forecast/...)
+
+    loop ReAct iterations (max 12)
+        S->>A: invoke agent
+        A->>L: prompt + tools + history
+        L-->>A: tool_call or final_answer
+
+        alt Tool Call
+            A->>T: execute tool (e.g. fetch_stock_data)
+            T-->>A: tool result
+            A-->>U: stream tool_start / tool_done events
+            A->>A: append result, increment iteration
+        else Final Answer
+            A->>S: return response
+        end
+    end
+
+    S->>L: synthesis pass (format + citations)
+    L-->>U: stream final response
+    S->>S: save context + extract facts
+```
+
+---
+
+## Auth Flow
+
+JWT access tokens (60 min) + HttpOnly refresh cookies (7 days). Token deny-list in Redis. OAuth PKCE for Google SSO.
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant F as Frontend
+    participant A as Backend /auth
+    participant R as Redis
+    participant P as PostgreSQL
+
+    Note over B,P: Login Flow
+    B->>F: email + password
+    F->>A: POST /auth/login
+    A->>P: verify bcrypt hash
+    P-->>A: user record
+    A->>A: sign JWT (60 min)
+    A-->>F: {access_token} + Set-Cookie (refresh, 7d, HttpOnly)
+    F->>F: store token in localStorage
+
+    Note over B,P: Authenticated Request
+    F->>A: GET /v1/... + Authorization: Bearer <jwt>
+    A->>A: decode JWT, check expiry
+    A->>R: check deny-list (revoked?)
+    R-->>A: not revoked
+    A-->>F: 200 response
+
+    Note over B,P: Token Refresh
+    F->>A: POST /auth/refresh (HttpOnly cookie)
+    A->>A: verify refresh token
+    A->>R: deny old access token
+    A->>A: sign new JWT pair
+    A-->>F: {access_token} + rotated cookie
+
+    Note over B,P: Google OAuth PKCE
+    B->>F: click "Sign in with Google"
+    F->>B: redirect to Google (PKCE challenge)
+    B->>A: callback with auth code
+    A->>P: upsert user (email, avatar)
+    A-->>F: JWT pair (same as login)
+```
+
+---
+
+## Data Pipeline & Ticker Classification
+
+### Ticker Types
+
+The registry classifies every ticker for correct pipeline routing:
+
+| Type | Count | Examples | Pipelines |
+|------|-------|---------|-----------|
+| `stock` | 755 | RELIANCE.NS, AAPL | All (OHLCV, Analytics, Sentiment, Piotroski, Forecast) |
+| `etf` | 54 | NIFTYBEES.NS, GOLDBEES.NS | OHLCV, Analytics, Sentiment, Forecast |
+| `index` | 4 | ^NSEI, ^GSPC, ^VIX | OHLCV only (used as forecast regressors) |
+| `commodity` | 4 | CL=F, ^TNX, DX-Y.NYB | OHLCV only (used as forecast regressors) |
+
+### Data Health Fix Panel
+
+The Maintenance page provides one-click fix buttons for each pipeline:
+
+```mermaid
+graph LR
+    subgraph Health["Data Health Panel"]
+        O["OHLCV<br/>817/817"]
+        A["Analytics<br/>808/809"]
+        S["Sentiment<br/>809/809"]
+        P["Piotroski<br/>754/755"]
+        F["Forecasts<br/>809/809"]
+    end
+
+    subgraph Fix["Fix Pipeline (async)"]
+        FX["POST /admin/data-health/fix"]
+        ST["GET .../fix/{run_id}/status"]
+    end
+
+    subgraph Executors["Same Executors as Scheduler"]
+        E1["batch_data_refresh"]
+        E2["execute_compute_analytics"]
+        E3["execute_run_sentiment"]
+        E4["execute_run_piotroski"]
+        E5["execute_run_forecasts"]
+    end
+
+    O -->|Fix Stale Data| FX
+    A -->|Compute Missing| FX
+    S -->|Refresh Scores| FX
+    P -->|Score Missing| FX
+    F -->|Run Forecasts| FX
+    FX --> E1 & E2 & E3 & E4 & E5
+    FX -.->|run_id| ST
+    ST -.->|poll 2s| Health
+```
+
+---
+
 ## Database
 
-### PostgreSQL (14 tables — OLTP, row-level CRUD)
+### PostgreSQL (18 tables — OLTP, row-level CRUD)
 
 | Table | Purpose |
 |-------|---------|
@@ -124,23 +264,26 @@ graph TD
 | `auth.payment_transactions` | Razorpay/Stripe ledger |
 | `public.user_memories` | pgvector semantic memory (768-dim) |
 | `public.conversation_contexts` | Chat context persistence (cross-session resume) |
-| `stocks.registry` | Ticker registry (yf_ticker, market) |
+| `stocks.registry` | Ticker registry (yf_ticker, market, ticker_type) |
 | `stocks.scheduled_jobs` | Cron job definitions (force flag) |
 | `stocks.scheduler_runs` | Execution records (status, progress) |
 | `stocks.recommendation_runs` | Smart Funnel run metadata + portfolio snapshot |
 | `stocks.recommendations` | Individual recs with data_signals JSONB |
+| `stocks.recommendation_outcomes` | 30/60/90-day outcome checkpoints |
+| `stocks.market_indices` | Nifty+Sensex ticker cache (PG+Redis) |
 | `stock_master` | Pipeline universe (symbol, ISIN, yf_ticker) |
-| `stock_tags` | Temporal tags (nifty50, largecap, etc.) |
+| `stock_tags` | Temporal tags (nifty50, largecap, etf, etc.) |
 | `ingestion_cursor` | Keyset pagination cursor |
 | `ingestion_skipped` | Failed ticker log + retry |
 | `pipelines` | Pipeline chain definitions |
 | `pipeline_steps` | Ordered steps within pipelines |
 
-### Iceberg (12 tables — OLAP, append-only analytics)
+### Iceberg (14 tables — OLAP, append-only analytics)
 
 `ohlcv` (1.4M rows), `company_info`, `dividends`, `quarterly_results`,
 `analysis_summary`, `forecast_runs`, `forecasts`, `piotroski_scores`,
-`sentiment_scores`, `llm_pricing`, `llm_usage`, `portfolio_transactions`
+`sentiment_scores`, `llm_pricing`, `llm_usage`, `portfolio_transactions`,
+`audit_log`, `usage_history`
 
 DuckDB serves as the primary read engine with in-memory metadata cache.
 
@@ -172,11 +315,12 @@ Data Refresh → Compute Analytics → Sentiment → Piotroski
 
 | Optimization | Before | After |
 |-------------|--------|-------|
-| OHLCV batch load (748 tickers) | 167s | 0.87s |
+| OHLCV batch load (817 tickers) | 167s | 0.87s |
 | Freshness check | 329s | 0.44s |
 | Forecast writes | 11.5 min | ~2s |
 | Progress updates | 9s/call | 14ms/call |
-| Weekly forecast (748 tickers) | ~33 min | ~8 min |
+| Weekly forecast (809 tickers) | ~33 min | ~8 min |
+| Data health scan | 2.4s | 1.4s |
 
 Workers: `cpu_count // 2`. Prophet CV: `parallel=None` (no nested processes).
 
@@ -189,7 +333,7 @@ Workers: `cpu_count // 2`. Prophet CV: `parallel=None` (no nested processes).
 | Portfolio | `/dashboard` | Hero stats, sector allocation, P&L, news, forecast |
 | Analytics Home | `/analytics` | Stock cards, search, bulk actions |
 | Stock Analysis | `/analytics/analysis` | Candlestick + indicators, forecast chart, compare |
-| Insights | `/analytics/insights` | Screener (752 stocks), Risk, Sectors, Targets, Dividends, Correlation, Quarterly, Piotroski |
+| Insights | `/analytics/insights` | Screener (809 tickers), Risk, Sectors, Targets, Dividends, Correlation, Quarterly, Piotroski |
 | Admin | `/admin` | Users, Audit, LLM Observability, Maintenance, Transactions, Scheduler |
 | Docs | `/docs` | MkDocs Material embed |
 
@@ -230,18 +374,6 @@ Paid:         Anthropic claude-sonnet-4-6              (final fallback)
 ```
 
 Progressive compression: system prompt → tool results → context window.
-
----
-
-## Auth Flow
-
-JWT access tokens (60 min) + HttpOnly refresh cookies (7 days).
-Token deny-list in Redis. OAuth PKCE for Google SSO.
-
-```
-POST /auth/login → {access_token} + HttpOnly cookie
-POST /auth/refresh → rotated tokens
-```
 
 ---
 

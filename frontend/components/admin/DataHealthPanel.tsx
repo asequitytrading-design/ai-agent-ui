@@ -9,6 +9,8 @@ import { useState, useCallback } from "react";
 import {
   useDataHealth,
   type DataHealthResult,
+  type FixTarget,
+  type FixProgress,
 } from "@/hooks/useAdminData";
 
 type Status = "green" | "yellow" | "red";
@@ -95,18 +97,63 @@ function Skeleton() {
   );
 }
 
+function ProgressBar({
+  progress,
+}: {
+  progress: FixProgress;
+}) {
+  const pct =
+    progress.tickers_total > 0
+      ? Math.round(
+          (progress.tickers_done /
+            progress.tickers_total) *
+            100,
+        )
+      : 0;
+  const done =
+    progress.status === "success" ||
+    progress.status === "failed";
+  return (
+    <div className="mt-2 space-y-1">
+      <div className="h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+        <div
+          className={`h-full rounded-full transition-all duration-500 ${
+            done
+              ? progress.status === "success"
+                ? "bg-emerald-500"
+                : "bg-red-500"
+              : "bg-indigo-500"
+          }`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <p className="text-[10px] text-gray-500">
+        {progress.tickers_done}/
+        {progress.tickers_total} tickers
+        {done && ` \u2014 ${progress.status}`}
+      </p>
+    </div>
+  );
+}
+
 // ── Cards ──────────────────────────────────────────
 
 function OhlcvCard({
   d,
   total,
+  onFixNaN,
+  fixingNaN,
   onFix,
   fixing,
+  fixProgress,
 }: {
   d: DataHealthResult["ohlcv"];
   total: number;
-  onFix: (a: string) => void;
-  fixing: string | null;
+  onFixNaN: (a: string) => void;
+  fixingNaN: string | null;
+  onFix: (t: FixTarget) => void;
+  fixing: FixTarget | null;
+  fixProgress: FixProgress | null;
 }) {
   const hasNaN = d.nan_close_count > 0;
   const hasMissing = d.missing_latest_count > 0;
@@ -160,25 +207,28 @@ function OhlcvCard({
           {hasNaN && (
             <FixBtn
               label="Clean NaN Rows"
-              onClick={() => onFix("backfill_nan")}
-              busy={fixing === "backfill_nan"}
+              onClick={() => onFixNaN("backfill_nan")}
+              busy={fixingNaN === "backfill_nan"}
               variant="red"
             />
           )}
           {(hasMissing || hasStale) && (
             <FixBtn
-              label="Backfill from yfinance"
-              onClick={() => onFix("backfill_missing")}
-              busy={fixing === "backfill_missing"}
+              label="Fix Stale Data"
+              onClick={() => onFix("ohlcv")}
+              busy={fixing === "ohlcv"}
+              variant="indigo"
             />
           )}
         </div>
       )}
-      {status !== "green" && (
-        <Suggestion
-          text="After fixing, re-run Data Refresh pipeline with force."
-        />
+      {fixing === "ohlcv" && fixProgress && (
+        <ProgressBar progress={fixProgress} />
       )}
+      {status !== "green" &&
+        fixing !== "ohlcv" && (
+          <Suggestion text="Fix triggers the same pipeline as the scheduler." />
+        )}
       {status === "green" && (
         <Suggestion text="All tickers have clean, up-to-date OHLCV data." />
       )}
@@ -189,9 +239,15 @@ function OhlcvCard({
 function ForecastCard({
   d,
   total,
+  onFix,
+  fixing,
+  fixProgress,
 }: {
   d: DataHealthResult["forecasts"];
   total: number;
+  onFix: (t: FixTarget) => void;
+  fixing: FixTarget | null;
+  fixProgress: FixProgress | null;
 }) {
   const missing = total - d.total_tickers;
   const status: Status =
@@ -241,9 +297,20 @@ function ForecastCard({
           </p>
         )}
       </div>
-      {status !== "green" ? (
-        <Suggestion text="Run Forecast pipeline with force=true to recompute. Extreme predictions need model tuning." />
-      ) : (
+      {status !== "green" && (
+        <div className="flex flex-wrap gap-2 mt-3">
+          <FixBtn
+            label="Run Forecasts"
+            onClick={() => onFix("forecasts")}
+            busy={fixing === "forecasts"}
+            variant="indigo"
+          />
+        </div>
+      )}
+      {fixing === "forecasts" && fixProgress && (
+        <ProgressBar progress={fixProgress} />
+      )}
+      {status === "green" && (
         <Suggestion text="All forecasts are fresh and within normal range." />
       )}
     </div>
@@ -253,9 +320,15 @@ function ForecastCard({
 function SentimentCard({
   d,
   total,
+  onFix,
+  fixing,
+  fixProgress,
 }: {
   d: DataHealthResult["sentiment"];
   total: number;
+  onFix: (t: FixTarget) => void;
+  fixing: FixTarget | null;
+  fixProgress: FixProgress | null;
 }) {
   const missing = total - d.total_tickers;
   const status: Status =
@@ -293,9 +366,20 @@ function SentimentCard({
           </p>
         )}
       </div>
-      {status !== "green" ? (
-        <Suggestion text="Run Sentiment pipeline to refresh scores." />
-      ) : (
+      {status !== "green" && (
+        <div className="flex flex-wrap gap-2 mt-3">
+          <FixBtn
+            label="Refresh Scores"
+            onClick={() => onFix("sentiment")}
+            busy={fixing === "sentiment"}
+            variant="indigo"
+          />
+        </div>
+      )}
+      {fixing === "sentiment" && fixProgress && (
+        <ProgressBar progress={fixProgress} />
+      )}
+      {status === "green" && (
         <Suggestion text="All sentiment scores are up to date." />
       )}
     </div>
@@ -305,9 +389,15 @@ function SentimentCard({
 function PiotroskiCard({
   d,
   total,
+  onFix,
+  fixing,
+  fixProgress,
 }: {
   d: DataHealthResult["piotroski"];
   total: number;
+  onFix: (t: FixTarget) => void;
+  fixing: FixTarget | null;
+  fixProgress: FixProgress | null;
 }) {
   const status: Status =
     d.missing_tickers.length > 10
@@ -346,9 +436,20 @@ function PiotroskiCard({
           </p>
         )}
       </div>
-      {status !== "green" ? (
-        <Suggestion text="Run Piotroski pipeline to score missing tickers." />
-      ) : (
+      {status !== "green" && (
+        <div className="flex flex-wrap gap-2 mt-3">
+          <FixBtn
+            label="Score Missing"
+            onClick={() => onFix("piotroski")}
+            busy={fixing === "piotroski"}
+            variant="indigo"
+          />
+        </div>
+      )}
+      {fixing === "piotroski" && fixProgress && (
+        <ProgressBar progress={fixProgress} />
+      )}
+      {status === "green" && (
         <Suggestion text="All Piotroski scores are current." />
       )}
     </div>
@@ -358,9 +459,15 @@ function PiotroskiCard({
 function AnalyticsCard({
   d,
   total,
+  onFix,
+  fixing,
+  fixProgress,
 }: {
   d: DataHealthResult["analytics"];
   total: number;
+  onFix: (t: FixTarget) => void;
+  fixing: FixTarget | null;
+  fixProgress: FixProgress | null;
 }) {
   const status: Status =
     d.missing_tickers.length > 10
@@ -388,9 +495,20 @@ function AnalyticsCard({
           </p>
         )}
       </div>
-      {status !== "green" ? (
-        <Suggestion text="Run Compute Analytics pipeline to fill gaps." />
-      ) : (
+      {status !== "green" && (
+        <div className="flex flex-wrap gap-2 mt-3">
+          <FixBtn
+            label="Compute Missing"
+            onClick={() => onFix("analytics")}
+            busy={fixing === "analytics"}
+            variant="indigo"
+          />
+        </div>
+      )}
+      {fixing === "analytics" && fixProgress && (
+        <ProgressBar progress={fixProgress} />
+      )}
+      {status === "green" && (
         <Suggestion text="All analytics summaries are computed." />
       )}
     </div>
@@ -400,28 +518,44 @@ function AnalyticsCard({
 // ── Main Panel ─────────────────────────────────────
 
 export function DataHealthPanel() {
-  const { data, loading, error, refresh, fixOhlcv } =
-    useDataHealth();
-  const [fixing, setFixing] = useState<string | null>(
-    null,
-  );
+  const {
+    data,
+    loading,
+    error,
+    refresh,
+    fixOhlcv,
+    triggerFix,
+    fixProgress,
+    fixTarget,
+  } = useDataHealth();
+  const [fixingNaN, setFixingNaN] =
+    useState<string | null>(null);
 
-  const handleFix = useCallback(
+  const handleFixNaN = useCallback(
     async (action: string) => {
-      setFixing(action);
+      setFixingNaN(action);
       try {
         await fixOhlcv(
-          action as
-            | "backfill_nan"
-            | "backfill_missing",
+          action as "backfill_nan",
         );
         refresh();
       } catch {
         /* error surfaced on re-scan */
       }
-      setFixing(null);
+      setFixingNaN(null);
     },
     [fixOhlcv, refresh],
+  );
+
+  const handleFix = useCallback(
+    async (target: FixTarget) => {
+      try {
+        await triggerFix(target);
+      } catch {
+        /* error surfaced on re-scan */
+      }
+    },
+    [triggerFix],
   );
 
   if (error) {
@@ -448,6 +582,10 @@ export function DataHealthPanel() {
   }
 
   const total = data?.total_registry ?? 0;
+  const totalAnalyzable =
+    data?.total_analyzable ?? total;
+  const totalFinancial =
+    data?.total_financial ?? total;
 
   return (
     <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900/80 p-5">
@@ -475,24 +613,39 @@ export function DataHealthPanel() {
           <OhlcvCard
             d={data.ohlcv}
             total={total}
+            onFixNaN={handleFixNaN}
+            fixingNaN={fixingNaN}
             onFix={handleFix}
-            fixing={fixing}
+            fixing={fixTarget}
+            fixProgress={fixProgress}
           />
           <AnalyticsCard
             d={data.analytics}
-            total={total}
+            total={totalAnalyzable}
+            onFix={handleFix}
+            fixing={fixTarget}
+            fixProgress={fixProgress}
           />
           <SentimentCard
             d={data.sentiment}
-            total={total}
+            total={totalAnalyzable}
+            onFix={handleFix}
+            fixing={fixTarget}
+            fixProgress={fixProgress}
           />
           <PiotroskiCard
             d={data.piotroski}
-            total={total}
+            total={totalFinancial}
+            onFix={handleFix}
+            fixing={fixTarget}
+            fixProgress={fixProgress}
           />
           <ForecastCard
             d={data.forecasts}
-            total={total}
+            total={totalAnalyzable}
+            onFix={handleFix}
+            fixing={fixTarget}
+            fixProgress={fixProgress}
           />
         </div>
       ) : null}

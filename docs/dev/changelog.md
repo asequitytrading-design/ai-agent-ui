@@ -4,6 +4,38 @@ Session-by-session record of what was built, changed, and fixed.
 
 ---
 
+## Apr 14, 2026 — Data Health Fix Panel + ETF Ingestion + ticker_type
+
+### Features
+- **Data Health Fix Panel**: Unified async fix buttons on all 5 Maintenance cards (OHLCV, Analytics, Sentiment, Piotroski, Forecasts) with live progress bars. Triggers same pipeline executors as scheduler.
+- **ticker_type system**: New `ticker_type` column on `stock_registry` — classifies tickers as `stock` (755), `etf` (54), `index` (4), `commodity` (4). Pipeline filtering via `_analyzable_tickers()` (stock+etf) and `_has_financials()` (stock only).
+- **54 NSE ETFs ingested**: Broad market, sectoral, factor, gold/silver, international, debt, thematic ETFs with 10y OHLCV data. Analytics, sentiment, and forecasts computed for all ETFs.
+- **Indian index currency fix**: `^NSEI` chart shows ₹ instead of $. `detect_market()` now recognizes Indian index tickers. Frontend passes `registryMarket` to `tickerCurrency()`.
+- **Forecast tab filtering**: Hides indices/commodities from dropdown, shows stocks+ETFs. Auto-redirects if non-analyzable ticker selected.
+- **Company name fallback**: Piotroski insights endpoint patches 81 empty company names from `company_info` at query time.
+
+### Performance
+- Data health DuckDB queries parallelized via ThreadPoolExecutor: **2.4s → 1.4s** (42% faster)
+- `invalidate_metadata()` on every health scan to prevent stale DuckDB reads after fix runs
+
+### API Endpoints (new)
+- `POST /v1/admin/data-health/fix` — async fix trigger, returns `run_id`
+- `GET /v1/admin/data-health/fix/{run_id}/status` — progress polling
+
+### Database
+- New column: `stock_registry.ticker_type` (VARCHAR(20), default "stock", indexed)
+- Alembic migration: `b2c3d4e5f6a7_add_ticker_type_to_registry`
+- `get_scheduler_run_by_id()` added to `pg_stocks.py`
+
+### New Files
+- `data/universe/nse_etfs.csv` — 54 NSE ETFs seed file
+- `backend/db/migrations/versions/b2c3d4e5f6a7_add_ticker_type_to_registry.py`
+
+### Jira
+- ASETPLTFRM-305: Fix portfolio comparison chat (round-robin synthesis) → Sprint 7
+
+---
+
 ## Apr 13, 2026 — Market Ticker: Nifty 50 + Sensex Header
 
 ### Features
