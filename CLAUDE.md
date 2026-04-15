@@ -308,6 +308,19 @@ Run `list_memories` to browse all topics. Key categories:
   coverage, interval, data completeness). <0.25 = rejected (hidden).
 - **Sector indices for enrichment**: 10 sector index tickers (5 India,
   5 US) ingested via bulk-download for sector relative strength.
+- **FinBERT sentiment**: `sentiment_scorer=finbert` in config
+  routes batch scoring to ProsusAI/finbert (CPU, zero API
+  cost). LLM cascade kept for chat.
+  `refresh_ticker_sentiment()` has idempotent check — won't
+  re-score if today's data exists even on forced runs.
+- **XGBoost indicator casing**: `compute_indicators()` returns
+  Title-case (RSI_14) but `_FEATURES` expects lowercase
+  (rsi_14). Fix: `tech.columns = [c.lower()]` after load.
+  Without this, all 5 technical indicators silently dropped.
+- **Forecast run dedup**: Multiple runs on same `run_date` —
+  use `computed_at` (exact UTC timestamp) for dedup, not
+  `run_date`. Affects `get_dashboard_forecast_runs()` and
+  `get_latest_forecast_run()`.
 
 ### Database & PG
 
@@ -337,6 +350,14 @@ Run `list_memories` to browse all topics. Key categories:
 - **Docker seed script**: Set `PYICEBERG_CATALOG__LOCAL__URI`
   before pyiceberg import. Mount `fixtures/` volume.
 - **Redis cache**: After code changes: `redis-cli FLUSHALL`.
+- **Retention API blocking**: `RetentionManager.run_cleanup()`
+  is synchronous Iceberg I/O. Must wrap in
+  `asyncio.to_thread()` when called from async route
+  handlers, otherwise blocks uvicorn event loop.
+- **torch CPU-only in Docker**: Install via
+  `pip install torch --index-url .../whl/cpu`. Do NOT add
+  torch to requirements.txt (needs special index URL).
+  Add `transformers>=4.40` to requirements.txt.
 
 ### LLM & Chat
 
@@ -381,6 +402,9 @@ Run `list_memories` to browse all topics. Key categories:
 - **DuckDB stale reads**: Data health calls
   `invalidate_metadata()` before queries. Without it,
   fix results don't show until next container restart.
+- **Confidence badge in `<p>`**: Use `<span>` not `<div>`
+  for inline elements inside `<p>` tags. `<div>` inside
+  `<p>` causes React hydration errors.
 
 ### Testing & Config
 
