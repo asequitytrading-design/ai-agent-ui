@@ -26,12 +26,23 @@ import tools._forecast_shared as _sh
 from langchain_core.tools import tool
 from tools._forecast_accuracy import (
     _generate_forecast_summary,
+    compute_confidence_score,
+    confidence_badge,
+)
+from tools._forecast_features import (
+    compute_tier1_features,
+    compute_tier2_features,
 )
 from tools._forecast_model import (
     _generate_forecast,
     _prepare_data_for_prophet,
     _train_prophet_model,
 )
+from tools._forecast_regime import (
+    apply_technical_bias,
+    classify_regime,
+)
+from tools._forecast_shared import _enrich_regressors
 from validation import validate_ticker
 
 # Module-level logger — required for LangChain @tool
@@ -215,11 +226,88 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
             prophet_df,
         )
 
+        # ── Regime classification ──
+        analysis_row = None
+        try:
+            repo_r = _sh._get_repo()
+            if repo_r is not None:
+                analysis_df = (
+                    repo_r.get_analysis_summary_batch(
+                        [ticker],
+                    )
+                )
+                if (
+                    analysis_df is not None
+                    and not analysis_df.empty
+                ):
+                    analysis_row = (
+                        analysis_df.iloc[0].to_dict()
+                    )
+        except Exception:
+            _logger.debug(
+                "analysis_summary unavailable for %s",
+                ticker,
+                exc_info=True,
+            )
+
+        vol = (analysis_row or {}).get(
+            "annualized_volatility"
+        )
+        regime = classify_regime(vol)
+
+        piotroski_row = None
+        try:
+            repo_r2 = _sh._get_repo()
+            if repo_r2 is not None:
+                scores = (
+                    repo_r2.get_piotroski_scores_batch(
+                        [ticker],
+                    )
+                )
+                piotroski_row = (scores or {}).get(ticker)
+        except Exception:
+            _logger.debug(
+                "piotroski unavailable for %s",
+                ticker,
+                exc_info=True,
+            )
+
+        quarterly_rows = None
+        try:
+            repo_r3 = _sh._get_repo()
+            if repo_r3 is not None:
+                qr = (
+                    repo_r3.get_quarterly_results_batch(
+                        [ticker],
+                    )
+                )
+                quarterly_rows = (qr or {}).get(ticker)
+        except Exception:
+            _logger.debug(
+                "quarterly_results unavailable for %s",
+                ticker,
+                exc_info=True,
+            )
+
+        tier1 = compute_tier1_features(
+            analysis_row,
+            piotroski_row,
+            quarterly_rows or [],
+            current_price,
+        )
+        tier2 = compute_tier2_features(df, None, None)
+
+        if regressors is not None:
+            regressors = _enrich_regressors(
+                regressors, ticker, tier1, tier2
+            )
+
         _logger.info("Training Prophet model for %s...", ticker)
         model, train_df = _train_prophet_model(
             prophet_df,
             ticker=ticker,
             regressors=regressors,
+            regime=regime,
         )
 
         forecast_df = _generate_forecast(
@@ -227,6 +315,7 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
             prophet_df,
             months,
             regressors=regressors,
+            regime=regime,
         )
 
         # XGBoost ensemble correction (Phase 3b).
@@ -247,6 +336,17 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
             )
             if _corrected is not None:
                 forecast_df = _corrected
+
+        # Apply technical bias from analysis signals.
+        forecast_df, bias_meta = apply_technical_bias(
+            forecast_df, analysis_row
+        )
+        if bias_meta.get("signals"):
+            _logger.info(
+                "Technical bias applied: %.3f %s",
+                bias_meta["total_bias"],
+                bias_meta["signals"],
+            )
 
         summary = _generate_forecast_summary(
             forecast_df, current_price, ticker, months
@@ -391,6 +491,21 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
             )
             acc_header = "MODEL ACCURACY"
 
+        # Confidence score from accuracy + data signals.
+        _total_features = 14
+        _avail = sum(
+            1
+            for v in {**tier1, **tier2}.values()
+            if v != 0.0
+        ) + 3
+        conf_score, conf_comp = compute_confidence_score(
+            accuracy,
+            min(_avail / _total_features, 1.0),
+        )
+        badge, reason = confidence_badge(
+            conf_score, conf_comp
+        )
+
         # Low-data warning for recently listed stocks
         _data_days = len(prophet_df)
         _low_data_warn = ""
@@ -418,6 +533,13 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
             f"{acc_line}\n"
             f"{_low_data_warn}"
         )
+        report += (
+            f"\n**Confidence:** {badge} "
+            f"({conf_score:.0%})"
+        )
+        if reason:
+            report += f" — {reason}"
+        report += f"\n**Regime:** {regime}"
 
         _logger.info("forecast_stock complete for %s", ticker)
         return report
