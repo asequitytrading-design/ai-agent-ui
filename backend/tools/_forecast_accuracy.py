@@ -270,32 +270,47 @@ def compute_confidence_score(
         Tuple of (score rounded to 4 d.p., components
         dict with each component rounded to 3 d.p.).
     """
-    # --- direction component (weight 0.25) ---
-    # 30% = random floor, 80% = perfect ceiling.
-    # Linear scale: (acc - 30) / 50, clamped 0-1.
-    dir_acc = metrics.get(
-        "directional_accuracy_pct", 52.0
+    import math
+
+    def _safe_get(d, key, default):
+        """Get value from dict, treating None/NaN as default."""
+        v = d.get(key)
+        if v is None:
+            return default
+        try:
+            if math.isnan(float(v)):
+                return default
+        except (TypeError, ValueError):
+            return default
+        return float(v)
+
+    # If no accuracy metrics at all (no CV run), penalise
+    # heavily — these forecasts are unvalidated.
+    has_accuracy = (
+        _safe_get(metrics, "MAPE_pct", None) is not None
+        or _safe_get(metrics, "directional_accuracy_pct",
+                     None) is not None
     )
+
+    # --- direction component (weight 0.25) ---
+    dir_acc = _safe_get(metrics, "directional_accuracy_pct",
+                        50.0 if has_accuracy else 30.0)
     direction = max(0.0, min(1.0, (dir_acc - 30.0) / 50.0))
 
     # --- mase component (weight 0.25) ---
-    # Approximated from MAPE. Naive baseline ≈ 20% MAPE
-    # for equities → mase_approx capped at 2.0.
-    mape = metrics.get("MAPE_pct", 20.0)
+    mape = _safe_get(metrics, "MAPE_pct",
+                     20.0 if has_accuracy else 50.0)
     mase_approx = min(mape / 20.0, 2.0)
     mase = max(0.0, min(1.0, 1.0 - mase_approx / 2.0))
 
     # --- coverage component (weight 0.20) ---
-    # 0.80 = ideal Prophet interval_width.
-    # Penalty grows linearly away from 0.80.
-    cov = metrics.get("coverage", 0.80)
+    cov = _safe_get(metrics, "coverage", 0.80)
     coverage = max(
         0.0, min(1.0, 1.0 - abs(cov - 0.80) * 5.0)
     )
 
     # --- interval width component (weight 0.15) ---
-    # Narrower = better; ratio >= 1 scores 0.
-    iwr = metrics.get("interval_width_ratio", 0.50)
+    iwr = _safe_get(metrics, "interval_width_ratio", 0.50)
     interval = max(0.0, min(1.0, 1.0 - min(iwr, 1.0)))
 
     # --- data completeness component (weight 0.15) ---
