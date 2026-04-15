@@ -546,6 +546,22 @@ export interface RecommendationsResponse {
 }
 
 // ---------------------------------------------------------------
+// Forecast Confidence
+// ---------------------------------------------------------------
+
+export interface ForecastConfidence {
+  score: number;
+  badge: "High" | "Medium" | "Low" | "Rejected";
+  reason: string;
+  direction: number;
+  mase: number;
+  coverage: number;
+  interval: number;
+  data_completeness: number;
+  regime: string;
+}
+
+// ---------------------------------------------------------------
 // Forecast Backtest Overlay
 // ---------------------------------------------------------------
 
