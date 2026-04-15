@@ -1,23 +1,27 @@
 # AI Agent UI
 
-A fullstack agentic chat application built with Next.js and FastAPI. The LLM runs inside an agentic loop — it can call tools, receive their results, and keep iterating until it has a final answer before responding to the user.
+A fullstack agentic chat application with stock analysis, Prophet forecasting, and portfolio management. LangGraph supervisor with 6 sub-agents, memory-augmented multi-turn conversations with PG-persisted context. Hybrid PostgreSQL + Apache Iceberg data layer with DuckDB read acceleration.
 
 ---
 
 ## Feature Highlights
 
-- **5 specialized AI agents** — Portfolio, Stock Analyst, Forecaster, Research, and Sentiment agents, each with purpose-built tool sets, routed by a LangGraph supervisor
-- **Context-aware multi-turn conversations** — rolling summary window maintains coherent long conversations without overflowing the context budget
-- **Recency-aware news** — 7-day default window with time-decay scoring surfaces the most relevant recent headlines first
-- **Dual payment gateways** — Razorpay (INR modal) and Stripe (USD hosted checkout) with pro-rata billing and webhook-verified transaction ledger
-- **Prophet forecasting with ensemble correction** — 3/6/9-month price targets with 80% confidence bands, cached same-day
-- **Real-time WebSocket streaming** — live `tool_start` / `tool_done` events give users visibility into the agentic loop as it runs
-- **Ollama local LLM support** — zero-cost inference as Tier 0 in the cascade; gracefully skipped when unavailable
-- **Docker Compose 5-service orchestration** — `docker compose up -d` starts backend (8181), frontend (3000), PostgreSQL (5432), Redis (6379), and docs (8000)
-- **Memory-augmented chat** — pgvector semantic memory retrieval across sessions; facts + summaries persist and auto-inject into sub-agent prompts
+- **6 specialized AI agents** — Portfolio, Stock Analyst, Forecaster, Research, Sentiment, and Recommendation agents, each with purpose-built tool sets, routed by a LangGraph supervisor with 2-tier intent classification
+- **Context-aware multi-turn conversations** — PG-persisted conversation context with cross-session resume, rolling summary window, intent-aware follow-up detection
+- **Smart Funnel recommendations** — 3-stage pipeline (DuckDB pre-filter → gap analysis → LLM reasoning), market-scoped (India/US), unified quota system
+- **Prophet forecasting with ensemble correction** — 3/6/9-month price targets with 80% confidence bands, XGBoost ensemble, accuracy-adjusted scoring
+- **Historical portfolio tools** — daily value series, period comparison, time-travel queries with flexible date range support
+- **817-ticker pipeline** — automated daily refresh for 755 stocks + 54 ETFs + 8 indices/commodities, with analytics, sentiment, Piotroski F-Score across India and US markets
+- **Memory-augmented chat** — pgvector semantic memory retrieval (768-dim); facts + summaries persist and auto-inject into sub-agent prompts
 - **Round-robin model pools** — load-balanced Groq daily token budgets across 6 models (~2.3M TPD combined)
-- **LLM Observability dashboard** — real-time token tracking, daily budget monitoring, per-model TPD/RPD bars
-- **Lighthouse performance monitoring** — 94/100 score; LHCI gate enforced pre-PR via `npm run perf:check`
+- **Real-time WebSocket streaming** — live `tool_start` / `tool_done` events give users visibility into the agentic loop as it runs
+- **Dual payment gateways** — Razorpay (INR modal) and Stripe (USD hosted checkout) with pro-rata billing
+- **Docker Compose 5-service orchestration** — `docker compose up -d` starts backend (8181), frontend (3000), PostgreSQL (5432), Redis (6379), and docs (8000)
+- **LLM Observability dashboard** — real-time token tracking, per-model TPD/RPD bars, cascade event log
+- **Piotroski F-Score screening** — fundamental scoring (755 stocks), market filter (India/US), index tags (Nifty 50/100/500), company name fallback from company_info
+- **54 NSE ETFs** — broad market, sectoral, factor, gold/silver, international, debt ETFs with OHLCV, analytics, sentiment, and Prophet forecasts
+- **Data Health dashboard** — 5 health cards with async fix buttons, live progress bars, parallelized DuckDB queries (~1.4s), per-pipeline ticker filtering (stock+ETF vs stock-only)
+- **Live market ticker** — Nifty 50 + Sensex in header, dual-source (NSE India + Yahoo Finance), 30s refresh, PG-persisted for restart resilience
 
 ---
 
@@ -41,19 +45,26 @@ A fullstack agentic chat application built with Next.js and FastAPI. The LLM run
 User types a message
        │
        ▼
-Frontend (Next.js) POSTs { message, history } to the backend
+Frontend (Next.js) sends via WebSocket
        │
        ▼
-ChatServer routes the request to the "general" agent
+Guardrail → content safety, financial relevance, ticker extraction
        │
        ▼
-BaseAgent.run() starts the agentic loop:
-  1. Invoke LLM with tools bound
-  2. If LLM calls a tool → execute it, feed result back, repeat
-  3. If no tool calls → return final response
+Router → 2-tier intent classification (keyword → LLM fallback)
        │
        ▼
-Response text returned to the frontend and rendered as a chat bubble
+Supervisor → routes to 1 of 6 sub-agents
+       │
+       ▼
+Sub-agent tool loop:
+  1. Invoke LLM with bound tools (Groq cascade)
+  2. Execute tool calls → feed results back → repeat
+  3. After max_tool_rounds → synthesis pass (gpt-oss-120b)
+       │
+       ▼
+Response streamed via NDJSON → rendered as chat bubble
+Context persisted to PG for cross-session resume
 ```
 
 ---
@@ -86,33 +97,29 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 ```
 ai-agent-ui/
-├── backend/
-│   ├── main.py              # ChatServer class + uvicorn entry point
-│   ├── config.py            # Pydantic Settings (env vars / .env)
-│   ├── logging_config.py    # Centralised logging setup
-│   ├── llm_fallback.py      # FallbackLLM — N-tier Groq + Anthropic cascade
-│   ├── token_budget.py      # Sliding-window TPM/RPM budget tracker
-│   ├── message_compressor.py # 3-stage message compression
-│   ├── agents/              # Agent framework
-│   │   ├── base.py          # BaseAgent ABC (agentic loop)
-│   │   ├── config.py        # AgentConfig dataclass
-│   │   ├── loop.py          # Agentic loop logic
-│   │   ├── stream.py        # NDJSON streaming
-│   │   ├── registry.py      # AgentRegistry
-│   │   ├── general_agent.py # GeneralAgent + factory
-│   │   └── stock_agent.py   # StockAgent + factory
-│   ├── tools/               # Tool framework
-│   │   ├── registry.py      # ToolRegistry
-│   │   ├── time_tool.py     # get_current_time
-│   │   ├── search_tool.py   # search_web
-│   │   └── stock_data_tool.py # 7 Yahoo Finance tools
-│   └── requirements.txt
-├── frontend/
-│   └── app/
-│       ├── page.tsx         # Main chat UI
-│       ├── layout.tsx       # Root layout
-│       └── globals.css      # Tailwind globals
-└── mkdocs.yml
+├── backend/                    # FastAPI (:8181)
+│   ├── main.py                 # Entry point
+│   ├── agents/                 # LangGraph framework
+│   │   ├── configs/            # 7 sub-agent configs
+│   │   ├── nodes/              # 10 graph nodes
+│   │   ├── graph.py            # State graph
+│   │   ├── sub_agents.py       # Tool-calling loop
+│   │   └── conversation_context.py  # PG-persisted context
+│   ├── tools/                  # 32 LLM-callable tools
+│   ├── jobs/                   # Scheduler executors
+│   ├── pipeline/               # CLI pipeline (19 commands)
+│   ├── db/models/              # 18 ORM models
+│   └── llm_fallback.py         # N-tier cascade
+├── auth/                       # JWT + RBAC + OAuth
+├── stocks/repository.py        # Iceberg CRUD (DuckDB-first)
+├── frontend/                   # Next.js 16 (:3000)
+│   ├── app/                    # 12 pages
+│   ├── components/             # 30+ components
+│   └── hooks/                  # 19 SWR data hooks
+├── tests/                      # 88 pytest files
+├── e2e/                        # 65 Playwright specs
+├── scripts/                    # 37 utilities
+└── docker-compose.yml          # 5 services
 ```
 
 ---

@@ -56,6 +56,95 @@ def _check_existing_data(ticker: str) -> dict:
         return None
 
 
+_etf_symbols: set[str] | None = None
+
+
+def _load_etf_symbols() -> set[str]:
+    """Load ETF symbols from stock_master tags.
+
+    Cached after first call to avoid repeated PG
+    queries during batch operations.
+    """
+    global _etf_symbols  # noqa: PLW0603
+    if _etf_symbols is not None:
+        return _etf_symbols
+    try:
+        from backend.db.engine import (
+            get_session_factory,
+        )
+        from backend.db.models.stock_master import (
+            StockMaster,
+        )
+        from backend.db.models.stock_tag import (
+            StockTag,
+        )
+
+        import asyncio
+        from sqlalchemy import select
+
+        sf = get_session_factory()
+
+        async def _q():
+            async with sf() as s:
+                r = await s.execute(
+                    select(StockMaster.symbol)
+                    .join(StockTag)
+                    .where(
+                        StockTag.tag == "etf",
+                        StockTag.removed_at.is_(
+                            None,
+                        ),
+                    )
+                )
+                return {
+                    row[0] for row in r.fetchall()
+                }
+
+        try:
+            loop = asyncio.get_running_loop()
+            import concurrent.futures
+
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=1,
+            ) as pool:
+                syms = pool.submit(
+                    asyncio.run, _q(),
+                ).result()
+        except RuntimeError:
+            syms = asyncio.run(_q())
+        _etf_symbols = syms
+    except Exception:
+        _logger.debug(
+            "ETF symbol load failed",
+            exc_info=True,
+        )
+        _etf_symbols = set()
+    return _etf_symbols
+
+
+def _detect_ticker_type(ticker: str) -> str:
+    """Classify a ticker as stock, index, commodity,
+    or etf.
+
+    Index tickers start with ``^``.  Commodity futures
+    end with ``=F`` or contain ``.NYB``.  ETFs are
+    detected via stock_master tags (cached).
+    Everything else is a stock.
+    """
+    if ticker.startswith("^"):
+        return "index"
+    if "=F" in ticker or ".NYB" in ticker:
+        return "commodity"
+
+    # Check cached ETF symbols from stock_master
+    clean = ticker.replace(".NS", "").replace(
+        ".BO", "",
+    )
+    if clean in _load_etf_symbols():
+        return "etf"
+    return "stock"
+
+
 def _update_registry(ticker: str, df: pd.DataFrame, file_path: Path) -> None:
     """Update the Iceberg stock registry with metadata for a ticker.
 
@@ -84,4 +173,5 @@ def _update_registry(ticker: str, df: pd.DataFrame, file_path: Path) -> None:
         date_range_start=df.index.min().date(),
         date_range_end=df.index.max().date(),
         market=market,
+        ticker_type=_detect_ticker_type(ticker),
     )

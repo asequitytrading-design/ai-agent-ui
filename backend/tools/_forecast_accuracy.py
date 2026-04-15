@@ -86,12 +86,18 @@ def _calculate_forecast_accuracy(
                 _cv_train[reg_name] = _cv_train[reg_name].ffill().bfill()
         _cv_model.fit(_cv_train)
 
+        # parallel=None avoids nested process spawning.
+        # With 5 outer ThreadPoolExecutor workers,
+        # parallel="processes" would spawn 50+ sub-
+        # processes on 10 cores, causing 2x contention.
+        # Sequential CV within each thread is faster
+        # overall (~17 min vs ~31 min for 748 tickers).
         df_cv = cross_validation(
             _cv_model,
             initial="730 days",
             period="90 days",
             horizon="90 days",
-            parallel="processes",
+            parallel=None,
         )
         metrics = performance_metrics(df_cv)
         mae = float(metrics["mae"].mean())
@@ -118,10 +124,54 @@ def _calculate_forecast_accuracy(
             rmse,
             mape,
         )
+        # Deduplicate backtest: keep last prediction
+        # per date (multiple folds may predict same ds).
+        bt = (
+            df_cv[["ds", "yhat", "y"]]
+            .groupby("ds")
+            .last()
+            .reset_index()
+            .sort_values("ds")
+        )
+
+        # Extended accuracy metrics from backtest
+        err_pct = (
+            ((bt["yhat"] - bt["y"]) / bt["y"]).abs()
+            * 100
+        )
+        max_err = float(err_pct.max())
+        p50_err = float(err_pct.median())
+        p90_err = float(err_pct.quantile(0.90))
+
+        # Directional accuracy: % of times model
+        # predicted same direction as actual movement
+        actual_dir = bt["y"].diff().apply(
+            lambda x: 1 if x > 0 else -1,
+        )
+        pred_dir = bt["yhat"].diff().apply(
+            lambda x: 1 if x > 0 else -1,
+        )
+        valid = actual_dir.iloc[1:].reset_index(
+            drop=True,
+        )
+        predicted = pred_dir.iloc[1:].reset_index(
+            drop=True,
+        )
+        dir_acc = float(
+            (valid == predicted).mean() * 100,
+        )
+
         return {
             "MAE": round(mae, 2),
             "RMSE": round(rmse, 2),
             "MAPE_pct": round(mape, 2),
+            "directional_accuracy_pct": round(
+                dir_acc, 1,
+            ),
+            "max_error_pct": round(max_err, 1),
+            "p50_error_pct": round(p50_err, 1),
+            "p90_error_pct": round(p90_err, 1),
+            "backtest_df": bt,
         }
     except Exception as exc:
         _logger.warning(

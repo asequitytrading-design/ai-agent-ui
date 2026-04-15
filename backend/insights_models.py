@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 # Screener
 # ---------------------------------------------------------------
 
+
 class ScreenerRow(BaseModel):
     """Single row in the Screener table."""
 
@@ -22,11 +23,14 @@ class ScreenerRow(BaseModel):
     rsi_signal: str | None = None
     macd_signal: str | None = None
     sma_200_signal: str | None = None
+    sentiment_score: float | None = None
+    sentiment_headlines: int | None = None
     annualized_return_pct: float | None = None
     annualized_volatility_pct: float | None = None
     sharpe_ratio: float | None = None
     sector: str | None = None
     market: str = "us"
+    tags: list[str] = Field(default_factory=list)
 
 
 class ScreenerResponse(BaseModel):
@@ -38,11 +42,15 @@ class ScreenerResponse(BaseModel):
     sectors: list[str] = Field(
         default_factory=list,
     )
+    tags: list[str] = Field(
+        default_factory=list,
+    )
 
 
 # ---------------------------------------------------------------
 # Price Targets
 # ---------------------------------------------------------------
+
 
 class TargetRow(BaseModel):
     """Single row in the Price Targets table."""
@@ -80,6 +88,7 @@ class TargetsResponse(BaseModel):
 # Dividends
 # ---------------------------------------------------------------
 
+
 class DividendRow(BaseModel):
     """Single row in the Dividends table."""
 
@@ -108,6 +117,7 @@ class DividendsResponse(BaseModel):
 # ---------------------------------------------------------------
 # Risk Metrics
 # ---------------------------------------------------------------
+
 
 class RiskRow(BaseModel):
     """Single row in the Risk Metrics table."""
@@ -139,6 +149,7 @@ class RiskResponse(BaseModel):
 # Sectors
 # ---------------------------------------------------------------
 
+
 class SectorRow(BaseModel):
     """Aggregated sector summary row."""
 
@@ -161,6 +172,7 @@ class SectorsResponse(BaseModel):
 # Correlation
 # ---------------------------------------------------------------
 
+
 class CorrelationResponse(BaseModel):
     """Correlation heatmap data."""
 
@@ -176,6 +188,7 @@ class CorrelationResponse(BaseModel):
 # ---------------------------------------------------------------
 # Quarterly
 # ---------------------------------------------------------------
+
 
 class QuarterlyRow(BaseModel):
     """Single quarterly results row."""
@@ -207,3 +220,44 @@ class QuarterlyResponse(BaseModel):
     sectors: list[str] = Field(
         default_factory=list,
     )
+
+
+# ---------------------------------------------------------------
+# Piotroski F-Score
+# ---------------------------------------------------------------
+
+
+class PiotroskiRow(BaseModel):
+    """Single row in the Piotroski F-Score table."""
+
+    ticker: str
+    company_name: str | None = None
+    total_score: int = 0
+    label: str = "Weak"
+    roa_positive: bool = False
+    operating_cf_positive: bool = False
+    roa_increasing: bool = False
+    cf_gt_net_income: bool = False
+    leverage_decreasing: bool = False
+    current_ratio_increasing: bool = False
+    no_dilution: bool = False
+    gross_margin_increasing: bool = False
+    asset_turnover_increasing: bool = False
+    market_cap: int | None = None
+    revenue: float | None = None
+    avg_volume: int | None = None
+    sector: str | None = None
+    industry: str | None = None
+    score_date: str | None = None
+
+
+class PiotroskiResponse(BaseModel):
+    """Piotroski F-Score tab response."""
+
+    rows: list[PiotroskiRow] = Field(
+        default_factory=list,
+    )
+    sectors: list[str] = Field(
+        default_factory=list,
+    )
+    score_date: str | None = None

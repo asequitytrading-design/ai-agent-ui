@@ -18,6 +18,11 @@ _REPORT_TOOLS = frozenset({
     "forecast_stock",
 })
 
+_NEWS_TOOLS = frozenset({
+    "get_ticker_news",
+    "get_analyst_recommendations",
+})
+
 _STOCK_SYSTEM_PROMPT = (
     "You are a professional stock market analyst with "
     "deep expertise in technical analysis and "
@@ -146,11 +151,72 @@ def _format_stock_response(
     if not template.strip():
         return llm_text
 
-    return (
+    # Fallback: if LLM skipped news tools (STEP 3),
+    # call them directly and append results.
+    # This bypasses LLM prompt compliance issues.
+    all_called = set(call_id_to_name.values())
+    news_section = ""
+    if ticker and not (all_called & _NEWS_TOOLS):
+        news_section = _fetch_news_fallback(ticker)
+
+    result = (
         f"{template}\n"
         f"### Verdict\n\n"
         f"{llm_text}"
     )
+    if news_section:
+        result += f"\n\n{news_section}"
+    return result
+
+
+def _fetch_news_fallback(ticker: str) -> str:
+    """Directly call news tools when LLM skipped them.
+
+    Returns formatted markdown or empty string.
+    """
+    import logging
+
+    _log = logging.getLogger(__name__)
+    parts: list[str] = []
+
+    try:
+        from tools.registry import ToolRegistry
+
+        registry = ToolRegistry()
+        try:
+            news = registry.invoke(
+                "get_ticker_news",
+                {"ticker": ticker, "days_back": 7},
+            )
+            if news and "no " not in news.lower()[:30]:
+                parts.append(
+                    "### Recent News\n\n" + news,
+                )
+        except Exception:
+            _log.debug(
+                "News fallback failed for %s",
+                ticker,
+            )
+
+        try:
+            recs = registry.invoke(
+                "get_analyst_recommendations",
+                {"ticker": ticker},
+            )
+            if recs and "error" not in recs.lower()[:30]:
+                parts.append(
+                    "### Analyst Recommendations"
+                    "\n\n" + recs,
+                )
+        except Exception:
+            _log.debug(
+                "Analyst fallback failed for %s",
+                ticker,
+            )
+    except Exception:
+        pass
+
+    return "\n\n".join(parts)
 
 
 STOCK_ANALYST_CONFIG = SubAgentConfig(

@@ -18,10 +18,26 @@ interface InsightsFiltersProps {
   ticker?: string;
   onTickerChange?: (v: string) => void;
   tickers?: string[];
+  /** Tag filter (nifty50, largecap, etc.). */
+  tag?: string;
+  onTagChange?: (v: string) => void;
+  availableTags?: string[];
   /** RSI filter (screener only). */
   rsiFilter?: string;
   onRsiFilterChange?: (v: string) => void;
 }
+
+const TAG_LABELS: Record<string, string> = {
+  nifty50: "Nifty 50",
+  nifty100: "Nifty 100",
+  nifty500: "Nifty 500",
+  largecap: "Large Cap",
+  midcap: "Mid Cap",
+  smallcap: "Small Cap",
+  niftymidcap150: "Nifty Midcap 150",
+  niftysmallcap250: "Nifty Smallcap 250",
+  niftymicrocap250: "Nifty Microcap 250",
+};
 
 const selectClass = `
   rounded-lg border border-gray-300
@@ -41,6 +57,9 @@ export function InsightsFilters({
   ticker,
   onTickerChange,
   tickers = [],
+  tag,
+  onTagChange,
+  availableTags = [],
   rsiFilter,
   onRsiFilterChange,
 }: InsightsFiltersProps) {
@@ -95,6 +114,25 @@ export function InsightsFilters({
           {tickers.map((t) => (
             <option key={t} value={t}>
               {t}
+            </option>
+          ))}
+        </select>
+      )}
+
+      {/* Tag (nifty50, largecap, etc.) */}
+      {onTagChange && availableTags.length > 0 && (
+        <select
+          data-testid="insights-tag-filter"
+          value={tag ?? "all"}
+          onChange={(e) =>
+            onTagChange(e.target.value)
+          }
+          className={selectClass}
+        >
+          <option value="all">All Indices</option>
+          {availableTags.map((t) => (
+            <option key={t} value={t}>
+              {TAG_LABELS[t] || t}
             </option>
           ))}
         </select>

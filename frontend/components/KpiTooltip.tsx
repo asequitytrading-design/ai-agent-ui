@@ -7,7 +7,13 @@
  * tooltip below the icon.
  */
 
-import { useState, useRef } from "react";
+import {
+  useState,
+  useRef,
+  useEffect,
+  useCallback,
+} from "react";
+import { createPortal } from "react-dom";
 
 /** KPI explanations for financial metrics. */
 export const KPI_TIPS: Record<string, string> = {
@@ -91,8 +97,22 @@ export function KpiTooltip({
   className = "",
 }: KpiTooltipProps) {
   const [show, setShow] = useState(false);
-  const ref = useRef<HTMLSpanElement>(null);
+  const iconRef = useRef<HTMLElement>(null);
+  const [pos, setPos] = useState({ top: 0, left: 0 });
   const text = tip ?? KPI_TIPS[label];
+
+  const updatePos = useCallback(() => {
+    if (!iconRef.current) return;
+    const rect = iconRef.current.getBoundingClientRect();
+    setPos({
+      top: rect.bottom + 4,
+      left: rect.left,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (show) updatePos();
+  }, [show, updatePos]);
 
   if (!text) {
     return <span className={className}>{label}</span>;
@@ -100,13 +120,13 @@ export function KpiTooltip({
 
   return (
     <span
-      ref={ref}
       className={`inline-flex items-center gap-1 ${className}`}
       onMouseEnter={() => setShow(true)}
       onMouseLeave={() => setShow(false)}
     >
       {label}
       <svg
+        ref={iconRef as React.Ref<SVGSVGElement>}
         xmlns="http://www.w3.org/2000/svg"
         viewBox="0 0 20 20"
         fill="currentColor"
@@ -118,11 +138,16 @@ export function KpiTooltip({
           clipRule="evenodd"
         />
       </svg>
-      {show && (
-        <span className="absolute z-50 mt-1 top-full left-0 w-52 px-2.5 py-1.5 rounded-lg bg-gray-900 dark:bg-gray-700 text-xs text-white shadow-lg leading-relaxed pointer-events-none">
-          {text}
-        </span>
-      )}
+      {show &&
+        createPortal(
+          <span
+            style={{ top: pos.top, left: pos.left }}
+            className="fixed z-[9999] w-56 px-2.5 py-1.5 rounded-lg bg-gray-900 dark:bg-gray-700 text-xs text-white shadow-lg leading-relaxed pointer-events-none"
+          >
+            {text}
+          </span>,
+          document.body,
+        )}
     </span>
   );
 }

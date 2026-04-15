@@ -2,6 +2,287 @@
 
 ---
 
+# Session: Apr 14, 2026 — Sprint 6: Data Health Fix + ETF Ingestion + ticker_type
+
+## Data Health Fix Panel (Maintenance page)
+- Built unified `POST /admin/data-health/fix` endpoint — triggers same executors as scheduler
+- Added `GET /admin/data-health/fix/{run_id}/status` for progress polling
+- Frontend: fix buttons on all 5 cards (OHLCV, Analytics, Sentiment, Piotroski, Forecasts) with ProgressBar
+- Parallelized DuckDB health queries (2.4s → 1.4s)
+- Added `invalidate_metadata()` on health scan to avoid stale reads
+
+## ticker_type Classification System
+- Added `ticker_type` column to `stock_registry` (migration `b2c3d4e5f6a7`)
+- Values: `"stock"` (755), `"etf"` (54), `"index"` (4), `"commodity"` (4)
+- `_detect_ticker_type()` in `_stock_registry.py` — checks stock_master tags
+- `_analyzable_tickers()` (stock+etf) for analytics/sentiment/forecasts
+- `_has_financials()` (stock only) for Piotroski
+- Data health uses split totals: `total_analyzable` / `total_financial` / `total_registry`
+
+## ETF Ingestion (54 NSE ETFs)
+- Created `data/universe/nse_etfs.csv` with 54 ETFs across 8 categories
+- Seeded stock_master + bulk-downloaded 10y OHLCV via yfinance
+- Ran analytics (808/809), sentiment (809/809), and forecasts (809/809)
+- Piotroski correctly excludes ETFs (754/755 stocks only)
+
+## Currency Fix for Indian Indices
+- Added `_INDIAN_INDEX_TICKERS` to `detect_market()` for `^NSEI`, `^BSESN`, `^INDIAVIX`
+- Frontend `tickerCurrency()` now receives `market` from registry API
+- `^NSEI` chart shows ₹ instead of $
+
+## Forecast Tab ETF/Index Filtering
+- Forecast tabs exclude indices/commodities from dropdown
+- Auto-redirect: if index selected and user switches to forecast tab, selects first stock/ETF
+- ETFs visible on forecast tabs (they have valid Prophet forecasts)
+
+## Company Name Fixes
+- Fixed 14 empty company_name entries in Iceberg company_info
+- Piotroski insights endpoint patches empty names from company_info at query time
+
+## Jira
+- Created ASETPLTFRM-305: Fix portfolio comparison chat (round-robin synthesis issue) → Sprint 7
+
+## Files Modified (14 files, +1175 / -258 lines)
+backend/routes.py, backend/jobs/executor.py, backend/tools/_stock_registry.py,
+backend/market_utils.py, backend/db/pg_stocks.py, backend/db/models/registry.py,
+backend/insights_routes.py, backend/dashboard_routes.py, backend/dashboard_models.py,
+stocks/repository.py, frontend hooks/useAdminData.ts,
+frontend components/admin/DataHealthPanel.tsx,
+frontend app/analytics/analysis/page.tsx
+
+## New Files
+- `data/universe/nse_etfs.csv` (54 ETFs)
+- `backend/db/migrations/versions/b2c3d4e5f6a7_add_ticker_type_to_registry.py`
+
+---
+
+# Session: Apr 13, 2026 (evening) — Sprint 6: Market Ticker (ASETPLTFRM-304)
+
+## Branch: `feature/sprint6` | 10 commits | 5 SP
+
+### Market Ticker — Nifty 50 + Sensex Header
+- Backend `GET /v1/market/indices`: dual-source NSE India + Yahoo Finance, JWT-protected
+- NSE India: cookie-based httpx session for `/api/allIndices`, auto-refresh on 403
+- Yahoo Finance: cookie + crumb auth for `^BSESN` (Sensex), shared `_fetch_yahoo_quote()` also used as Nifty `^NSEI` fallback
+- Redis cache: `market:indices` key, 30s TTL (market open) / 300s (closed)
+- PG persistence: `stocks.market_indices` single-row table (id=1 check constraint), survives restart
+- Market hours gating: Mon-Fri 09:00-15:30 IST, zero upstream calls off-hours
+- First-call-of-day seeding: fetches upstream once even off-hours if `fetched_at` is from previous day (IST)
+- Fallback chain: Redis → PG (off-hours) → upstream → stale PG → 503
+- Frontend `MarketTicker.tsx`: 30s `setInterval` poll via `apiFetch`, green/red change %, "Closed" label
+- Mounted in `AppHeader.tsx` center gap, `hidden md:flex` (hidden on mobile)
+- 11 backend tests: market hours boundaries, cache hit, off-hours PG serve, first-call-of-day seed, 503 fallback
+
+### Bugs Fixed During Implementation
+- `date.today()` returns UTC in Docker → fixed to `datetime.now(IST).date()` for seed check
+- `apiFetch("/market/indices")` hits Next.js not backend → fixed to `${API_URL}/market/indices`
+
+### Jira
+- ASETPLTFRM-304: Done (Market Ticker, 5 SP, Epic: Dashboard & Visualization)
+
+---
+
+# Session: Apr 13, 2026 — Sprint 6: Chat Agent Hardening + Portfolio History
+
+## Branch: `feature/sprint6`
+
+### Chat Agent Fixes
+- Keyword routing: added "recommendation" singular to intent map (fixes portfolio/recommendation tie at score 1:1)
+- Skip LLM presentation: `skip_synthesis` agents return raw ToolMessage content directly (prevents hallucinated empty rows)
+- Action-tier validation: "accumulate" only for held tickers, auto-correct to "buy" in post-processing
+- Stage 3 LLM prompt: explicit ACTION DEFINITIONS section (buy=new, accumulate=existing, reduce=trim)
+- Synthesis hallucination: `[Tool result for X]:` → `Data from X:` prefix in `_strip_tool_metadata()` (prevents gpt-oss tool call hallucination)
+- Stock analyst news fallback: `_format_stock_response` auto-calls `get_ticker_news` + `get_analyst_recommendations` when LLM skips STEP 3
+
+### Conversation Context PG Persistence (ASETPLTFRM-303)
+- New `conversation_contexts` PG table (session_id PK, user_id + updated_at indexed)
+- `ConversationContextStore`: in-memory cache + synchronous PG persistence (async NullPool)
+- Cross-session resume: `get_latest_for_user(user_id)` loads last context on new session
+- Both HTTP (routes.py) and WebSocket (ws.py) handlers updated
+- Daemon thread save failed (event loop conflicts) → switched to sync save (~5ms)
+
+### DuckDB Migration — Complete (16 methods)
+- Phase 1 (internal helpers): `_scan_two_filters`, `_load_table_and_scan`, `_scan_ticker_date_range`, `_scan_date_range`
+- Phase 2 (public methods): `get_stocks_by_sector`, `get_portfolio_holdings`, `get_portfolio_transactions`, `list_chat_sessions`, `get_chat_session_detail`, `insert_ohlcv` read, `insert_dividends` read, `get_dashboard_llm_usage`
+- Phase 3 (data gaps): 4 methods delegate to `_table_to_df()` (already DuckDB-first)
+
+### Observability
+- `obs_collector` added to 7 FallbackLLM instances: sub_agents synthesis, graph synthesis node, topic_classifier, conversation_context summary, memory_extractor, sentiment_agent, gap_filler
+- Verified: gpt-oss-120b now tracked in dashboard after synthesis pass
+
+### Iceberg Freshness & stock_master
+- company_info freshness: 7 days (was same-day), via `max_age_days` param
+- analysis_summary: 7 days (was same-day)
+- dividends: 90-day cache before yfinance call (was no check)
+- `_ensure_stock_master(ticker, info)`: auto-upsert into stock_master after yfinance fetch from chat
+- Verified: NVDA, PLTR auto-inserted with sector/industry/market_cap
+
+### Historical Portfolio Tools (ASETPLTFRM-296)
+- `get_portfolio_history`: daily value series with period (1W/1M/3M/6M/1Y/ALL) or ISO date range
+- `get_portfolio_comparison`: side-by-side period metrics + top movers
+- Shared `_compute_daily_portfolio()` + `_parse_period()` helpers
+- Registered in bootstrap.py and portfolio agent config
+
+### Jira
+- ASETPLTFRM-303: Done (conversation context persistence)
+- ASETPLTFRM-297: Done (synthesis hallucination + observability)
+- ASETPLTFRM-296: In Progress (portfolio history tools — awaiting testing)
+
+---
+
+# Session: Apr 12-13, 2026 — Sprint 6: LLM Portfolio Recommendations (ASETPLTFRM-298)
+
+## Branch: `feature/sprint6` | ~45 commits
+
+### Smart Funnel Pipeline
+- Stage 1: DuckDB pre-filter scoring 748 tickers via 6-factor composite score (Piotroski, Sharpe, momentum, forecast with accuracy-adjustment, sentiment, technical signals)
+- Stage 2: Per-user portfolio gap analysis (sector, index tracking vs Nifty 50, market cap, correlation >0.85)
+- Stage 3: LLM reasoning pass (Groq cascade, structured JSON prompt, hallucination rejection, deterministic fallback)
+- Accuracy-adjusted forecasts: MAPE/MAE/RMSE composite factor discounts unreliable predictions
+
+### Database (3 new PG tables)
+- `stocks.recommendation_runs` — monthly run metadata with portfolio snapshot
+- `stocks.recommendations` — individual recs with tier/category/severity/data_signals JSONB
+- `stocks.recommendation_outcomes` — append-only 30/60/90d checkpoints with benchmark comparison
+- 11 PG CRUD functions for insert/query/expire/action-matching
+
+### Recommendation Agent (6th LangGraph sub-agent)
+- Agent config with mandatory tool use, currency rules, disclaimer
+- 3 new tools: generate_recommendations, get_recommendation_history, get_recommendation_performance
+- 3 shared tools from portfolio agent: get_portfolio_holdings, get_sector_allocation, get_risk_metrics
+- Router: 14 recommendation keywords added to intent map
+
+### Scheduler Jobs
+- `recommendations` job: monthly batch for all portfolio users (Stage 1 cached, per-user Stage 2+3)
+- `recommendation_outcomes` job: daily outcome tracker with price lookup + labeling
+
+### API Endpoints (5 new)
+- GET /recommendations — latest set with Redis caching
+- POST /recommendations/refresh — manual pipeline trigger
+- GET /recommendations/history — past runs with outcome stats
+- GET /recommendations/stats — aggregate hit rates + adoption
+- GET /recommendations/{run_id} — specific run detail
+
+### Market Scoping
+- Stage 1 filters candidates by `is_indian_market()` based on scope
+- Stage 2 filters holdings by market column
+- Scope stored on `recommendation_runs.scope` (india/us/all)
+- Route filters latest run by scope — India and US don't shadow each other
+- Dashboard Refresh button passes current market toggle
+
+### Unified Quota System
+- Max 5 runs per user per rolling 30 days (all types combined)
+- `check_recommendation_quota()` shared by all 4 routes
+- Only superusers bypass with force
+- Returns cached latest run when quota exceeded
+
+### Frontend
+- Compact dashboard widget (~300px) with health score + top 3 preview rows
+- "View All" opens centered modal (max-w-3xl) with full cards, filters, rationale
+- Recommendation History tab: scope filter (All/India/US), time range (7D-1Y), pagination (10/page)
+- Scope badges (India/US) + run_type badges (Scheduled/Manual/Chat/CLI) on each run
+- Eye icon to view any historical run's full recommendations in modal
+- View link opens stock analysis in new tab
+- TypeScript types + SWR hooks for dashboard + insights
+
+### CLI Pipeline Runner
+- `python -m backend.pipeline.runner recommend --scope india --force`
+- Same Smart Funnel pipeline, run_type="cli", quota gate, --user flag for single user
+
+### Observability
+- `get_obs_collector()` singleton accessor for background job LLM tracking
+- Recommendation engine calls now appear in Admin > LLM Observability
+
+### Bug Fixes During Testing
+- SQL column names (analysis_date, close/volume lowercase, total_score)
+- Holdings enrichment: fallback to company_info for low-Piotroski stocks
+- Async NullPool everywhere (session_factory fails in thread pool workers)
+- Route ordering: /{run_id} after /history and /stats
+- Cache API: invalidate(pattern) not delete(key)
+- Hallucination fallback: deterministic recs when all LLM output rejected
+- Old rule-based endpoint removed (was shadowing new route)
+
+### Testing
+- 84 unit tests: composite scoring, accuracy factor, gap analysis, outcome labeling, health score, LLM validation, deterministic fallback
+- 12 PG CRUD tests (async in-memory)
+- Manual E2E: scheduler jobs (India+US), dashboard refresh, CLI, quota enforcement
+
+### Docs
+- Design spec: `docs/superpowers/specs/2026-04-12-llm-portfolio-recommendations-design.md`
+- Implementation plan: `docs/superpowers/plans/2026-04-12-llm-portfolio-recommendations.md`
+
+---
+
+# Session: Apr 11–12, 2026 — Sprint 6: Forecast Optimization + Scheduler Features
+
+## Branch: `feature/sprint6` | 28 commits
+
+### Pipeline Bug Fixes
+- Fixed `get_scheduler_runs` DuckDB path returning `None` (pipeline stuck after step 1, 500 on jobs API)
+- Fixed `append_scheduler_run` KeyError on `pipeline_run_id` for standalone jobs (forecast runs invisible)
+- Fixed Piotroski `insert_piotroski_scores` overwriting India scores when US pipeline ran (scoped delete by ticker)
+- Fixed `execute_run_piotroski` missing `force` param (pipeline step 4 crash)
+- Persisted backtest overlay from batch executor (was only in live chat tool)
+- Added duration_secs to `_finalize_run` for forecast executor
+
+### Forecast Pipeline Optimization (748 India tickers)
+- Batch OHLCV: single DuckDB query before parallel loop (167s → 0.87s)
+- Batch freshness check: single DuckDB query → dict lookups (329s → 0.44s)
+- Regressor cache: scope-keyed TTL for VIX/index/macro (1.6s → 0.05s/ticker)
+- Bulk writes: 2 Iceberg commits instead of 2,244 (11.5 min → 2s)
+- CV reuse: 30-day TTL, skip CV on weekly reruns (~50% compute saving)
+- Disabled nested parallelism: `parallel=None`, `workers=cpu_count//2`
+- Monthly force (full CV): ~34 min. Weekly (CV reused): ~8 min. Skip path: 2.2s.
+
+### Database Migration (ASETPLTFRM-301)
+- `scheduler_runs` migrated from Iceberg to PostgreSQL (update 9s → 14ms, 640x faster)
+- NullPool for sync→async PG bridge (no connection leaks)
+- PG `max_connections` 20 → 50
+- Stale Iceberg tables dropped (scheduler_runs, scheduled_jobs)
+- Alembic migrations: `c4d9e2f1a8b3` (scheduler_runs), `d5e6f7a8b9c0` (force column)
+
+### Scheduler UI
+- Pipeline create/edit form (PipelineForm.tsx) with step editor
+- Force run: split buttons on jobs + pipelines, force toggle on schedule config
+- Force plumbing: routes → scheduler_service → pipeline_executor → executor
+- 15s auto-refresh on Run History, Stats, Pipeline DAG (SWR refreshInterval)
+
+### Screener & Insights
+- Sentiment column on Screener (Bullish/Neutral/Bearish + score, tooltip with headline count)
+- Market filter on Piotroski F-Score tab (India/US/All)
+- Tag/Index filter: 9 tags from stock_tags PG table (Nifty 50/100/500, Large/Mid/Small Cap)
+- KPI tooltip fix: portal-based rendering via createPortal (was clipped by overflow-hidden)
+
+### Data Health Dashboard (Admin > Maintenance)
+- `GET /admin/data-health`: scans OHLCV, Analytics, Sentiment, Piotroski, Forecasts
+- `POST /admin/data-health/fix-ohlcv`: backfill NaN or missing dates from yfinance
+- 5 status cards (green/yellow/red) with count pills, affected tickers, fix buttons, remediation suggestions
+
+### URL Tab Persistence
+- Admin page: `?tab=scheduler` preserved on refresh
+- Insights page: `?tab=piotroski` preserved on refresh
+- Analysis page: `?tab=forecast&ticker=RELIANCE.NS` — tab now writes to URL on click
+
+### Data Cleanup
+- 215 NaN OHLCV rows cleaned (204 Apr 9, 9 Mar 27, 1 Apr 1, 1 Jul 2023)
+- 204 tickers backfilled from yfinance for April 9
+- 7 tickers backfilled for March 27
+
+### Documentation
+- `docs/backend/scheduler.md` — comprehensive scheduler & pipeline docs
+- `docs/backend/maintenance.md` — data health dashboard docs
+- `PROJECT_INDEX.md` refreshed for Sprint 6
+- `README.md` comprehensive rewrite (480 → 280 lines)
+- `CLAUDE.md` restructured: performance-first rules, categorized gotchas
+
+### Jira
+- ASETPLTFRM-286: Done (filter non-Indian tickers — already working)
+- ASETPLTFRM-299: Done (US price bug — resolved by USA pipeline)
+- ASETPLTFRM-301: Done (scheduler_runs PG migration)
+- ASETPLTFRM-302: Created (forecast sanity gates for 97 broken predictions)
+
+---
+
 # Session: Apr 2–8, 2026 — Sprint 5: Stock Data Pipeline (Epic ASETPLTFRM-267)
 
 ## Branch: `feature/sprint5` | Biggest sprint to date

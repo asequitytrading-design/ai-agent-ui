@@ -51,8 +51,30 @@ _DOWN_FAILURES = 4  # ≥4 failures → down
 _LATENCY_WINDOW = 100
 
 # Batch size for Iceberg writes.
-_FLUSH_INTERVAL = 30  # seconds
+_FLUSH_INTERVAL = 10  # seconds (reduced from 30 to minimize data loss on restart)
 _FLUSH_BATCH = 50  # max events per flush
+
+# ── Singleton accessor ────────────────────────────
+# Set once during ChatServer init, used by background
+# jobs (scheduler) that lack access to the server
+# instance.
+
+_singleton: ObservabilityCollector | None = None
+
+
+def set_obs_collector(
+    collector: ObservabilityCollector,
+) -> None:
+    """Register the global ObservabilityCollector."""
+    global _singleton  # noqa: PLW0603
+    _singleton = collector
+
+
+def get_obs_collector() -> (
+    ObservabilityCollector | None
+):
+    """Return the global ObservabilityCollector."""
+    return _singleton
 
 
 class ObservabilityCollector:

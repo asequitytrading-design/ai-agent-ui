@@ -65,6 +65,28 @@ _EXTRA_FINANCIAL: set[str] = {
 
 _ALL_FINANCIAL = _STOCK_KEYWORDS | _EXTRA_FINANCIAL
 
+# Patterns indicating the bot asked a clarifying question
+# or offered numbered options.
+_CLARIFICATION_RE = re.compile(
+    r"which of the following"
+    r"|would you like"
+    r"|please choose"
+    r"|select.*option"
+    r"|1\uFE0F\u20E3|2\uFE0F\u20E3|3\uFE0F\u20E3"
+    r"|\n\d+[\.\)]\s",
+    re.IGNORECASE,
+)
+
+
+def _is_clarification(response: str) -> bool:
+    """True if the bot response asked the user to
+    choose or clarify."""
+    if not response:
+        return False
+    if response.rstrip().endswith("?"):
+        return True
+    return bool(_CLARIFICATION_RE.search(response))
+
 # Common uppercase words that look like tickers but
 # are not.  Extends the filter in router.py.
 _COMMON_WORDS: set[str] = {
@@ -223,6 +245,42 @@ def guardrail(state: dict) -> dict:
 
     detected_intent = best_intent(user_input)
 
+    # ── Clarification follow-up detection ──────────
+    # If the bot's last response asked a question or
+    # offered numbered options, treat the next user
+    # message as a follow-up to the same agent.
+    #
+    # EXCEPTIONS (prevent trapping loops):
+    # 1. Never follow-up to "decline" — always
+    #    re-evaluate so the user can escape.
+    # 2. If a strong keyword intent is detected,
+    #    the user clearly wants something different
+    #    — override the clarification follow-up.
+    _is_clarif = (
+        _ctx
+        and _ctx.last_agent
+        and _ctx.last_agent != "decline"
+        and not detected_intent  # no strong keyword
+        and _is_clarification(_ctx.last_response)
+    )
+    if _is_clarif:
+        _logger.info(
+            "Clarification follow-up → agent=%s"
+            " (last response was a question)",
+            _ctx.last_agent,
+        )
+        return {
+            "tickers": _merge_tickers(
+                _ctx.tickers_mentioned,
+                user_input,
+            ),
+            "next_agent": _ctx.last_agent,
+            "intent": (
+                _ctx.last_intent or "follow_up"
+            ),
+            "start_time_ns": start_ns,
+        }
+
     if _ctx and _ctx.last_agent:
         if detected_intent:
             if detected_intent == _ctx.last_intent:
@@ -287,7 +345,33 @@ def guardrail(state: dict) -> dict:
             )
             # Fall through to financial relevance
         else:
-            # No keywords → LLM topic classifier
+            # No keywords matched. If the query
+            # mentions a ticker and we have a recent
+            # agent context, treat as follow-up
+            # (e.g. "fundamentals of X" after recs).
+            _has_ticker = bool(
+                _TICKER_PATTERN.search(user_input)
+            )
+            if _has_ticker and _ctx.last_agent:
+                _logger.info(
+                    "Ticker mention + context "
+                    "→ follow-up to %s",
+                    _ctx.last_agent,
+                )
+                return {
+                    "tickers": _merge_tickers(
+                        _ctx.tickers_mentioned,
+                        user_input,
+                    ),
+                    "next_agent": _ctx.last_agent,
+                    "intent": (
+                        _ctx.last_intent
+                        or "follow_up"
+                    ),
+                    "start_time_ns": start_ns,
+                }
+
+            # No ticker → LLM topic classifier
             # for ambiguous messages
             try:
                 from agents.nodes.topic_classifier import (

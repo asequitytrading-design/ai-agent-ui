@@ -33,15 +33,27 @@ def _generate_summary_stats(df: pd.DataFrame, ticker: str) -> dict:
 
     monthly_close = close.resample("ME").last()
     monthly_ret = monthly_close.pct_change().dropna()
-    best_month_idx = monthly_ret.idxmax()
-    worst_month_idx = monthly_ret.idxmin()
+    if not monthly_ret.empty:
+        best_month_idx = monthly_ret.idxmax()
+        worst_month_idx = monthly_ret.idxmin()
+    else:
+        best_month_idx = None
+        worst_month_idx = None
 
     annual_close = close.resample("YE").last()
     annual_ret = annual_close.pct_change().dropna()
-    best_year_idx = annual_ret.idxmax()
-    worst_year_idx = annual_ret.idxmin()
+    if not annual_ret.empty:
+        best_year_idx = annual_ret.idxmax()
+        worst_year_idx = annual_ret.idxmin()
+    else:
+        best_year_idx = None
+        worst_year_idx = None
 
-    avg_annual_pct = float(annual_ret.mean() * 100)
+    avg_annual_pct = (
+        float(annual_ret.mean() * 100)
+        if not annual_ret.empty
+        else 0.0
+    )
     total_return_pct = float((close.iloc[-1] / close.iloc[0] - 1) * 100)
     current_price = float(close.iloc[-1])
 
@@ -56,11 +68,12 @@ def _generate_summary_stats(df: pd.DataFrame, ticker: str) -> dict:
     )
 
     if rsi is not None:
-        rsi_signal = (
+        _rsi_label = (
             "Overbought"
             if rsi >= 70
             else ("Oversold" if rsi <= 30 else "Neutral")
         )
+        rsi_signal = f"{_rsi_label} (RSI: {rsi:.1f})"
     else:
         rsi_signal = "N/A"
 
@@ -86,14 +99,46 @@ def _generate_summary_stats(df: pd.DataFrame, ticker: str) -> dict:
         "all_time_low_date": str(atl_idx.date()),
         "total_return_pct": round(total_return_pct, 2),
         "avg_annual_return_pct": round(avg_annual_pct, 2),
-        "best_month": best_month_idx.strftime("%b %Y"),
-        "best_month_return_pct": round(float(monthly_ret.max() * 100), 2),
-        "worst_month": worst_month_idx.strftime("%b %Y"),
-        "worst_month_return_pct": round(float(monthly_ret.min() * 100), 2),
-        "best_year": str(best_year_idx.year),
-        "best_year_return_pct": round(float(annual_ret.max() * 100), 2),
-        "worst_year": str(worst_year_idx.year),
-        "worst_year_return_pct": round(float(annual_ret.min() * 100), 2),
+        "best_month": (
+            best_month_idx.strftime("%b %Y")
+            if best_month_idx is not None
+            else "N/A"
+        ),
+        "best_month_return_pct": (
+            round(float(monthly_ret.max() * 100), 2)
+            if not monthly_ret.empty
+            else None
+        ),
+        "worst_month": (
+            worst_month_idx.strftime("%b %Y")
+            if worst_month_idx is not None
+            else "N/A"
+        ),
+        "worst_month_return_pct": (
+            round(float(monthly_ret.min() * 100), 2)
+            if not monthly_ret.empty
+            else None
+        ),
+        "best_year": (
+            str(best_year_idx.year)
+            if best_year_idx is not None
+            else "N/A"
+        ),
+        "best_year_return_pct": (
+            round(float(annual_ret.max() * 100), 2)
+            if not annual_ret.empty
+            else None
+        ),
+        "worst_year": (
+            str(worst_year_idx.year)
+            if worst_year_idx is not None
+            else "N/A"
+        ),
+        "worst_year_return_pct": (
+            round(float(annual_ret.min() * 100), 2)
+            if not annual_ret.empty
+            else None
+        ),
         "sma_50": round(sma50, 2) if sma50 is not None else "N/A",
         "sma_50_signal": (
             ("Above" if sma50 and current_price > sma50 else "Below")

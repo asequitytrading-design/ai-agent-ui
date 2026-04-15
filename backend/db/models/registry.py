@@ -28,6 +28,12 @@ class StockRegistry(Base):
     market: Mapped[str | None] = mapped_column(
         String(50), nullable=True,
     )
+    ticker_type: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        server_default="stock",
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

@@ -1,5 +1,5 @@
 import logging
-from datetime import date, timedelta
+from datetime import date
 
 import pandas as pd
 from tools._stock_shared import (  # noqa: F401 — re-exported
@@ -57,6 +57,38 @@ def _auto_fetch(ticker: str) -> None:
         _logger.warning(
             "Auto-fetch failed for %s: %s", ticker, exc
         )
+
+
+def compute_indicators(
+    ticker: str,
+    repo=None,
+) -> pd.DataFrame | None:
+    """Compute technical indicators on-the-fly from OHLCV.
+
+    Reads OHLCV from Iceberg and applies
+    ``_calculate_technical_indicators`` without persisting
+    the result. Used by API endpoints that serve indicator
+    data — each call is <500ms for a single ticker.
+
+    Args:
+        ticker: Stock ticker symbol (already uppercased).
+        repo: Optional StockRepository instance. If
+            ``None``, uses ``_require_repo()``.
+
+    Returns:
+        DataFrame with DatetimeIndex and indicator columns
+        (SMA_50, SMA_200, EMA_20, RSI_14, MACD, etc.),
+        or ``None`` if OHLCV data is unavailable.
+    """
+    from tools._analysis_indicators import (
+        _calculate_technical_indicators,
+    )
+
+    ohlcv = _load_ohlcv(ticker)
+    if ohlcv is None:
+        return None
+
+    return _calculate_technical_indicators(ohlcv)
 
 
 def _load_ohlcv(ticker: str) -> pd.DataFrame | None:

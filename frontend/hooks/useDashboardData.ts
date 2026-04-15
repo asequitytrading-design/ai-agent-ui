@@ -17,6 +17,11 @@ import type {
   LLMUsageResponse,
   RegistryResponse,
   DashboardHomeResponse,
+  AllocationResponse,
+  ForecastBacktestResponse,
+  PortfolioNewsResponse,
+  PortfolioPerformanceResponse,
+  RecommendationResponse,
 } from "@/lib/types";
 
 export interface DashboardData<T> {
@@ -80,6 +85,83 @@ export function useLLMUsage(): DashboardData<LLMUsageResponse> {
   return useDashboardData<LLMUsageResponse>(
     "/dashboard/llm-usage",
   );
+}
+
+// ---------------------------------------------------------------
+// Portfolio Analytics (Sprint 6)
+// ---------------------------------------------------------------
+
+export function usePortfolioPerformance(
+  market: string = "india",
+  period: string = "ALL",
+): DashboardData<PortfolioPerformanceResponse> {
+  const currency = market === "india" ? "INR" : "USD";
+  return useDashboardData<PortfolioPerformanceResponse>(
+    `/dashboard/portfolio/performance?currency=${currency}&period=${period}`,
+  );
+}
+
+export function useSectorAllocation(
+  market: string = "india",
+): DashboardData<AllocationResponse> {
+  return useDashboardData<AllocationResponse>(
+    `/dashboard/portfolio/allocation?market=${market}`,
+  );
+}
+
+export function usePortfolioNews(
+  market: string = "india",
+): DashboardData<PortfolioNewsResponse> {
+  return useDashboardData<PortfolioNewsResponse>(
+    `/dashboard/portfolio/news?market=${market}`,
+  );
+}
+
+export function useRecommendations(
+  market: string = "all",
+) {
+  const { data, error, isLoading, mutate } =
+    useSWR<RecommendationResponse>(
+      `${API_URL}/dashboard/portfolio/recommendations?market=${market}`,
+      fetcher,
+      {
+        revalidateOnFocus: false,
+        dedupingInterval: 120_000,
+      },
+    );
+
+  return {
+    value: data ?? null,
+    loading: isLoading,
+    error: error
+      ? error instanceof Error
+        ? error.message
+        : "Failed to load"
+      : null,
+    mutate,
+  };
+}
+
+export function useForecastBacktest(
+  ticker: string | null,
+): DashboardData<ForecastBacktestResponse> {
+  const url = ticker
+    ? `${API_URL}/dashboard/chart/forecast-backtest?ticker=${ticker}`
+    : null;
+  const { data, error, isLoading } =
+    useSWR<ForecastBacktestResponse>(url, fetcher, {
+      revalidateOnFocus: false,
+      dedupingInterval: 120_000,
+    });
+  return {
+    value: data ?? null,
+    loading: isLoading,
+    error: error
+      ? error instanceof Error
+        ? error.message
+        : "Failed to load"
+      : null,
+  };
 }
 
 /**

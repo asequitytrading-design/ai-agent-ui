@@ -4,9 +4,14 @@ Usage::
 
     python -m backend.pipeline.runner <command> [args]
 
-Commands: seed, bulk, fundamentals, daily, status, skipped,
-retry, reset.
+Data commands: seed, bulk, fundamentals, daily,
+    quarterly, bulk-download, fill-gaps, correct.
+Compute commands: analytics, sentiment, forecast,
+    screen, indices.
+Pipeline: refresh (full chain with --scope/--force).
+Utility: status, skipped, retry, reset, download.
 """
+
 import argparse
 import asyncio
 import logging
@@ -29,23 +34,39 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # seed ---------------------------------------------------------
     p_seed = sub.add_parser(
-        "seed", help="Seed stock_master from CSV",
+        "seed",
+        help="Seed stock_master from CSV",
     )
     p_seed.add_argument("--csv", required=True)
     p_seed.add_argument(
-        "--update", action="store_true",
+        "--update",
+        action="store_true",
         help="Update existing stocks and reconcile tags",
     )
 
     # bulk ---------------------------------------------------------
     p_bulk = sub.add_parser(
-        "bulk", help="Run one OHLCV bulk batch",
+        "bulk",
+        help="Run one OHLCV bulk batch",
     )
     p_bulk.add_argument(
-        "--cursor", default="nifty500_sample_bulk",
+        "--cursor",
+        default="nifty500_sample_bulk",
     )
     p_bulk.add_argument(
-        "--batch-size", type=int, default=None,
+        "--batch-size",
+        type=int,
+        default=None,
+    )
+    p_bulk.add_argument(
+        "--scope",
+        default="all",
+        choices=["all", "india", "us"],
+    )
+    p_bulk.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-fetch even if OHLCV is fresh",
     )
 
     # fundamentals -------------------------------------------------
@@ -54,47 +75,79 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Run one fundamentals batch",
     )
     p_fund.add_argument(
-        "--cursor", default="nifty500_fundamentals",
+        "--cursor",
+        default="nifty500_fundamentals",
     )
     p_fund.add_argument(
-        "--batch-size", type=int, default=None,
+        "--batch-size",
+        type=int,
+        default=None,
+    )
+    p_fund.add_argument(
+        "--scope",
+        default="all",
+        choices=["all", "india", "us"],
+    )
+    p_fund.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-fetch company info + dividends",
     )
 
     # daily --------------------------------------------------------
-    sub.add_parser(
-        "daily", help="Run daily OHLCV delta",
+    p_daily = sub.add_parser(
+        "daily",
+        help="Run daily OHLCV delta",
+    )
+    p_daily.add_argument(
+        "--scope",
+        default="all",
+        choices=["all", "india", "us"],
+    )
+    p_daily.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-fetch even if OHLCV is fresh",
     )
 
     # status -------------------------------------------------------
     p_status = sub.add_parser(
-        "status", help="Show cursor progress",
+        "status",
+        help="Show cursor progress",
     )
     p_status.add_argument(
-        "--cursor", default="nifty500_sample_bulk",
+        "--cursor",
+        default="nifty500_sample_bulk",
     )
 
     # skipped ------------------------------------------------------
     p_skip = sub.add_parser(
-        "skipped", help="List failed tickers",
+        "skipped",
+        help="List failed tickers",
     )
     p_skip.add_argument(
-        "--cursor", default="nifty500_sample_bulk",
+        "--cursor",
+        default="nifty500_sample_bulk",
     )
 
     # retry --------------------------------------------------------
     p_retry = sub.add_parser(
-        "retry", help="Retry failed tickers",
+        "retry",
+        help="Retry failed tickers",
     )
     p_retry.add_argument(
-        "--cursor", default="nifty500_sample_bulk",
+        "--cursor",
+        default="nifty500_sample_bulk",
     )
     p_retry.add_argument(
-        "--all", action="store_true",
+        "--all",
+        action="store_true",
         dest="all_categories",
         help="Retry all categories, not just transient",
     )
     p_retry.add_argument(
-        "--ticker", default=None,
+        "--ticker",
+        default=None,
         help="Retry a specific ticker symbol",
     )
 
@@ -115,22 +168,31 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Fast yfinance batch OHLCV + fill gaps",
     )
     p_bd.add_argument(
-        "--batch", type=int, default=None,
+        "--batch",
+        type=int,
+        default=None,
         help="Limit to first N tickers",
     )
     p_bd.add_argument(
-        "--tickers", default=None,
+        "--tickers",
+        default=None,
         help="Comma-separated tickers (skip DB)",
     )
     p_bd.add_argument(
-        "--period", default="10y",
+        "--period",
+        default="10y",
         help="History period (default: 10y)",
     )
 
     # fill-gaps ----------------------------------------------------
-    sub.add_parser(
+    p_fill = sub.add_parser(
         "fill-gaps",
         help="Patch empty company_info from stock_master",
+    )
+    p_fill.add_argument(
+        "--scope",
+        default="all",
+        choices=["all", "india", "us"],
     )
 
     # correct ------------------------------------------------------
@@ -139,20 +201,165 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Re-fetch from NSE for a specific ticker",
     )
     p_correct.add_argument(
-        "--ticker", required=True,
+        "--ticker",
+        required=True,
         help="Ticker symbol to correct",
     )
 
     # reset --------------------------------------------------------
     p_reset = sub.add_parser(
-        "reset", help="Reset cursor to start",
+        "reset",
+        help="Reset cursor to start",
     )
     p_reset.add_argument(
-        "--cursor", default="nifty500_sample_bulk",
+        "--cursor",
+        default="nifty500_sample_bulk",
     )
     p_reset.add_argument(
-        "--yes", action="store_true",
+        "--yes",
+        action="store_true",
         help="Skip confirmation prompt",
+    )
+
+    # quarterly ----------------------------------------------------
+    p_qtr = sub.add_parser(
+        "quarterly",
+        help="Fetch quarterly statements (batch)",
+    )
+    p_qtr.add_argument(
+        "--cursor",
+        default="nse_universe_quarterly",
+    )
+    p_qtr.add_argument(
+        "--batch-size",
+        type=int,
+        default=50,
+    )
+    p_qtr.add_argument(
+        "--force",
+        action="store_true",
+        help="Skip 7-day freshness check",
+    )
+    p_qtr.add_argument(
+        "--scope",
+        default="all",
+        choices=["all", "india", "us"],
+    )
+
+    # screen -------------------------------------------------------
+    p_screen = sub.add_parser(
+        "screen",
+        help=("Compute Piotroski F-Score for" " stock_master"),
+    )
+    p_screen.add_argument(
+        "--tickers",
+        default=None,
+        help=("Comma-separated tickers (default: all)"),
+    )
+    p_screen.add_argument(
+        "--scope",
+        default="all",
+        choices=["all", "india", "us"],
+    )
+
+    # analytics ----------------------------------------------------
+    p_analytics = sub.add_parser(
+        "analytics",
+        help="Compute analysis summary (indicators)",
+    )
+    p_analytics.add_argument(
+        "--scope",
+        default="all",
+        choices=["all", "india", "us"],
+    )
+    p_analytics.add_argument(
+        "--force",
+        action="store_true",
+        help="Recompute even if analysed today",
+    )
+
+    # sentiment ----------------------------------------------------
+    p_sentiment = sub.add_parser(
+        "sentiment",
+        help="Run LLM sentiment scoring",
+    )
+    p_sentiment.add_argument(
+        "--scope",
+        default="all",
+        choices=["all", "india", "us"],
+    )
+    p_sentiment.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-score even if scored today",
+    )
+
+    # forecast -----------------------------------------------------
+    p_forecast = sub.add_parser(
+        "forecast",
+        help="Run Prophet price forecasts",
+    )
+    p_forecast.add_argument(
+        "--scope",
+        default="all",
+        choices=["all", "india", "us"],
+    )
+    p_forecast.add_argument(
+        "--force",
+        action="store_true",
+        help="Skip 7-day freshness check",
+    )
+
+    # recommend ----------------------------------------------------
+    p_recommend = sub.add_parser(
+        "recommend",
+        help=(
+            "Generate LLM portfolio "
+            "recommendations"
+        ),
+    )
+    p_recommend.add_argument(
+        "--scope",
+        default="india",
+        choices=["all", "india", "us"],
+    )
+    p_recommend.add_argument(
+        "--force",
+        action="store_true",
+        help="Ignore 30-day freshness gate",
+    )
+    p_recommend.add_argument(
+        "--user",
+        default=None,
+        help="Single user_id (default: all users)",
+    )
+
+    # indices ------------------------------------------------------
+    sub.add_parser(
+        "indices",
+        help="Refresh market indices (VIX, etc.)",
+    )
+
+    # refresh (full pipeline) --------------------------------------
+    p_refresh = sub.add_parser(
+        "refresh",
+        help="Full pipeline: data → analytics "
+        "→ sentiment → piotroski",
+    )
+    p_refresh.add_argument(
+        "--scope",
+        default="all",
+        choices=["all", "india", "us"],
+    )
+    p_refresh.add_argument(
+        "--force",
+        action="store_true",
+        help="Force all steps (bypass freshness)",
+    )
+    p_refresh.add_argument(
+        "--skip-forecast",
+        action="store_true",
+        help="Exclude Prophet forecasts",
     )
 
     return parser
@@ -178,6 +385,14 @@ async def _dispatch(args: argparse.Namespace) -> None:
         "fill-gaps": _cmd_fill_gaps,
         "correct": _cmd_correct,
         "reset": _cmd_reset,
+        "quarterly": _cmd_quarterly,
+        "screen": _cmd_screen,
+        "analytics": _cmd_analytics,
+        "sentiment": _cmd_sentiment,
+        "forecast": _cmd_forecast,
+        "recommend": _cmd_recommend,
+        "indices": _cmd_indices,
+        "refresh": _cmd_refresh,
     }
     handler = handlers.get(args.command)
     if handler is None:
@@ -197,7 +412,8 @@ async def _cmd_seed(args: argparse.Namespace) -> None:
     )
 
     result = await seed_from_csv(
-        args.csv, update=args.update,
+        args.csv,
+        update=args.update,
     )
     _logger.info(
         "Seed complete: inserted=%d updated=%d "
@@ -245,8 +461,7 @@ async def _cmd_fundamentals(
         batch_size=args.batch_size,
     )
     _logger.info(
-        "Fundamentals complete: cursor=%s status=%s "
-        "processed=%d failed=%d",
+        "Fundamentals complete: cursor=%s status=%s " "processed=%d failed=%d",
         result["cursor"],
         result["status"],
         result["processed"],
@@ -261,8 +476,7 @@ async def _cmd_daily(
 
     result = await run_daily()
     _logger.info(
-        "Daily complete: processed=%d skipped=%d "
-        "failed=%d",
+        "Daily complete: processed=%d skipped=%d " "failed=%d",
         result["processed"],
         result["skipped"],
         result["failed"],
@@ -279,11 +493,13 @@ async def _cmd_status(args: argparse.Namespace) -> None:
     factory = get_session_factory()
     async with factory() as session:
         cursor = await get_cursor(
-            session, args.cursor,
+            session,
+            args.cursor,
         )
         if cursor is None:
             _logger.error(
-                "Cursor not found: %s", args.cursor,
+                "Cursor not found: %s",
+                args.cursor,
             )
             sys.exit(1)
 
@@ -295,17 +511,19 @@ async def _cmd_status(args: argparse.Namespace) -> None:
 
     total = cursor.total_tickers
     pos = cursor.last_processed_id
-    pct = (
-        (pos / total * 100.0) if total > 0 else 0.0
-    )
+    pct = (pos / total * 100.0) if total > 0 else 0.0
     _logger.info("Cursor: %s", cursor.cursor_name)
     _logger.info("Status: %s", cursor.status)
     _logger.info(
-        "Progress: %d/%d (%.1f%%)", pos, total, pct,
+        "Progress: %d/%d (%.1f%%)",
+        pos,
+        total,
+        pct,
     )
     _logger.info("Batch size: %d", cursor.batch_size)
     _logger.info(
-        "Skipped (unresolved): %d", len(unresolved),
+        "Skipped (unresolved): %d",
+        len(unresolved),
     )
 
 
@@ -331,8 +549,11 @@ async def _cmd_skipped(args: argparse.Namespace) -> None:
     # Header
     _logger.info(
         "%-12s %-14s %-14s %8s  %s",
-        "Ticker", "Job", "Category",
-        "Attempts", "Last Attempt",
+        "Ticker",
+        "Job",
+        "Category",
+        "Attempts",
+        "Last Attempt",
     )
     _logger.info("-" * 68)
 
@@ -397,7 +618,8 @@ async def _cmd_retry(args: argparse.Namespace) -> None:
         return
 
     _logger.info(
-        "Retrying %d ticker(s)...", len(records),
+        "Retrying %d ticker(s)...",
+        len(records),
     )
 
     ok = 0
@@ -435,17 +657,21 @@ async def _cmd_retry(args: argparse.Namespace) -> None:
             ok += 1
             _logger.info(
                 "Retried OK: %s (%s)",
-                rec.ticker, outcome,
+                rec.ticker,
+                outcome,
             )
         else:
             failed += 1
             _logger.warning(
                 "Retry failed: %s (%s)",
-                rec.ticker, outcome,
+                rec.ticker,
+                outcome,
             )
 
     _logger.info(
-        "Retry complete: ok=%d failed=%d", ok, failed,
+        "Retry complete: ok=%d failed=%d",
+        ok,
+        failed,
     )
 
 
@@ -472,6 +698,7 @@ async def _cmd_download(
         sys.path.insert(0, proj_root)
 
     from scripts.download_nifty500 import main as dl_main
+
     dl_main()
 
 
@@ -479,6 +706,7 @@ async def _cmd_bulk_download(
     args: argparse.Namespace,
 ) -> None:
     from scripts.bulk_download_ohlcv import run
+
     await run(
         batch=args.batch,
         tickers_csv=args.tickers,
@@ -492,10 +720,10 @@ async def _cmd_fill_gaps(
     from backend.pipeline.jobs.fill_gaps import (
         fill_company_info_gaps,
     )
+
     result = fill_company_info_gaps()
     _logger.info(
-        "Fill gaps: patched=%d skipped=%d "
-        "no_master=%d total=%d",
+        "Fill gaps: patched=%d skipped=%d " "no_master=%d total=%d",
         result["patched"],
         result["skipped"],
         result["no_master"],
@@ -548,7 +776,9 @@ async def _cmd_correct(args: argparse.Namespace) -> None:
         rate_tracker=rate_tracker,
     )
     _logger.info(
-        "Correct %s: %s", ticker, outcome,
+        "Correct %s: %s",
+        ticker,
+        outcome,
     )
 
 
@@ -579,6 +809,627 @@ async def _cmd_reset(args: argparse.Namespace) -> None:
     _logger.info("Cursor '%s' reset to 0", args.cursor)
 
 
+async def _cmd_quarterly(
+    args: argparse.Namespace,
+) -> None:
+    from backend.db.engine import get_session_factory
+    from backend.db.models.stock_master import (
+        StockMaster,
+    )
+    from backend.pipeline.cursor import (
+        advance_cursor,
+        create_cursor,
+        get_cursor,
+        get_next_batch,
+        set_cursor_status,
+    )
+    from sqlalchemy import func, select
+    from tools._stock_shared import _require_repo
+    from tools.stock_data_tool import (
+        _fetch_and_store_quarterly,
+    )
+
+    cursor_name = args.cursor
+    batch_size = args.batch_size
+    force = args.force
+    factory = get_session_factory()
+    repo = _require_repo()
+
+    # Ensure cursor exists
+    async with factory() as session:
+        cursor = await get_cursor(
+            session,
+            cursor_name,
+        )
+        if cursor is None:
+            total = await session.execute(
+                select(func.count(StockMaster.id)).where(
+                    StockMaster.is_active.is_(True),
+                )
+            )
+            total_count = total.scalar() or 0
+            cursor = await create_cursor(
+                session,
+                cursor_name,
+                total_count,
+                batch_size,
+            )
+        if cursor.status == "completed":
+            _logger.info(
+                "Cursor %s already completed",
+                cursor_name,
+            )
+            return
+
+    async with factory() as session:
+        await set_cursor_status(
+            session,
+            cursor_name,
+            "in_progress",
+        )
+
+    # Fetch batch
+    async with factory() as session:
+        batch = await get_next_batch(
+            session,
+            cursor_name,
+        )
+
+    if not batch:
+        async with factory() as session:
+            await set_cursor_status(
+                session,
+                cursor_name,
+                "completed",
+            )
+        _logger.info(
+            "Quarterly cursor %s completed",
+            cursor_name,
+        )
+        return
+
+    processed = 0
+    failed = 0
+    for stock in batch:
+        ticker = stock.yf_ticker
+        try:
+            msg = _fetch_and_store_quarterly(
+                ticker,
+                repo,
+                force=force,
+            )
+            _logger.info("quarterly | %s | %s", ticker, msg)
+        except Exception:
+            _logger.warning(
+                "quarterly | %s failed",
+                ticker,
+                exc_info=True,
+            )
+            failed += 1
+        processed += 1
+        async with factory() as session:
+            await advance_cursor(
+                session,
+                cursor_name,
+                stock.id,
+            )
+
+    _logger.info(
+        "Quarterly batch: cursor=%s processed=%d " "failed=%d",
+        cursor_name,
+        processed,
+        failed,
+    )
+
+
+async def _cmd_screen(
+    args: argparse.Namespace,
+) -> None:
+    from backend.pipeline.screener.screen import (
+        run_screen,
+    )
+
+    tickers = None
+    if args.tickers:
+        tickers = [t.strip() for t in args.tickers.split(",")]
+    result = await run_screen(tickers=tickers)
+    _logger.info(
+        "Screen: scored=%d skipped=%d failed=%d "
+        "strong=%d moderate=%d weak=%d (%.1fs)",
+        result["scored"],
+        result["skipped"],
+        result["failed"],
+        result["strong"],
+        result["moderate"],
+        result["weak"],
+        result["elapsed_s"],
+    )
+
+
+# ------------------------------------------------------------------
+# Scheduler-backed commands (reuse executor functions)
+# ------------------------------------------------------------------
+
+
+def _make_cli_repo():
+    """Create a StockRepository for CLI use."""
+    from tools._stock_shared import _require_repo
+
+    return _require_repo()
+
+
+async def _cmd_analytics(
+    args: argparse.Namespace,
+) -> None:
+    """Compute analysis summary for tickers."""
+    import uuid
+
+    from jobs.executor import execute_compute_analytics
+
+    repo = _make_cli_repo()
+    run_id = str(uuid.uuid4())
+    scope = getattr(args, "scope", "all")
+    force = getattr(args, "force", False)
+    _logger.info(
+        "Analytics: scope=%s force=%s run=%s",
+        scope,
+        force,
+        run_id,
+    )
+    repo.append_scheduler_run({
+        "run_id": run_id,
+        "job_id": "cli",
+        "job_name": f"CLI analytics ({scope})",
+        "job_type": "compute_analytics",
+        "scope": scope,
+        "status": "running",
+        "started_at": __import__(
+            "datetime",
+        ).datetime.now(
+            __import__("datetime").timezone.utc,
+        ),
+        "completed_at": None,
+        "duration_secs": None,
+        "tickers_total": 0,
+        "tickers_done": 0,
+        "error_message": None,
+        "trigger_type": "cli",
+        "pipeline_run_id": None,
+    })
+    execute_compute_analytics(
+        scope, run_id, repo, force=force,
+    )
+    _logger.info("Analytics complete: run=%s", run_id)
+
+
+async def _cmd_sentiment(
+    args: argparse.Namespace,
+) -> None:
+    """Run LLM sentiment scoring."""
+    import uuid
+
+    from jobs.executor import execute_run_sentiment
+
+    repo = _make_cli_repo()
+    run_id = str(uuid.uuid4())
+    scope = getattr(args, "scope", "all")
+    force = getattr(args, "force", False)
+    _logger.info(
+        "Sentiment: scope=%s force=%s run=%s",
+        scope,
+        force,
+        run_id,
+    )
+    repo.append_scheduler_run({
+        "run_id": run_id,
+        "job_id": "cli",
+        "job_name": f"CLI sentiment ({scope})",
+        "job_type": "run_sentiment",
+        "scope": scope,
+        "status": "running",
+        "started_at": __import__(
+            "datetime",
+        ).datetime.now(
+            __import__("datetime").timezone.utc,
+        ),
+        "completed_at": None,
+        "duration_secs": None,
+        "tickers_total": 0,
+        "tickers_done": 0,
+        "error_message": None,
+        "trigger_type": "cli",
+        "pipeline_run_id": None,
+    })
+    execute_run_sentiment(
+        scope, run_id, repo, force=force,
+    )
+    _logger.info("Sentiment complete: run=%s", run_id)
+
+
+async def _cmd_forecast(
+    args: argparse.Namespace,
+) -> None:
+    """Run Prophet price forecasts."""
+    import uuid
+
+    from jobs.executor import execute_run_forecasts
+
+    repo = _make_cli_repo()
+    run_id = str(uuid.uuid4())
+    scope = getattr(args, "scope", "all")
+    force = getattr(args, "force", False)
+    _logger.info(
+        "Forecast: scope=%s force=%s run=%s",
+        scope,
+        force,
+        run_id,
+    )
+    repo.append_scheduler_run({
+        "run_id": run_id,
+        "job_id": "cli",
+        "job_name": f"CLI forecast ({scope})",
+        "job_type": "run_forecasts",
+        "scope": scope,
+        "status": "running",
+        "started_at": __import__(
+            "datetime",
+        ).datetime.now(
+            __import__("datetime").timezone.utc,
+        ),
+        "completed_at": None,
+        "duration_secs": None,
+        "tickers_total": 0,
+        "tickers_done": 0,
+        "error_message": None,
+        "trigger_type": "cli",
+        "pipeline_run_id": None,
+    })
+    execute_run_forecasts(
+        scope, run_id, repo, force=force,
+    )
+    _logger.info("Forecast complete: run=%s", run_id)
+
+
+async def _cmd_recommend(
+    args: argparse.Namespace,
+) -> None:
+    """Generate LLM portfolio recommendations.
+
+    Uses the same Smart Funnel pipeline as the
+    scheduler and dashboard Refresh button.
+    """
+    import asyncio
+    import time as _time
+    import uuid as _uuid
+    from datetime import date, datetime, timedelta, timezone
+
+    from jobs.recommendation_engine import (
+        stage1_prefilter,
+        stage2_gap_analysis,
+        stage3_llm_reasoning,
+    )
+    from sqlalchemy.ext.asyncio import (
+        AsyncSession,
+        async_sessionmaker,
+        create_async_engine,
+    )
+    from sqlalchemy.pool import NullPool
+    from config import get_settings
+    from backend.db.models.recommendation import (
+        Recommendation as RecModel,
+        RecommendationRun as RunModel,
+    )
+
+    scope = getattr(args, "scope", "india")
+    force = getattr(args, "force", False)
+
+    _logger.info(
+        "Recommend: scope=%s force=%s",
+        scope,
+        force,
+    )
+
+    # Stage 1
+    t0 = _time.monotonic()
+    candidates = stage1_prefilter(scope=scope)
+    if candidates.empty:
+        _logger.warning("No candidates — aborting")
+        return
+    _logger.info(
+        "Stage 1: %d candidates (%.1fs)",
+        len(candidates),
+        _time.monotonic() - t0,
+    )
+
+    # Find users with portfolios
+    from db.duckdb_engine import query_iceberg_df
+
+    user_df = query_iceberg_df(
+        "stocks.portfolio_transactions",
+        "SELECT DISTINCT user_id "
+        "FROM portfolio_transactions",
+    )
+    if user_df.empty:
+        _logger.warning("No users with portfolios")
+        return
+
+    user_ids = user_df["user_id"].tolist()
+    if getattr(args, "user", None):
+        user_ids = [args.user]
+
+    _logger.info(
+        "Processing %d user(s)",
+        len(user_ids),
+    )
+
+    eng = create_async_engine(
+        get_settings().database_url,
+        poolclass=NullPool,
+    )
+    factory = async_sessionmaker(
+        eng, class_=AsyncSession,
+    )
+
+    generated = 0
+    skipped = 0
+
+    for uid in user_ids:
+        # Quota gate (5 runs / 30 days)
+        if not force:
+            from jobs.recommendation_engine import (
+                check_recommendation_quota,
+            )
+
+            quota = check_recommendation_quota(
+                uid, scope=scope,
+            )
+            if not quota.get("allowed"):
+                _logger.info(
+                    "User %s: %s — skip",
+                    uid[:8],
+                    quota.get("reason", "quota"),
+                )
+                skipped += 1
+                continue
+
+        # Stage 2 + 3
+        s2 = stage2_gap_analysis(
+            uid, candidates, scope=scope,
+        )
+        if not s2.get(
+            "portfolio_summary", {},
+        ).get("total_holdings"):
+            _logger.info(
+                "User %s: no %s holdings — skip",
+                uid[:8],
+                scope,
+            )
+            skipped += 1
+            continue
+
+        s3 = stage3_llm_reasoning(s2)
+        recs = s3.get("recommendations", [])
+
+        # Persist
+        run_id = str(_uuid.uuid4())
+        cand_map = {
+            c["ticker"]: c
+            for c in s2.get("candidates", [])
+        }
+        async with factory() as s:
+            s.add(RunModel(
+                run_id=run_id,
+                user_id=uid,
+                run_date=date.today(),
+                run_type="cli",
+                scope=scope,
+                portfolio_snapshot=s2.get(
+                    "portfolio_summary", {},
+                ),
+                health_score=s3.get(
+                    "health_score", 0,
+                ),
+                health_label=s3.get(
+                    "health_label", "unknown",
+                ),
+                health_assessment=s3.get(
+                    "portfolio_health_assessment",
+                ),
+                candidates_scanned=len(candidates),
+                candidates_passed=len(
+                    s2.get("candidates", []),
+                ),
+                llm_model=s3.get("llm_model"),
+                llm_tokens_used=s3.get(
+                    "llm_tokens_used",
+                ),
+            ))
+            for r in recs:
+                ticker = r.get("ticker")
+                c = cand_map.get(ticker, {})
+                s.add(RecModel(
+                    id=str(_uuid.uuid4()),
+                    run_id=run_id,
+                    tier=r.get("tier", "discovery"),
+                    category=r.get(
+                        "category", "general",
+                    ),
+                    ticker=ticker,
+                    action=r.get("action", "hold"),
+                    severity=r.get(
+                        "severity", "low",
+                    ),
+                    rationale=r.get(
+                        "rationale", "",
+                    ),
+                    expected_impact=r.get(
+                        "expected_impact",
+                    ),
+                    data_signals=r.get(
+                        "data_signals", {},
+                    ),
+                    price_at_rec=(
+                        r.get("price_at_rec")
+                        or c.get("current_price")
+                    ),
+                    target_price=(
+                        r.get("target_price")
+                        or c.get("target_price")
+                    ),
+                    expected_return_pct=(
+                        r.get("expected_return_pct")
+                        or c.get("forecast_3m_pct")
+                    ),
+                    status="active",
+                ))
+            await s.commit()
+
+        _logger.info(
+            "User %s: %d recs generated",
+            uid[:8],
+            len(recs),
+        )
+        generated += 1
+
+    await eng.dispose()
+    elapsed = _time.monotonic() - t0
+    _logger.info(
+        "Recommend done: %d generated, "
+        "%d skipped (%.1fs)",
+        generated,
+        skipped,
+        elapsed,
+    )
+
+
+async def _cmd_indices(
+    args: argparse.Namespace,
+) -> None:
+    """Refresh market indices."""
+    from jobs.gap_filler import refresh_market_indices
+
+    count = refresh_market_indices()
+    _logger.info("Market indices: %d rows", count)
+
+
+async def _cmd_refresh(
+    args: argparse.Namespace,
+) -> None:
+    """Full pipeline: data → analytics → sentiment → piotroski.
+
+    Mirrors the scheduler pipeline chain but runs
+    from the CLI sequentially.
+    """
+    import uuid
+
+    from jobs.executor import (
+        execute_compute_analytics,
+        execute_data_refresh,
+        execute_run_forecasts,
+        execute_run_sentiment,
+    )
+
+    repo = _make_cli_repo()
+    scope = getattr(args, "scope", "all")
+    force = getattr(args, "force", False)
+    skip_fc = getattr(args, "skip_forecast", False)
+
+    steps = [
+        ("data_refresh", execute_data_refresh),
+        (
+            "compute_analytics",
+            execute_compute_analytics,
+        ),
+        ("run_sentiment", execute_run_sentiment),
+    ]
+    if not skip_fc:
+        steps.append(
+            ("run_forecasts", execute_run_forecasts),
+        )
+
+    pipeline_run_id = str(uuid.uuid4())
+    _logger.info(
+        "Refresh pipeline: scope=%s force=%s "
+        "steps=%d run=%s",
+        scope,
+        force,
+        len(steps),
+        pipeline_run_id,
+    )
+
+    for i, (job_type, executor_fn) in enumerate(
+        steps, 1,
+    ):
+        run_id = str(uuid.uuid4())
+        _logger.info(
+            "Step %d/%d: %s (run=%s)",
+            i,
+            len(steps),
+            job_type,
+            run_id,
+        )
+        repo.append_scheduler_run({
+            "run_id": run_id,
+            "job_id": "cli",
+            "job_name": f"CLI {job_type} ({scope})",
+            "job_type": job_type,
+            "scope": scope,
+            "status": "running",
+            "started_at": __import__(
+                "datetime",
+            ).datetime.now(
+                __import__("datetime").timezone.utc,
+            ),
+            "completed_at": None,
+            "duration_secs": None,
+            "tickers_total": 0,
+            "tickers_done": 0,
+            "error_message": None,
+            "trigger_type": "cli",
+            "pipeline_run_id": pipeline_run_id,
+        })
+        try:
+            executor_fn(
+                scope, run_id, repo, force=force,
+            )
+            _logger.info(
+                "Step %d/%d: %s complete",
+                i,
+                len(steps),
+                job_type,
+            )
+        except Exception as exc:
+            _logger.error(
+                "Step %d/%d: %s failed: %s",
+                i,
+                len(steps),
+                job_type,
+                exc,
+            )
+            _logger.info(
+                "Pipeline aborted at step %d", i,
+            )
+            return
+
+    # Piotroski (async, always runs)
+    from backend.pipeline.screener.screen import (
+        run_screen,
+    )
+
+    _logger.info("Step final: Piotroski F-Score")
+    result = await run_screen()
+    _logger.info(
+        "Piotroski: scored=%d strong=%d "
+        "moderate=%d weak=%d (%.1fs)",
+        result["scored"],
+        result["strong"],
+        result["moderate"],
+        result["weak"],
+        result["elapsed_s"],
+    )
+    _logger.info("Refresh pipeline complete")
+
+
 # ------------------------------------------------------------------
 # Entry point
 # ------------------------------------------------------------------
@@ -588,10 +1439,7 @@ def main() -> None:
     """Parse args and dispatch to the appropriate command."""
     logging.basicConfig(
         level=logging.INFO,
-        format=(
-            "%(asctime)s %(levelname)s "
-            "%(name)s %(message)s"
-        ),
+        format=("%(asctime)s %(levelname)s " "%(name)s %(message)s"),
     )
 
     parser = _build_parser()

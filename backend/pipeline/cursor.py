@@ -1,7 +1,8 @@
 """Ingestion cursor and skipped-ticker CRUD operations."""
 import logging
+from datetime import datetime, timezone
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.models.ingestion_cursor import (
@@ -206,7 +207,7 @@ async def log_skipped(
         existing.attempts += 1
         existing.error_message = truncated
         existing.error_category = error_category
-        existing.last_attempted_at = func.now()
+        existing.last_attempted_at = datetime.now(timezone.utc)
     else:
         session.add(
             IngestionSkipped(
@@ -284,7 +285,7 @@ async def mark_resolved(
     _logger.info("Resolved skipped id=%d", skipped_id)
 
 
-_RETRYABLE_CATEGORIES = {"rate_limit", "timeout"}
+_RETRYABLE_CATEGORIES = frozenset({"rate_limit", "timeout"})
 
 
 async def get_retryable_skipped(

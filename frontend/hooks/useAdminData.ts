@@ -7,7 +7,12 @@
  * ``mutate()`` to revalidate after writes.
  */
 
-import { useCallback } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import useSWR from "swr";
 import { apiFetch } from "@/lib/apiFetch";
 import { API_URL } from "@/lib/config";
@@ -557,5 +562,229 @@ export function useAdminMaintenance() {
     retainSelected,
     analyzeGaps,
     getPaymentTransactions,
+  };
+}
+
+// ---------------------------------------------------------------
+// Data Health hook
+// ---------------------------------------------------------------
+
+export interface DataHealthResult {
+  total_registry: number;
+  total_analyzable: number;
+  total_financial: number;
+  ohlcv: {
+    nan_close_count: number;
+    nan_close_tickers: string[];
+    missing_latest_count: number;
+    stale_count: number;
+    stale_tickers: string[];
+  };
+  forecasts: {
+    total_tickers: number;
+    missing_tickers: string[];
+    extreme_predictions: number;
+    high_mape: number;
+    stale_count: number;
+  };
+  sentiment: {
+    total_tickers: number;
+    missing_tickers: string[];
+    stale_count: number;
+  };
+  piotroski: {
+    total_tickers: number;
+    missing_tickers: string[];
+    stale_count: number;
+  };
+  analytics: {
+    total_tickers: number;
+    missing_tickers: string[];
+  };
+}
+
+export type FixTarget =
+  | "ohlcv"
+  | "analytics"
+  | "sentiment"
+  | "piotroski"
+  | "forecasts";
+
+export interface FixProgress {
+  run_id: string;
+  status: string;
+  tickers_total: number;
+  tickers_done: number;
+  errors: string | null;
+  elapsed_s: number | null;
+}
+
+export interface UseDataHealthResult {
+  data: DataHealthResult | null;
+  loading: boolean;
+  error: string | null;
+  refresh: () => void;
+  fixOhlcv: (
+    action: "backfill_nan" | "backfill_missing",
+  ) => Promise<{ status: string }>;
+  triggerFix: (
+    target: FixTarget,
+    mode?: "stale_only" | "force_all",
+  ) => Promise<void>;
+  fixProgress: FixProgress | null;
+  fixTarget: FixTarget | null;
+}
+
+export function useDataHealth(): UseDataHealthResult {
+  const {
+    data,
+    error,
+    isLoading,
+    mutate,
+  } = useSWR<DataHealthResult>(
+    `${API_URL}/admin/data-health`,
+    fetcher,
+    {
+      revalidateOnFocus: false,
+      dedupingInterval: 5_000,
+    },
+  );
+
+  const [fixTarget, setFixTarget] =
+    useState<FixTarget | null>(null);
+  const [fixProgress, setFixProgress] =
+    useState<FixProgress | null>(null);
+  const pollRef = useRef<ReturnType<
+    typeof setInterval
+  > | null>(null);
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+      }
+    };
+  }, []);
+
+  const refresh = useCallback(
+    () => {
+      mutate(undefined, { revalidate: true });
+    },
+    [mutate],
+  );
+
+  const fixOhlcv = useCallback(
+    async (
+      action: "backfill_nan" | "backfill_missing",
+    ): Promise<{ status: string }> => {
+      const r = await apiFetch(
+        `${API_URL}/admin/data-health/fix-ohlcv`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ action }),
+        },
+      );
+      if (!r.ok) {
+        const b = await r.json().catch(() => ({}));
+        throw new Error(
+          (b as { detail?: string }).detail ||
+            `HTTP ${r.status}`,
+        );
+      }
+      const result = await r.json();
+      mutate();
+      return result as { status: string };
+    },
+    [mutate],
+  );
+
+  const triggerFix = useCallback(
+    async (
+      target: FixTarget,
+      mode: "stale_only" | "force_all" = "stale_only",
+    ) => {
+      const r = await apiFetch(
+        `${API_URL}/admin/data-health/fix`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ target, mode }),
+        },
+      );
+      if (!r.ok) {
+        const b = await r.json().catch(() => ({}));
+        throw new Error(
+          (b as { detail?: string }).detail ||
+            `HTTP ${r.status}`,
+        );
+      }
+      const { run_id } = (await r.json()) as {
+        run_id: string;
+      };
+      setFixTarget(target);
+      setFixProgress({
+        run_id,
+        status: "running",
+        tickers_total: 0,
+        tickers_done: 0,
+        errors: null,
+        elapsed_s: null,
+      });
+
+      // Poll every 2s
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+      }
+      pollRef.current = setInterval(async () => {
+        try {
+          const sr = await apiFetch(
+            `${API_URL}/admin/data-health/fix/${run_id}/status`,
+          );
+          if (!sr.ok) return;
+          const p = (await sr.json()) as FixProgress;
+          setFixProgress(p);
+          const done = [
+            "success",
+            "failed",
+            "cancelled",
+          ].includes(p.status);
+          if (done) {
+            if (pollRef.current) {
+              clearInterval(pollRef.current);
+              pollRef.current = null;
+            }
+            mutate();
+            setTimeout(() => {
+              setFixTarget(null);
+              setFixProgress(null);
+            }, 5000);
+          }
+        } catch {
+          /* ignore poll errors */
+        }
+      }, 2000);
+    },
+    [mutate],
+  );
+
+  return {
+    data: data ?? null,
+    loading: isLoading,
+    error: error
+      ? error instanceof Error
+        ? error.message
+        : "Failed to load data health"
+      : null,
+    refresh,
+    fixOhlcv,
+    triggerFix,
+    fixProgress,
+    fixTarget,
   };
 }

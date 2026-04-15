@@ -296,17 +296,21 @@ export interface ScreenerRow {
   rsi_signal: string | null;
   macd_signal: string | null;
   sma_200_signal: string | null;
+  sentiment_score: number | null;
+  sentiment_headlines: number | null;
   annualized_return_pct: number | null;
   annualized_volatility_pct: number | null;
   sharpe_ratio: number | null;
   sector: string | null;
   market: string;
+  tags: string[];
   action?: string;
 }
 
 export interface ScreenerResponse {
   rows: ScreenerRow[];
   sectors: string[];
+  tags: string[];
 }
 
 export interface TargetRow {
@@ -491,10 +495,186 @@ export interface HealthSummary {
   disabled: number;
 }
 
+// ---------------------------------------------------------------
+// Portfolio Analytics (Sprint 6 — W1–W5)
+// ---------------------------------------------------------------
+
+export interface AllocationItem {
+  sector: string;
+  value: number;
+  weight_pct: number;
+  stock_count: number;
+  tickers: string[];
+}
+
+export interface AllocationResponse {
+  sectors: AllocationItem[];
+  total_value: number;
+  currency: string;
+}
+
+export interface NewsHeadline {
+  title: string;
+  url: string;
+  source: string;
+  published_at: string;
+  ticker: string | null;
+  sentiment: number;
+}
+
+export interface PortfolioNewsResponse {
+  headlines: NewsHeadline[];
+  portfolio_sentiment: number;
+  portfolio_sentiment_label: string;
+  market_sentiment: number;
+  market_sentiment_label: string;
+}
+
+export interface Recommendation {
+  type: string;
+  severity: string;
+  title: string;
+  description: string;
+  ticker: string | null;
+  metric_value: number;
+  threshold: number;
+}
+
+export interface RecommendationsResponse {
+  recommendations: Recommendation[];
+  portfolio_health: string;
+}
+
+// ---------------------------------------------------------------
+// Forecast Backtest Overlay
+// ---------------------------------------------------------------
+
+export interface BacktestPoint {
+  date: string;
+  predicted: number;
+  actual: number;
+}
+
+export interface BacktestAccuracy {
+  directional_accuracy_pct: number;
+  max_error_pct: number;
+  p50_error_pct: number;
+  p90_error_pct: number;
+}
+
+export interface ForecastBacktestResponse {
+  ticker: string;
+  data: BacktestPoint[];
+  accuracy: BacktestAccuracy | null;
+}
+
 export interface TierHealthResponse {
   timestamp: number;
   health: {
     tiers: TierHealth[];
     summary: HealthSummary;
   };
+}
+
+// ---------------------------------------------------------------
+// Piotroski F-Score
+// ---------------------------------------------------------------
+
+export interface PiotroskiRow {
+  ticker: string;
+  company_name: string | null;
+  total_score: number;
+  label: string;
+  roa_positive: boolean;
+  operating_cf_positive: boolean;
+  roa_increasing: boolean;
+  cf_gt_net_income: boolean;
+  leverage_decreasing: boolean;
+  current_ratio_increasing: boolean;
+  no_dilution: boolean;
+  gross_margin_increasing: boolean;
+  asset_turnover_increasing: boolean;
+  market_cap: number | null;
+  revenue: number | null;
+  avg_volume: number | null;
+  sector: string | null;
+  industry: string | null;
+  score_date: string | null;
+}
+
+export interface PiotroskiResponse {
+  rows: PiotroskiRow[];
+  sectors: string[];
+  score_date: string | null;
+}
+
+// ---------------------------------------------------------------
+// LLM Portfolio Recommendations (ASETPLTFRM-298)
+// ---------------------------------------------------------------
+
+export interface RecommendationItem {
+  id: string;
+  tier: "portfolio" | "watchlist" | "discovery";
+  category: string;
+  ticker: string | null;
+  company_name?: string | null;
+  action: string;
+  severity: "high" | "medium" | "low";
+  rationale: string;
+  expected_impact?: string | null;
+  data_signals: Record<string, number | string>;
+  price_at_rec?: number | null;
+  target_price?: number | null;
+  expected_return_pct?: number | null;
+  index_tags: string[];
+  status: string;
+  acted_on_date?: string | null;
+}
+
+export interface RecommendationResponse {
+  run_id: string;
+  run_date: string;
+  run_type: string;
+  health_score: number;
+  health_label: string;
+  health_assessment?: string | null;
+  recommendations: RecommendationItem[];
+  generated_at?: string | null;
+}
+
+export interface HistoryRunItem {
+  run_id: string;
+  run_date: string;
+  scope: string;
+  run_type: string;
+  health_score: number;
+  health_label: string;
+  total_recommendations: number;
+  acted_on_count: number;
+}
+
+export interface AggregateStats {
+  total_runs: number;
+  total_recommendations: number;
+  overall_hit_rate_30d?: number | null;
+  overall_hit_rate_60d?: number | null;
+  overall_hit_rate_90d?: number | null;
+  adoption_rate_pct: number;
+}
+
+export interface RecommendationHistoryResponse {
+  runs: HistoryRunItem[];
+  aggregate_stats: AggregateStats;
+}
+
+export interface RecommendationStatsResponse {
+  total_recommendations: number;
+  total_acted_on: number;
+  adoption_rate_pct: number;
+  hit_rate_30d?: number | null;
+  hit_rate_60d?: number | null;
+  hit_rate_90d?: number | null;
+  avg_return_30d?: number | null;
+  avg_return_60d?: number | null;
+  avg_return_90d?: number | null;
 }

@@ -558,9 +558,23 @@ def create_app(
 
             ctx = context_store.get(session_id)
             if ctx is None:
-                ctx = ConversationContext(
-                    session_id=session_id,
+                # Try to resume from user's last session
+                ctx = context_store.get_latest_for_user(
+                    user_id,
                 )
+                if ctx is not None:
+                    # Carry over context to new session
+                    ctx.session_id = session_id
+                    _logger.debug(
+                        "Resumed context from prior "
+                        "session for user %s",
+                        user_id,
+                    )
+                else:
+                    ctx = ConversationContext(
+                        session_id=session_id,
+                    )
+                ctx.user_id = user_id
                 # Populate user profile on first turn.
                 try:
                     user_ctx = _build_user_context(
@@ -578,8 +592,12 @@ def create_app(
                 except Exception:
                     pass
 
+            # Ensure user_id is always set
+            if not ctx.user_id:
+                ctx.user_id = user_id
             ctx.last_agent = agent
             ctx.last_intent = intent
+            ctx.last_response = response[:500]
             ctx.current_topic = (
                 f"{', '.join(tickers)} {intent}"
                 if tickers else intent
@@ -1319,7 +1337,16 @@ def create_app(
             raise HTTPException(
                 503, "Scheduler not available",
             )
-        run_id = svc.trigger_now(job_id)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        force = body.get("force", False)
+        run_id = svc.trigger_now(
+            job_id,
+            trigger_type="manual",
+            force=force,
+        )
         if not run_id:
             raise HTTPException(
                 404, "Job not found or no executor",
@@ -1350,12 +1377,32 @@ def create_app(
             request.app.state, "scheduler", None,
         )
         if not svc:
-            return {"runs": []}
-        runs = svc._repo.get_scheduler_runs(days=7)
-        # Sanitise for JSON (NaN, NaT, datetimes)
+            return {"runs": [], "total": 0}
+        params = request.query_params
+        days = int(params.get("days", "7"))
+        job_type = params.get("job_type") or None
+        status = params.get("status") or None
+        p_run_id = (
+            params.get("pipeline_run_id") or None
+        )
+        offset = int(params.get("offset", "0"))
+        limit = int(params.get("limit", "50"))
+        runs = svc._repo.get_scheduler_runs(
+            days=days,
+            job_type=job_type,
+            status=status,
+            pipeline_run_id=p_run_id,
+            offset=offset,
+            limit=limit,
+        )
+        total = (
+            runs[0].get("_total", len(runs))
+            if runs else 0
+        )
         import math as _math
 
         for r in runs:
+            r.pop("_total", None)
             for k, v in list(r.items()):
                 if hasattr(v, "isoformat"):
                     r[k] = v.isoformat()
@@ -1363,7 +1410,150 @@ def create_app(
                     _math.isnan(v) or _math.isinf(v)
                 ):
                     r[k] = None
-        return {"runs": runs}
+        return {"runs": runs, "total": total}
+
+    # ── Pipeline endpoints ─────────────────────
+
+    async def _pipeline_list(request: Request):
+        """GET /admin/scheduler/pipelines."""
+        svc = getattr(
+            request.app.state, "scheduler", None,
+        )
+        if not svc:
+            return {"pipelines": []}
+        return {"pipelines": svc.list_pipelines()}
+
+    async def _pipeline_create(request: Request):
+        """POST /admin/scheduler/pipelines."""
+        body = await request.json()
+        svc = getattr(
+            request.app.state, "scheduler", None,
+        )
+        if not svc:
+            raise HTTPException(
+                503, "Scheduler not available",
+            )
+        cron_days = body.get("cron_days", [])
+        if isinstance(cron_days, list):
+            cron_days = ",".join(cron_days)
+        cron_dates = body.get("cron_dates", [])
+        if isinstance(cron_dates, list):
+            cron_dates = ",".join(
+                str(d) for d in cron_dates
+            )
+        data = {
+            "name": body.get("name", "Untitled"),
+            "scope": body.get("scope", "all"),
+            "enabled": body.get("enabled", True),
+            "cron_days": cron_days,
+            "cron_dates": cron_dates or "",
+            "cron_time": body.get(
+                "cron_time", "18:00",
+            ),
+            "steps": body.get("steps", []),
+        }
+        pid = svc.add_pipeline(data)
+        return {
+            "pipeline_id": pid, "detail": "created",
+        }
+
+    async def _pipeline_update(
+        request: Request, pipeline_id: str,
+    ):
+        """PATCH /admin/scheduler/pipelines/{id}."""
+        body = await request.json()
+        svc = getattr(
+            request.app.state, "scheduler", None,
+        )
+        if not svc:
+            raise HTTPException(
+                503, "Scheduler not available",
+            )
+        updates = {}
+        for k in (
+            "name", "scope", "enabled",
+            "cron_days", "cron_time", "cron_dates",
+            "steps",
+        ):
+            if k in body:
+                v = body[k]
+                if k == "cron_days" and isinstance(
+                    v, list,
+                ):
+                    v = ",".join(v)
+                if k == "cron_dates" and isinstance(
+                    v, list,
+                ):
+                    v = ",".join(str(d) for d in v)
+                updates[k] = v
+        if updates:
+            svc.update_pipeline(pipeline_id, updates)
+        return {"detail": "updated"}
+
+    async def _pipeline_delete(
+        request: Request, pipeline_id: str,
+    ):
+        """DELETE /admin/scheduler/pipelines/{id}."""
+        svc = getattr(
+            request.app.state, "scheduler", None,
+        )
+        if not svc:
+            raise HTTPException(
+                503, "Scheduler not available",
+            )
+        svc.remove_pipeline(pipeline_id)
+        return {"detail": "deleted"}
+
+    async def _pipeline_trigger(
+        request: Request, pipeline_id: str,
+    ):
+        """POST /admin/scheduler/pipelines/{id}/trigger."""
+        svc = getattr(
+            request.app.state, "scheduler", None,
+        )
+        if not svc:
+            raise HTTPException(
+                503, "Scheduler not available",
+            )
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        force = body.get("force", False)
+        tag = svc.trigger_pipeline_now(
+            pipeline_id, force=force,
+        )
+        if not tag:
+            raise HTTPException(
+                404, "Pipeline not found",
+            )
+        return {"pipeline_id": pipeline_id, "tag": tag}
+
+    async def _pipeline_resume(
+        request: Request, pipeline_id: str,
+    ):
+        """POST .../pipelines/{id}/resume."""
+        body = await request.json()
+        svc = getattr(
+            request.app.state, "scheduler", None,
+        )
+        if not svc:
+            raise HTTPException(
+                503, "Scheduler not available",
+            )
+        from_step = body.get("from_step", 1)
+        tag = svc.resume_pipeline_now(
+            pipeline_id, from_step,
+        )
+        if not tag:
+            raise HTTPException(
+                404, "Pipeline not found",
+            )
+        return {
+            "pipeline_id": pipeline_id,
+            "from_step": from_step,
+            "tag": tag,
+        }
 
     async def _scheduler_stats(request: Request):
         """GET /admin/scheduler/stats."""
@@ -1445,6 +1635,778 @@ def create_app(
         dependencies=[Depends(superuser_only)],
     )
 
+    # ── Pipeline routes ───────────────────────
+    admin_router.add_api_route(
+        "/admin/scheduler/pipelines",
+        _pipeline_list,
+        methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/scheduler/pipelines",
+        _pipeline_create,
+        methods=["POST"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/scheduler/pipelines/{pipeline_id}",
+        _pipeline_update,
+        methods=["PATCH"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/scheduler/pipelines/{pipeline_id}",
+        _pipeline_delete,
+        methods=["DELETE"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/scheduler/pipelines"
+        "/{pipeline_id}/trigger",
+        _pipeline_trigger,
+        methods=["POST"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/scheduler/pipelines"
+        "/{pipeline_id}/resume",
+        _pipeline_resume,
+        methods=["POST"],
+        dependencies=[Depends(superuser_only)],
+    )
+
+    # ── Data health check ──────────────────────
+
+    async def _admin_data_health():
+        """GET /admin/data-health — data quality status."""
+        from datetime import datetime, timedelta, timezone
+
+        from db.duckdb_engine import query_iceberg_df
+        from tools._stock_shared import _require_repo
+
+        today = datetime.now(timezone.utc).date()
+        yesterday = today - timedelta(days=1)
+        stale_3d = today - timedelta(days=3)
+        stale_30d = today - timedelta(days=30)
+        stale_7d = today - timedelta(days=7)
+
+        # ── Invalidate DuckDB cache so health reads
+        # pick up recent writes (e.g. fix runs). ──
+        from db.duckdb_engine import (
+            invalidate_metadata,
+        )
+
+        invalidate_metadata()
+
+        # ── Registry baseline ────────────────────
+        try:
+            repo = _require_repo()
+            registry = repo.get_all_registry()
+            all_tickers = set(registry.keys())
+            total_registry = len(all_tickers)
+            # Analyzable: stocks + ETFs (for
+            # analytics, sentiment, forecasts)
+            analyzable_tickers = {
+                t
+                for t in all_tickers
+                if registry[t].get(
+                    "ticker_type", "stock",
+                )
+                in ("stock", "etf")
+            }
+            # Financials: stocks only (for Piotroski)
+            financial_tickers = {
+                t
+                for t in all_tickers
+                if registry[t].get(
+                    "ticker_type", "stock",
+                )
+                == "stock"
+            }
+        except Exception:
+            all_tickers = set()
+            analyzable_tickers = set()
+            financial_tickers = set()
+            total_registry = 0
+
+        result: dict = {
+            "total_registry": total_registry,
+            "total_analyzable": len(
+                analyzable_tickers,
+            ),
+            "total_financial": len(
+                financial_tickers,
+            ),
+            "timestamp": time.time(),
+        }
+
+        # ── Parallel DuckDB queries ──────────────
+        # Run all 5 health checks concurrently via
+        # ThreadPoolExecutor (DuckDB queries are
+        # CPU-bound but release the GIL for I/O).
+        from concurrent.futures import (
+            ThreadPoolExecutor,
+        )
+
+        def _ohlcv_health():
+            """Combined OHLCV: NaN + freshness."""
+            o: dict = {
+                "nan_close_count": 0,
+                "nan_close_tickers": [],
+                "missing_latest_count": 0,
+                "stale_count": 0,
+                "stale_tickers": [],
+            }
+            try:
+                # Single query for NaN stats
+                nan_df = query_iceberg_df(
+                    "stocks.ohlcv",
+                    "SELECT count(*) AS cnt, "
+                    "count(DISTINCT ticker) "
+                    "  AS tk_cnt "
+                    "FROM ohlcv "
+                    "WHERE close IS NULL "
+                    "OR isnan(close)",
+                )
+                if not nan_df.empty:
+                    o["nan_close_count"] = int(
+                        nan_df["cnt"].iloc[0]
+                    )
+                if (
+                    not nan_df.empty
+                    and nan_df["tk_cnt"].iloc[0] > 0
+                ):
+                    tk = query_iceberg_df(
+                        "stocks.ohlcv",
+                        "SELECT DISTINCT ticker "
+                        "FROM ohlcv "
+                        "WHERE close IS NULL "
+                        "OR isnan(close)",
+                    )
+                    if not tk.empty:
+                        o["nan_close_tickers"] = (
+                            sorted(
+                                tk["ticker"].tolist()
+                            )
+                        )
+
+                # Freshness per ticker
+                latest = query_iceberg_df(
+                    "stocks.ohlcv",
+                    "SELECT ticker, "
+                    "MAX(date) AS latest "
+                    "FROM ohlcv "
+                    "GROUP BY ticker",
+                )
+                if not latest.empty:
+                    for _, row in (
+                        latest.iterrows()
+                    ):
+                        d = row["latest"]
+                        if hasattr(d, "date"):
+                            d = d.date()
+                        if d < yesterday:
+                            o[
+                                "missing_latest_count"
+                            ] += 1
+                        if d < stale_3d:
+                            o["stale_count"] += 1
+                            o[
+                                "stale_tickers"
+                            ].append(row["ticker"])
+                    o["stale_tickers"] = sorted(
+                        o["stale_tickers"]
+                    )
+            except Exception:
+                _logger.debug(
+                    "OHLCV health failed",
+                    exc_info=True,
+                )
+            return o
+
+        def _forecast_health():
+            f: dict = {
+                "total_tickers": 0,
+                "missing_tickers": [],
+                "extreme_predictions": 0,
+                "high_mape": 0,
+                "stale_count": 0,
+            }
+            try:
+                df = query_iceberg_df(
+                    "stocks.forecast_runs",
+                    "SELECT ticker, "
+                    "MAX(run_date) AS latest, "
+                    "MAX(target_3m_pct_change)"
+                    "  AS max_pct, "
+                    "MIN(target_3m_pct_change)"
+                    "  AS min_pct, "
+                    "MAX(mape) AS max_mape "
+                    "FROM forecast_runs "
+                    "GROUP BY ticker",
+                )
+                if not df.empty:
+                    tks = set(
+                        df["ticker"].tolist()
+                    )
+                    f["total_tickers"] = len(tks)
+                    f["missing_tickers"] = sorted(
+                        analyzable_tickers - tks
+                    )
+                    for _, r in df.iterrows():
+                        mx = r.get("max_pct")
+                        mn = r.get("min_pct")
+                        if (
+                            mx is not None
+                            and mx > 100
+                        ) or (
+                            mn is not None
+                            and mn < -50
+                        ):
+                            f[
+                                "extreme_predictions"
+                            ] += 1
+                        mp = r.get("max_mape")
+                        if (
+                            mp is not None
+                            and mp > 25
+                        ):
+                            f["high_mape"] += 1
+                        d = r["latest"]
+                        if hasattr(d, "date"):
+                            d = d.date()
+                        if d < stale_30d:
+                            f["stale_count"] += 1
+            except Exception:
+                _logger.debug(
+                    "Forecast health failed",
+                    exc_info=True,
+                )
+            return f
+
+        def _sentiment_health():
+            s: dict = {
+                "total_tickers": 0,
+                "missing_tickers": [],
+                "stale_count": 0,
+            }
+            try:
+                df = query_iceberg_df(
+                    "stocks.sentiment_scores",
+                    "SELECT ticker, "
+                    "MAX(score_date) AS latest "
+                    "FROM sentiment_scores "
+                    "GROUP BY ticker",
+                )
+                if not df.empty:
+                    tks = set(
+                        df["ticker"].tolist()
+                    )
+                    s["total_tickers"] = len(tks)
+                    s["missing_tickers"] = sorted(
+                        analyzable_tickers - tks
+                    )
+                    for _, r in df.iterrows():
+                        d = r["latest"]
+                        if hasattr(d, "date"):
+                            d = d.date()
+                        if d < stale_7d:
+                            s["stale_count"] += 1
+            except Exception:
+                _logger.debug(
+                    "Sentiment health failed",
+                    exc_info=True,
+                )
+            return s
+
+        def _piotroski_health():
+            p: dict = {
+                "total_tickers": 0,
+                "missing_tickers": [],
+                "stale_count": 0,
+            }
+            try:
+                df = query_iceberg_df(
+                    "stocks.piotroski_scores",
+                    "SELECT ticker, "
+                    "MAX(score_date) AS latest "
+                    "FROM piotroski_scores "
+                    "GROUP BY ticker",
+                )
+                if not df.empty:
+                    tks = set(
+                        df["ticker"].tolist()
+                    )
+                    p["total_tickers"] = len(tks)
+                    p["missing_tickers"] = sorted(
+                        financial_tickers - tks
+                    )
+                    for _, r in df.iterrows():
+                        d = r["latest"]
+                        if hasattr(d, "date"):
+                            d = d.date()
+                        if d < stale_30d:
+                            p["stale_count"] += 1
+            except Exception:
+                _logger.debug(
+                    "Piotroski health failed",
+                    exc_info=True,
+                )
+            return p
+
+        def _analytics_health():
+            a: dict = {
+                "total_tickers": 0,
+                "missing_tickers": [],
+            }
+            try:
+                df = query_iceberg_df(
+                    "stocks.analysis_summary",
+                    "SELECT DISTINCT ticker "
+                    "FROM analysis_summary",
+                )
+                if not df.empty:
+                    tks = set(
+                        df["ticker"].tolist()
+                    )
+                    a["total_tickers"] = len(tks)
+                    a["missing_tickers"] = sorted(
+                        analyzable_tickers - tks
+                    )
+            except Exception:
+                _logger.debug(
+                    "Analytics health failed",
+                    exc_info=True,
+                )
+            return a
+
+        with ThreadPoolExecutor(
+            max_workers=5,
+        ) as pool:
+            f_ohlcv = pool.submit(_ohlcv_health)
+            f_fc = pool.submit(_forecast_health)
+            f_sent = pool.submit(_sentiment_health)
+            f_pio = pool.submit(_piotroski_health)
+            f_ana = pool.submit(_analytics_health)
+
+        result["ohlcv"] = f_ohlcv.result()
+        result["forecasts"] = f_fc.result()
+        result["sentiment"] = f_sent.result()
+        result["piotroski"] = f_pio.result()
+        result["analytics"] = f_ana.result()
+
+        return result
+
+    async def _admin_fix_ohlcv(
+        request: Request,
+    ):
+        """POST /admin/data-health/fix-ohlcv."""
+        from datetime import datetime, timedelta, timezone
+
+        body = await request.json()
+        action = body.get("action")
+        if action not in (
+            "backfill_nan",
+            "backfill_missing",
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "action must be "
+                    "'backfill_nan' or "
+                    "'backfill_missing'"
+                ),
+            )
+
+        from tools._stock_shared import _require_repo
+
+        repo = _require_repo()
+
+        if action == "backfill_nan":
+            from pyiceberg.expressions import (
+                IsNaN,
+                IsNull,
+                Or,
+            )
+
+            expr = Or(
+                IsNull("close"),
+                IsNaN("close"),
+            )
+            repo.delete_rows("stocks.ohlcv", expr)
+            return {
+                "action": "backfill_nan",
+                "status": "deleted",
+                "detail": (
+                    "Removed OHLCV rows with "
+                    "NULL/NaN close values."
+                ),
+            }
+
+        # backfill_missing
+        from db.duckdb_engine import query_iceberg_df
+
+        today = datetime.now(timezone.utc).date()
+        yesterday = today - timedelta(days=1)
+        registry = repo.get_all_registry()
+
+        latest_df = query_iceberg_df(
+            "stocks.ohlcv",
+            "SELECT ticker, MAX(date) AS latest "
+            "FROM ohlcv GROUP BY ticker",
+        )
+        have_latest: set[str] = set()
+        if not latest_df.empty:
+            for _, row in latest_df.iterrows():
+                d = row["latest"]
+                if hasattr(d, "date"):
+                    d = d.date()
+                if d >= yesterday:
+                    have_latest.add(row["ticker"])
+
+        missing = sorted(
+            set(registry.keys()) - have_latest
+        )
+        if not missing:
+            return {
+                "action": "backfill_missing",
+                "status": "ok",
+                "detail": "No missing tickers found.",
+                "count": 0,
+            }
+
+        # Resolve yfinance tickers from registry
+        yf_map: dict[str, str] = {}
+        for tk in missing:
+            meta = registry.get(tk, {})
+            yf_tk = meta.get("yf_ticker", tk)
+            yf_map[tk] = yf_tk
+
+        import yfinance as yf
+
+        yf_tickers = list(yf_map.values())
+        # Batch download last 5 days to cover gaps
+        start = yesterday - timedelta(days=5)
+        try:
+            raw = yf.download(
+                yf_tickers,
+                start=str(start),
+                end=str(today + timedelta(days=1)),
+                group_by="ticker",
+                auto_adjust=True,
+                threads=True,
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"yfinance download failed: {exc}",
+            )
+
+        inserted = 0
+        errors: list[str] = []
+        for canon_tk, yf_tk in yf_map.items():
+            try:
+                if len(yf_tickers) == 1:
+                    df = raw.copy()
+                else:
+                    df = raw[yf_tk].copy()
+                df = df.dropna(subset=["Close"])
+                if df.empty:
+                    continue
+                # Rename to match Iceberg schema
+                df = df.rename(
+                    columns={
+                        "Open": "open",
+                        "High": "high",
+                        "Low": "low",
+                        "Close": "close",
+                        "Volume": "volume",
+                    },
+                )
+                repo.insert_ohlcv(canon_tk, df)
+                inserted += 1
+            except Exception as exc:
+                errors.append(
+                    f"{canon_tk}: {exc}"
+                )
+        return {
+            "action": "backfill_missing",
+            "status": "done",
+            "tickers_backfilled": inserted,
+            "tickers_attempted": len(missing),
+            "errors": errors[:20],
+        }
+
+    admin_router.add_api_route(
+        "/admin/data-health",
+        _admin_data_health,
+        methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/data-health/fix-ohlcv",
+        _admin_fix_ohlcv,
+        methods=["POST"],
+        dependencies=[Depends(superuser_only)],
+    )
+
+    # ── Data Health Fix (unified) ─────────────
+
+    _VALID_TARGETS = {
+        "ohlcv",
+        "analytics",
+        "sentiment",
+        "piotroski",
+        "forecasts",
+    }
+
+    async def _admin_data_health_fix(
+        request: Request,
+    ):
+        """POST /admin/data-health/fix.
+
+        Triggers the same pipeline executors that the
+        scheduler uses.  Returns a run_id immediately;
+        caller polls /fix/{run_id}/status for progress.
+        """
+        import threading
+        import uuid
+        from datetime import datetime, timezone
+
+        from tools._stock_shared import _require_repo
+
+        body = await request.json()
+        target = body.get("target")
+        mode = body.get("mode", "stale_only")
+
+        if target not in _VALID_TARGETS:
+            raise HTTPException(
+                400,
+                "target must be one of: "
+                + ", ".join(sorted(_VALID_TARGETS)),
+            )
+        if mode not in ("stale_only", "force_all"):
+            raise HTTPException(
+                400,
+                "mode must be 'stale_only' or "
+                "'force_all'",
+            )
+
+        repo = _require_repo()
+
+        # Job type mapping
+        job_type_map = {
+            "ohlcv": "data_refresh",
+            "analytics": "compute_analytics",
+            "sentiment": "run_sentiment",
+            "piotroski": "run_piotroski",
+            "forecasts": "run_forecasts",
+        }
+        job_type = job_type_map[target]
+        force = mode == "force_all"
+
+        run_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc)
+        repo.append_scheduler_run(
+            {
+                "run_id": run_id,
+                "job_id": f"fix-{target}",
+                "job_name": f"Fix {target}",
+                "job_type": job_type,
+                "scope": "all",
+                "status": "running",
+                "started_at": now,
+                "completed_at": None,
+                "duration_secs": None,
+                "tickers_total": 0,
+                "tickers_done": 0,
+                "error_message": None,
+                "trigger_type": "fix_panel",
+            }
+        )
+
+        def _run():
+            started = datetime.now(timezone.utc)
+            try:
+                if target == "ohlcv":
+                    _run_ohlcv_fix(
+                        repo, run_id, force,
+                    )
+                else:
+                    from backend.jobs.executor import (
+                        JOB_EXECUTORS,
+                    )
+
+                    fn = JOB_EXECUTORS.get(job_type)
+                    if fn:
+                        fn(
+                            "all",
+                            run_id,
+                            repo,
+                            force=force,
+                        )
+            except Exception as exc:
+                elapsed = (
+                    datetime.now(timezone.utc) - started
+                ).total_seconds()
+                repo.update_scheduler_run(
+                    run_id,
+                    {
+                        "status": "failed",
+                        "completed_at": datetime.now(
+                            timezone.utc,
+                        ),
+                        "duration_secs": elapsed,
+                        "error_message": str(exc)[:500],
+                    },
+                )
+
+        threading.Thread(
+            target=_run, daemon=True,
+        ).start()
+
+        return {"run_id": run_id, "status": "running"}
+
+    def _run_ohlcv_fix(
+        repo, run_id: str, force: bool,
+    ):
+        """Run OHLCV fix using batch_data_refresh.
+
+        In stale_only mode, queries Iceberg for stale
+        tickers and passes only those.  In force mode,
+        passes all registry tickers.
+        """
+        from datetime import date, timedelta
+
+        from backend.jobs.batch_refresh import (
+            batch_data_refresh,
+        )
+        from market_utils import is_indian_market
+
+        registry = repo.get_all_registry()
+
+        if not force:
+            # Identify stale tickers from Iceberg
+            from db.duckdb_engine import (
+                query_iceberg_df,
+            )
+
+            today = date.today()
+            stale_3d = today - timedelta(days=3)
+            stale_tickers: list[str] = []
+            try:
+                df = query_iceberg_df(
+                    "stocks.ohlcv",
+                    "SELECT ticker, "
+                    "MAX(date) AS latest "
+                    "FROM ohlcv GROUP BY ticker",
+                )
+                if not df.empty:
+                    for _, row in df.iterrows():
+                        d = row["latest"]
+                        if hasattr(d, "date"):
+                            d = d.date()
+                        if d < stale_3d:
+                            stale_tickers.append(
+                                row["ticker"]
+                            )
+            except Exception:
+                pass
+
+            # Also include tickers with no OHLCV at all
+            ohlcv_set = set()
+            if not df.empty:
+                ohlcv_set = set(
+                    df["ticker"].tolist()
+                )
+            reg_set = set(registry.keys())
+            missing = reg_set - ohlcv_set
+
+            all_targets = set(stale_tickers) | missing
+            if not all_targets:
+                # Nothing stale — mark done
+                repo.update_scheduler_run(
+                    run_id,
+                    {
+                        "status": "success",
+                        "completed_at": (
+                            __import__("datetime")
+                            .datetime.now(
+                                __import__("datetime")
+                                .timezone.utc
+                            )
+                        ),
+                        "tickers_total": 0,
+                        "tickers_done": 0,
+                    },
+                )
+                return
+            tickers = sorted(all_targets)
+        else:
+            tickers = list(registry.keys())
+
+        # Resolve to yfinance symbols
+        yf_tickers: list[str] = []
+        for t in tickers:
+            if t.endswith((".NS", ".BO")):
+                yf_tickers.append(t)
+            else:
+                meta = registry.get(t, {})
+                mkt = meta.get("market", "")
+                if mkt.upper() in (
+                    "NSE", "BSE", "INDIA",
+                ):
+                    yf_tickers.append(f"{t}.NS")
+                else:
+                    yf_tickers.append(t)
+
+        batch_data_refresh(
+            yf_tickers,
+            repo,
+            run_id,
+            max_workers=5,
+            force=True,
+        )
+
+    async def _admin_fix_status(
+        request: Request,
+        run_id: str,
+    ):
+        """GET /admin/data-health/fix/{run_id}/status."""
+        from tools._stock_shared import _require_repo
+
+        repo = _require_repo()
+        run = repo.get_scheduler_run_by_id(run_id)
+        if not run:
+            raise HTTPException(
+                404, "Run not found",
+            )
+        return {
+            "run_id": run.get("run_id"),
+            "status": run.get("status"),
+            "tickers_total": run.get(
+                "tickers_total", 0,
+            ),
+            "tickers_done": run.get(
+                "tickers_done", 0,
+            ),
+            "errors": run.get("error_message"),
+            "elapsed_s": run.get("duration_secs"),
+        }
+
+    admin_router.add_api_route(
+        "/admin/data-health/fix",
+        _admin_data_health_fix,
+        methods=["POST"],
+        dependencies=[Depends(superuser_only)],
+    )
+    admin_router.add_api_route(
+        "/admin/data-health/fix/{run_id}/status",
+        _admin_fix_status,
+        methods=["GET"],
+        dependencies=[Depends(superuser_only)],
+    )
+
     # ── Ollama local-LLM management ────────────
 
     async def _admin_ollama_status():
@@ -1511,10 +2473,13 @@ def create_app(
 
     app.include_router(admin_router)
 
-    # Dashboard + audit + insights endpoints.
+    # Dashboard + audit + insights + recommendation endpoints.
     from audit_routes import create_audit_router
     from dashboard_routes import create_dashboard_router
     from insights_routes import create_insights_router
+    from recommendation_routes import (
+        create_recommendation_router,
+    )
 
     app.include_router(
         create_dashboard_router(),
@@ -1526,6 +2491,16 @@ def create_app(
     )
     app.include_router(
         create_insights_router(),
+        prefix="/v1",
+    )
+    app.include_router(
+        create_recommendation_router(),
+        prefix="/v1",
+    )
+    from market_routes import create_market_router
+
+    app.include_router(
+        create_market_router(),
         prefix="/v1",
     )
 

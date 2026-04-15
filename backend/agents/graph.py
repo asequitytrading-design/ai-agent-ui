@@ -20,6 +20,9 @@ from typing import Callable
 from agents.configs.forecaster import FORECASTER_CONFIG
 from agents.configs.portfolio import PORTFOLIO_CONFIG
 from agents.configs.research import RESEARCH_CONFIG
+from agents.configs.recommendation import (
+    RECOMMENDATION_CONFIG,
+)
 from agents.configs.sentiment import SENTIMENT_CONFIG
 from agents.configs.stock_analyst import (
     STOCK_ANALYST_CONFIG,
@@ -107,6 +110,11 @@ def build_supervisor_graph(
         tool_registry,
         llm_factory,
     )
+    recommendation_node = _make_sub_agent_node(
+        RECOMMENDATION_CONFIG,
+        tool_registry,
+        llm_factory,
+    )
 
     # Build graph
     g = StateGraph(AgentState)
@@ -121,6 +129,7 @@ def build_supervisor_graph(
     g.add_node("forecaster", forecaster_node)
     g.add_node("research", research_node)
     g.add_node("sentiment", sentiment_node)
+    g.add_node("recommendation", recommendation_node)
     g.add_node("synthesis", synthesis)
     g.add_node("log_query", log_query)
     g.add_node("decline", decline_node)
@@ -144,6 +153,7 @@ def build_supervisor_graph(
             "forecaster": "forecaster",
             "research": "research",
             "sentiment": "sentiment",
+            "recommendation": "recommendation",
         },
     )
 
@@ -177,6 +187,7 @@ def build_supervisor_graph(
             "forecaster": "forecaster",
             "research": "research",
             "sentiment": "sentiment",
+            "recommendation": "recommendation",
         },
     )
 
@@ -186,6 +197,7 @@ def build_supervisor_graph(
     g.add_edge("forecaster", "synthesis")
     g.add_edge("research", "synthesis")
     g.add_edge("sentiment", "synthesis")
+    g.add_edge("recommendation", "synthesis")
 
     # Synthesis → log → END
     g.add_edge("synthesis", "log_query")

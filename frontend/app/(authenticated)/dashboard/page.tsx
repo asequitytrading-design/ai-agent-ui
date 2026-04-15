@@ -22,6 +22,9 @@ import { useRegistry } from "@/hooks/useDashboardData";
 import {
   useDashboardHome,
   useProfile,
+  useSectorAllocation,
+  usePortfolioNews,
+  useRecommendations,
   type DashboardData,
 } from "@/hooks/useDashboardData";
 import { HeroSection } from "@/components/widgets/HeroSection";
@@ -29,6 +32,11 @@ import { WatchlistWidget } from "@/components/widgets/WatchlistWidget";
 import { AnalysisSignalsWidget } from "@/components/widgets/AnalysisSignalsWidget";
 import { LLMUsageWidget } from "@/components/widgets/LLMUsageWidget";
 import { ForecastChartWidget } from "@/components/widgets/ForecastChartWidget";
+import { SectorAllocationWidget } from "@/components/widgets/SectorAllocationWidget";
+import { AssetPerformanceWidget } from "@/components/widgets/AssetPerformanceWidget";
+import { PLTrendWidget } from "@/components/widgets/PLTrendWidget";
+import { NewsWidget } from "@/components/widgets/NewsWidget";
+import { RecommendationsWidget } from "@/components/widgets/RecommendationsWidget";
 
 export type MarketFilter = "india" | "us";
 
@@ -45,6 +53,11 @@ export default function DashboardPage() {
     useState<string | null>(null);
   const portfolioData = usePortfolio();
   const registryData = useRegistry();
+
+  // Portfolio Analytics hooks (Sprint 6)
+  const sectorAllocation = useSectorAllocation(marketFilter);
+  const portfolioNews = usePortfolioNews(marketFilter);
+  const recommendations = useRecommendations(marketFilter);
   const registryTickers = useMemo(
     () =>
       registryData.value?.tickers?.map(
@@ -245,7 +258,35 @@ export default function DashboardPage() {
         }
       />
 
-      {/* Asymmetric grid */}
+      {/* ── Portfolio Analytics Grid (Sprint 6) ────── */}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 md:gap-6">
+        <SectorAllocationWidget
+          data={sectorAllocation}
+        />
+        <AssetPerformanceWidget
+          holdings={filteredPortfolio.map((h) => ({
+            ticker: h.ticker,
+            gain_loss_pct: h.gain_loss_pct ?? 0,
+          }))}
+          loading={portfolioData.loading}
+          error={null}
+        />
+        <RecommendationsWidget
+          data={recommendations}
+          market={marketFilter}
+        />
+      </div>
+
+      {/* P&L + News (2 cols) | Watchlist (1 col) */}
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 md:gap-6">
+        <div className="xl:col-span-2 space-y-4 md:space-y-6">
+          <PLTrendWidget market={marketFilter} />
+          <NewsWidget data={portfolioNews} />
+        </div>
+        <LLMUsageWidget data={llmUsage} />
+      </div>
+
+      {/* ── Watchlist + Signals ─────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-[1.1fr_0.9fr] gap-4 md:gap-6">
         <WatchlistWidget
           data={filteredWatchlist}
@@ -273,13 +314,9 @@ export default function DashboardPage() {
             }
           }}
         />
-
-        <div className="space-y-4 md:space-y-6">
-          <AnalysisSignalsWidget
-            data={selectedAnalysis}
-          />
-          <LLMUsageWidget data={llmUsage} />
-        </div>
+        <AnalysisSignalsWidget
+          data={selectedAnalysis}
+        />
       </div>
 
       {/* Forecast — full width */}

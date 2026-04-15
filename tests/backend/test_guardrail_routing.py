@@ -27,6 +27,7 @@ def _make_ctx(
     ctx.turn_count = turn_count
     ctx.summary = summary
     ctx.current_topic = last_intent
+    ctx.last_response = ""
     return ctx
 
 

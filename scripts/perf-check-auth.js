@@ -28,16 +28,22 @@ const PORT = process.env.PERF_PORT || 3000;
 const BASE = `http://localhost:${PORT}`;
 
 const ROUTES = [
+  // Public
   { path: "/login", budget: 90, auth: false },
+  // Dashboard / Portfolio
   { path: "/dashboard", budget: 80, auth: true },
+  // Analytics
   { path: "/analytics", budget: 80, auth: true },
   { path: "/analytics/analysis", budget: 75, auth: true },
   { path: "/analytics/compare", budget: 75, auth: true },
   { path: "/analytics/insights", budget: 75, auth: true },
   { path: "/analytics/marketplace", budget: 75, auth: true },
-  { path: "/admin", budget: 70, auth: true },
-  { path: "/docs", budget: 85, auth: true },
+  // Insights (tabbed — each tab loads same page)
   { path: "/insights", budget: 75, auth: true },
+  // Admin (single page, 6 tabs rendered client-side)
+  { path: "/admin", budget: 70, auth: true },
+  // Docs
+  { path: "/docs", budget: 85, auth: true },
 ];
 
 async function loadDeps() {
@@ -110,14 +116,19 @@ async function main() {
     waitUntil: "domcontentloaded",
   });
 
-  await page.fill(
+  // Clear + type (not fill) so React onChange fires.
+  const emailInput = page.locator(
     'input[type="email"], input[name="email"]',
-    email,
   );
-  await page.fill(
+  const pwdInput = page.locator(
     'input[type="password"], input[name="password"]',
-    password,
   );
+  await emailInput.click();
+  await emailInput.fill("");
+  await emailInput.type(email, { delay: 20 });
+  await pwdInput.click();
+  await pwdInput.fill("");
+  await pwdInput.type(password, { delay: 20 });
   await page.click('button[type="submit"]');
 
   // Wait for navigation to complete (SPA redirect)

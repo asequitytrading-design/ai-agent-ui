@@ -43,12 +43,22 @@ from dashboard_models import (
     TickerForecast,
     TickerPrice,
     WatchlistResponse,
+    AllocationItem,
+    AllocationResponse,
+    BacktestAccuracy,
+    BacktestPoint,
+    ForecastBacktestResponse,
+    NewsHeadline,
+    PortfolioNewsResponse,
+    Recommendation,
+    RecommendationsResponse,
 )
 from fastapi import APIRouter, Depends, Query, Response
 
 import auth.endpoints.helpers as _helpers
 from auth.dependencies import get_current_user
 from auth.models import UserContext
+from market_utils import detect_market
 
 _logger = logging.getLogger(__name__)
 
@@ -60,6 +70,15 @@ def _get_stock_repo():
     return _require_repo()
 
 
+def _duckdb_read(table: str, sql: str):
+    """DuckDB Iceberg read — returns pd.DataFrame."""
+    from backend.db.duckdb_engine import (
+        query_iceberg_df,
+    )
+
+    return query_iceberg_df(table, sql)
+
+
 def _backfill_company_info(tickers, repo) -> None:
     """Background: fetch company info for tickers missing
     from the ``company_info`` Iceberg table."""
@@ -68,9 +87,17 @@ def _backfill_company_info(tickers, repo) -> None:
 
         for ticker in tickers:
             try:
-                info = yf.Ticker(ticker).info
+                yf_sym = ticker
+                if not yf_sym.endswith(
+                    (".NS", ".BO"),
+                ):
+                    yf_sym = f"{yf_sym}.NS"
+                info = yf.Ticker(yf_sym).info
                 if info:
-                    repo.insert_company_info(ticker, info)
+                    repo.insert_company_info(
+                        yf_sym,
+                        info,
+                    )
                     _logger.info(
                         "Backfilled company info: %s",
                         ticker,
@@ -126,11 +153,36 @@ def create_dashboard_router() -> APIRouter:
         if not tickers:
             return WatchlistResponse()
 
-        # Batch fetch: 2 queries instead of 2N
-        ohlcv_df = stock_repo.get_ohlcv_batch(tickers)
-        info_df = stock_repo.get_company_info_batch(
-            tickers,
-        )
+        # Batch fetch via DuckDB.
+        import pandas as _pd
+
+        ph = ",".join(f"'{t}'" for t in tickers)
+        _wl_cutoff = (
+            _pd.Timestamp.now()
+            - _pd.DateOffset(days=45)
+        ).strftime("%Y-%m-%d")
+        try:
+            ohlcv_df = _duckdb_read(
+                "stocks.ohlcv",
+                "SELECT ticker, date, open, high, "
+                "low, close, volume "
+                "FROM ohlcv "
+                f"WHERE ticker IN ({ph}) "
+                f"AND date >= '{_wl_cutoff}' "
+                "ORDER BY ticker, date",
+            )
+        except Exception:
+            ohlcv_df = _pd.DataFrame()
+        try:
+            info_df = _duckdb_read(
+                "stocks.company_info",
+                "SELECT ticker, company_name, "
+                "sector, current_price, currency "
+                "FROM company_info "
+                f"WHERE ticker IN ({ph})",
+            )
+        except Exception:
+            info_df = _pd.DataFrame()
 
         # Index company info by ticker for O(1) lookup
         info_map: dict = {}
@@ -211,9 +263,7 @@ def create_dashboard_router() -> APIRouter:
         user: UserContext = Depends(get_current_user),
         ticker: str | None = Query(
             None,
-            description=(
-                "Include this ticker even if unlinked"
-            ),
+            description=("Include this ticker even if unlinked"),
         ),
     ):
         """Latest forecast runs per linked ticker.
@@ -222,10 +272,7 @@ def create_dashboard_router() -> APIRouter:
         even when the ticker is not in the user's watchlist.
         """
         cache = get_cache()
-        cache_key = (
-            f"cache:dash:forecasts:{user.user_id}"
-            f":{ticker or ''}"
-        )
+        cache_key = f"cache:dash:forecasts:{user.user_id}" f":{ticker or ''}"
         hit = cache.get(cache_key)
         if hit is not None:
             return Response(
@@ -245,9 +292,7 @@ def create_dashboard_router() -> APIRouter:
         # Include the requested ticker even if unlinked
         if ticker and isinstance(ticker, str):
             t_upper = ticker.upper().strip()
-            if t_upper not in [
-                t.upper() for t in tickers
-            ]:
+            if t_upper not in [t.upper() for t in tickers]:
                 tickers = list(tickers) + [t_upper]
 
         if not tickers:
@@ -337,28 +382,25 @@ def create_dashboard_router() -> APIRouter:
         if not tickers:
             return AnalysisResponse()
 
-        df = stock_repo.get_dashboard_analysis(tickers)
+        import pandas as _pdal
+
+        ph = ",".join(f"'{t}'" for t in tickers)
+        try:
+            df = _duckdb_read(
+                "stocks.analysis_summary",
+                "SELECT * FROM analysis_summary "
+                f"WHERE ticker IN ({ph})",
+            )
+        except Exception:
+            df = _pdal.DataFrame()
         if df.empty:
             return AnalysisResponse()
 
-        # Batch fetch indicators: 1 query instead of N
-        ti_df = stock_repo.get_technical_indicators_batch(tickers)
-        # Build map: ticker -> latest indicator vals
-        ti_map: dict = {}
-        if not ti_df.empty:
-            for ticker_val, grp in ti_df.groupby("ticker"):
-                latest = grp.iloc[-1]
-                ti_map[ticker_val] = {
-                    "rsi_14": latest.get("rsi_14"),
-                    "macd": latest.get("macd"),
-                    "sma_50": latest.get("sma_50"),
-                    "sma_200": latest.get("sma_200"),
-                }
-
         analyses: list[TickerAnalysis] = []
         for _, row in df.iterrows():
-            ticker = str(row["ticker"])
-            ti_vals = ti_map.get(ticker, {})
+            # Signal text from analysis_summary;
+            # no TI table read needed.
+            ti_vals: dict = {}
 
             signals: list[SignalInfo] = []
             _add_signal(
@@ -449,16 +491,10 @@ def create_dashboard_router() -> APIRouter:
         models = [
             ModelUsage(
                 model=name,
-                provider=str(
-                    info.get("provider", "") or "groq"
-                ),
-                request_count=int(
-                    info.get("requests", 0)
-                ),
+                provider=str(info.get("provider", "") or "groq"),
+                request_count=int(info.get("requests", 0)),
                 total_tokens=0,
-                estimated_cost_usd=float(
-                    info.get("cost", 0) or 0
-                ),
+                estimated_cost_usd=float(info.get("cost", 0) or 0),
             )
             for name, info in per_model.items()
         ]
@@ -497,20 +533,38 @@ def create_dashboard_router() -> APIRouter:
         stock_repo = _get_stock_repo()
         registry = stock_repo.get_all_registry()
 
-        # Batch fetch company info: 1 query instead
-        # of M (one per registered ticker)
+        # Batch fetch company info via DuckDB.
         reg_tickers = list(registry.keys())
-        info_df = (
-            stock_repo.get_company_info_batch(
-                reg_tickers,
-            )
-            if reg_tickers
-            else None
-        )
         info_map: dict = {}
-        if info_df is not None and not info_df.empty:
-            for _, row in info_df.iterrows():
-                info_map[row["ticker"]] = row.to_dict()
+        if reg_tickers:
+            try:
+                from backend.db.duckdb_engine import (
+                    query_iceberg_df,
+                )
+
+                ph = ",".join(
+                    f"'{t}'" for t in reg_tickers
+                )
+                info_df = query_iceberg_df(
+                    "stocks.company_info",
+                    "SELECT ticker, company_name, "
+                    "sector, industry, market_cap, "
+                    "current_price, currency, "
+                    "pe_ratio, week_52_high, "
+                    "week_52_low, avg_volume "
+                    "FROM company_info "
+                    f"WHERE ticker IN ({ph})",
+                )
+                if not info_df.empty:
+                    for _, row in info_df.iterrows():
+                        info_map[
+                            row["ticker"]
+                        ] = row.to_dict()
+            except Exception:
+                _logger.debug(
+                    "DuckDB company_info failed",
+                    exc_info=True,
+                )
 
         # Backfill missing company info (fire-and-forget).
         _missing = [t for t in reg_tickers if t not in info_map]
@@ -525,7 +579,8 @@ def create_dashboard_router() -> APIRouter:
         for ticker, meta in registry.items():
             info = info_map.get(ticker)
             mkt = detect_market(
-                ticker, meta.get("market"),
+                ticker,
+                meta.get("market"),
             )
             ccy = "INR" if mkt == "india" else "USD"
             company = None
@@ -555,6 +610,9 @@ def create_dashboard_router() -> APIRouter:
                     company_name=company,
                     market=mkt,
                     currency=ccy,
+                    ticker_type=meta.get(
+                        "ticker_type", "stock",
+                    ),
                     current_price=price,
                     last_fetch_date=meta.get("last_fetch_date", "") or None,
                 )
@@ -562,15 +620,24 @@ def create_dashboard_router() -> APIRouter:
 
         # Enrich with OHLCV: sparkline, change, price
         try:
-            ohlcv_df = stock_repo.get_ohlcv_batch(
-                reg_tickers,
+            import pandas as _pd2
+
+            _cutoff = (
+                _pd2.Timestamp.now()
+                - _pd2.DateOffset(days=45)
+            ).strftime("%Y-%m-%d")
+            ohlcv_df = _duckdb_read(
+                "stocks.ohlcv",
+                "SELECT ticker, date, close "
+                "FROM ohlcv "
+                f"WHERE ticker IN ({ph}) "
+                f"AND date >= '{_cutoff}' "
+                "ORDER BY ticker, date",
             )
             if ohlcv_df is not None and not ohlcv_df.empty:
                 _ohlcv_map: dict[str, dict] = {}
                 for t in reg_tickers:
-                    t_df = ohlcv_df[
-                        ohlcv_df["ticker"] == t
-                    ]
+                    t_df = ohlcv_df[ohlcv_df["ticker"] == t]
                     if t_df.empty:
                         continue
                     t30 = t_df.tail(30).dropna(
@@ -579,21 +646,11 @@ def create_dashboard_router() -> APIRouter:
                     if t30.empty:
                         continue
                     closes = [
-                        round(float(v), 2)
-                        for v in t30["close"]
-                        if v == v
+                        round(float(v), 2) for v in t30["close"] if v == v
                     ]
                     cur = closes[-1] if closes else None
-                    prev = (
-                        closes[-2]
-                        if len(closes) > 1
-                        else cur
-                    )
-                    chg = (
-                        round(cur - prev, 2)
-                        if cur and prev
-                        else None
-                    )
+                    prev = closes[-2] if len(closes) > 1 else cur
+                    chg = round(cur - prev, 2) if cur and prev else None
                     pct = (
                         round(chg / prev * 100, 2)
                         if chg is not None and prev
@@ -617,7 +674,10 @@ def create_dashboard_router() -> APIRouter:
                     if it.current_price is None:
                         it.current_price = od["price"]
         except Exception:
-            pass
+            _logger.warning(
+                "OHLCV enrichment failed for registry",
+                exc_info=True,
+            )
 
         items.sort(key=lambda t: t.ticker)
         result = RegistryResponse(tickers=items)
@@ -662,13 +722,52 @@ def create_dashboard_router() -> APIRouter:
                 media_type="application/json",
             )
 
-        # Batch fetch: 4 queries instead of 4N
-        ohlcv_df = stock_repo.get_ohlcv_batch(symbols)
-        summary_df = stock_repo.get_analysis_summary_batch(symbols)
-        info_df = stock_repo.get_company_info_batch(
-            symbols,
+        # Batch fetch via DuckDB.
+        import pandas as _pdc
+
+        ph = ",".join(f"'{t}'" for t in symbols)
+        try:
+            ohlcv_df = _duckdb_read(
+                "stocks.ohlcv",
+                "SELECT ticker, date, open, high, "
+                "low, close, volume "
+                "FROM ohlcv "
+                f"WHERE ticker IN ({ph}) "
+                "ORDER BY ticker, date",
+            )
+        except Exception:
+            ohlcv_df = _pdc.DataFrame()
+        try:
+            summary_df = _duckdb_read(
+                "stocks.analysis_summary",
+                "SELECT * FROM analysis_summary "
+                f"WHERE ticker IN ({ph})",
+            )
+        except Exception:
+            summary_df = _pdc.DataFrame()
+        try:
+            info_df = _duckdb_read(
+                "stocks.company_info",
+                "SELECT ticker, company_name, "
+                "sector, industry "
+                "FROM company_info "
+                f"WHERE ticker IN ({ph})",
+            )
+        except Exception:
+            info_df = _pdc.DataFrame()
+
+        # Compute TI on-the-fly for compare tickers
+        # (2-5 tickers, ~200ms each).
+        from tools._analysis_shared import (
+            compute_indicators,
         )
-        ti_df = stock_repo.get_technical_indicators_batch(symbols)
+
+        ti_map: dict = {}
+        for sym in symbols:
+            ti = compute_indicators(sym)
+            if ti is not None and not ti.empty:
+                latest = ti.iloc[-1]
+                ti_map[sym] = latest.to_dict()
 
         # Index batch results by ticker
         summary_map: dict = {}
@@ -679,11 +778,6 @@ def create_dashboard_router() -> APIRouter:
         if not info_df.empty:
             for _, row in info_df.iterrows():
                 info_map[row["ticker"]] = row.to_dict()
-        ti_map: dict = {}
-        if not ti_df.empty:
-            for t_val, grp in ti_df.groupby("ticker"):
-                latest = grp.iloc[-1]
-                ti_map[t_val] = latest.to_dict()
 
         series: list[CompareSeriesItem] = []
         metrics: list[CompareMetric] = []
@@ -730,11 +824,17 @@ def create_dashboard_router() -> APIRouter:
             if info:
                 ccy = str(info.get("currency", "USD") or "USD")
 
-            # RSI + MACD from technical indicators
+            # RSI + MACD from on-the-fly indicators
             ti = ti_map.get(sym, {})
-            rsi_val = _safe(ti.get("rsi_14"))
-            macd_v = ti.get("macd")
-            sig_v = ti.get("macd_signal")
+            rsi_val = _safe(
+                ti.get("RSI_14", ti.get("rsi_14")),
+            )
+            macd_v = ti.get(
+                "MACD", ti.get("macd"),
+            )
+            sig_v = ti.get(
+                "MACD_Signal", ti.get("macd_signal"),
+            )
             macd_lbl = None
             if macd_v is not None and (sig_v is not None):
                 try:
@@ -976,39 +1076,42 @@ def create_dashboard_router() -> APIRouter:
                 media_type="application/json",
             )
 
-        stock_repo = _get_stock_repo()
-        df = stock_repo.get_technical_indicators(
-            t_upper,
+        # Compute indicators on-the-fly from OHLCV
+        # (~200ms per ticker, cached 300s in Redis).
+        from tools._analysis_shared import (
+            compute_indicators,
         )
 
-        if df.empty:
+        df = compute_indicators(t_upper)
+
+        if df is None or df.empty:
             return IndicatorsResponse(
                 ticker=t_upper,
             )
 
         points: list[IndicatorPoint] = []
-        for _, row in df.iterrows():
+        for idx, row in df.iterrows():
             points.append(
                 IndicatorPoint(
-                    date=str(row.get("date", "")),
-                    sma_50=_safe(row.get("sma_50")),
+                    date=str(idx.date()),
+                    sma_50=_safe(row.get("SMA_50")),
                     sma_200=_safe(
-                        row.get("sma_200"),
+                        row.get("SMA_200"),
                     ),
-                    ema_20=_safe(row.get("ema_20")),
-                    rsi_14=_safe(row.get("rsi_14")),
-                    macd=_safe(row.get("macd")),
+                    ema_20=_safe(row.get("EMA_20")),
+                    rsi_14=_safe(row.get("RSI_14")),
+                    macd=_safe(row.get("MACD")),
                     macd_signal=_safe(
-                        row.get("macd_signal"),
+                        row.get("MACD_Signal"),
                     ),
                     macd_hist=_safe(
-                        row.get("macd_hist"),
+                        row.get("MACD_Hist"),
                     ),
                     bb_upper=_safe(
-                        row.get("bb_upper"),
+                        row.get("BB_Upper"),
                     ),
                     bb_lower=_safe(
-                        row.get("bb_lower"),
+                        row.get("BB_Lower"),
                     ),
                 )
             )
@@ -1083,6 +1186,115 @@ def create_dashboard_router() -> APIRouter:
             ticker=t_upper,
             horizon_months=horizon,
             data=points,
+        )
+        cache.set(
+            cache_key,
+            result.model_dump_json(),
+            TTL_STABLE,
+        )
+        return result
+
+    # ── Forecast Backtest Overlay (ASETPLTFRM-280) ───
+
+    @router.get(
+        "/chart/forecast-backtest",
+        response_model=ForecastBacktestResponse,
+    )
+    async def get_chart_forecast_backtest(
+        ticker: str = Query(
+            ...,
+            description="Ticker symbol",
+        ),
+        user: UserContext = Depends(get_current_user),
+    ):
+        """Backtest predictions vs actuals for overlay."""
+        cache = get_cache()
+        t_upper = ticker.upper()
+        cache_key = f"cache:chart:backtest:{t_upper}"
+        hit = cache.get(cache_key)
+        if hit is not None:
+            return Response(
+                content=hit,
+                media_type="application/json",
+            )
+
+        stock_repo = _get_stock_repo()
+        # horizon_months=0 is the backtest convention
+        df = stock_repo.get_latest_forecast_series(
+            t_upper,
+            0,
+        )
+
+        if df.empty:
+            return ForecastBacktestResponse(
+                ticker=t_upper,
+            )
+
+        points: list[BacktestPoint] = []
+        for _, row in df.iterrows():
+            predicted = float(
+                row.get("predicted_price", 0),
+            )
+            # actual stored in lower_bound column
+            actual = float(
+                row.get("lower_bound", 0),
+            )
+            points.append(
+                BacktestPoint(
+                    date=str(
+                        row.get("forecast_date", ""),
+                    ),
+                    predicted=round(predicted, 2),
+                    actual=round(actual, 2),
+                )
+            )
+
+        # Compute accuracy metrics from points
+        accuracy = None
+        if len(points) > 1:
+            import numpy as np
+
+            actuals = np.array(
+                [p.actual for p in points],
+            )
+            preds = np.array(
+                [p.predicted for p in points],
+            )
+            err_pct = (
+                np.abs(preds - actuals)
+                / np.where(actuals != 0, actuals, 1)
+                * 100
+            )
+            # Directional accuracy
+            a_dir = np.sign(np.diff(actuals))
+            p_dir = np.sign(np.diff(preds))
+            dir_acc = float(
+                np.mean(a_dir == p_dir) * 100,
+            )
+
+            accuracy = BacktestAccuracy(
+                directional_accuracy_pct=round(
+                    dir_acc,
+                    1,
+                ),
+                max_error_pct=round(
+                    float(np.max(err_pct)),
+                    1,
+                ),
+                p50_error_pct=round(
+                    float(np.median(err_pct)),
+                    1,
+                ),
+                p90_error_pct=round(
+                    float(np.percentile(err_pct, 90)),
+                    1,
+                ),
+            )
+
+        result = ForecastBacktestResponse(
+            ticker=t_upper,
+            data=points,
+            accuracy=accuracy,
         )
         cache.set(
             cache_key,
@@ -1287,6 +1499,582 @@ def create_dashboard_router() -> APIRouter:
         )
         return result
 
+    # ── W1: Sector Allocation (ASETPLTFRM-287) ────────
+
+    @router.get(
+        "/portfolio/allocation",
+        response_model=AllocationResponse,
+    )
+    async def get_portfolio_allocation(
+        market: str = Query(
+            "india",
+            description="india|us",
+        ),
+        user: UserContext = Depends(get_current_user),
+    ):
+        """Sector allocation breakdown for portfolio."""
+        cache = get_cache()
+        cache_key = f"cache:portfolio:alloc" f":{user.user_id}:{market}"
+        hit = cache.get(cache_key)
+        if hit is not None:
+            return Response(
+                content=hit,
+                media_type="application/json",
+            )
+
+        stock_repo = _get_stock_repo()
+        holdings = stock_repo.get_portfolio_holdings(
+            user.user_id,
+        )
+        if holdings.empty:
+            return AllocationResponse()
+
+        # Filter by market
+        holdings = holdings[
+            holdings["ticker"].apply(
+                lambda t: detect_market(t) == market,
+            )
+        ]
+        if holdings.empty:
+            return AllocationResponse()
+
+        tickers = holdings["ticker"].unique().tolist()
+        import pandas as _pda
+
+        ph = ",".join(f"'{t}'" for t in tickers)
+        try:
+            info_df = _duckdb_read(
+                "stocks.company_info",
+                "SELECT ticker, company_name, "
+                "sector, current_price "
+                "FROM company_info "
+                f"WHERE ticker IN ({ph})",
+            )
+        except Exception:
+            info_df = _pda.DataFrame()
+        try:
+            ohlcv_df = _duckdb_read(
+                "stocks.ohlcv",
+                "SELECT ticker, date, close "
+                "FROM ohlcv "
+                f"WHERE ticker IN ({ph}) "
+                "ORDER BY ticker, date",
+            )
+        except Exception:
+            ohlcv_df = _pda.DataFrame()
+
+        info_map: dict = {}
+        if not info_df.empty:
+            for _, row in info_df.iterrows():
+                info_map[row["ticker"]] = row.to_dict()
+
+        # Build sector → holdings map
+        sector_data: dict[str, dict] = {}
+        total_value = 0.0
+
+        for _, h in holdings.iterrows():
+            ticker = h["ticker"]
+            qty = float(h.get("quantity", 0))
+            info = info_map.get(ticker, {})
+            sector = info.get("sector") or "Unknown"
+
+            # Current price from OHLCV
+            cur = 0.0
+            t_df = (
+                ohlcv_df[ohlcv_df["ticker"] == ticker]
+                if not ohlcv_df.empty
+                else ohlcv_df
+            )
+            t_valid = t_df.dropna(subset=["close"])
+            if not t_valid.empty:
+                cur = float(t_valid.iloc[-1]["close"])
+
+            mkt_val = qty * cur
+            total_value += mkt_val
+
+            if sector not in sector_data:
+                sector_data[sector] = {
+                    "value": 0.0,
+                    "tickers": [],
+                }
+            sector_data[sector]["value"] += mkt_val
+            sector_data[sector]["tickers"].append(
+                ticker,
+            )
+
+        sectors = []
+        for sec, data in sorted(
+            sector_data.items(),
+            key=lambda x: x[1]["value"],
+            reverse=True,
+        ):
+            weight = (
+                (data["value"] / total_value * 100) if total_value > 0 else 0.0
+            )
+            sectors.append(
+                AllocationItem(
+                    sector=sec,
+                    value=round(data["value"], 2),
+                    weight_pct=round(weight, 2),
+                    stock_count=len(data["tickers"]),
+                    tickers=data["tickers"],
+                )
+            )
+
+        currency = detect_market(tickers[0])
+        currency_str = "INR" if currency == "india" else "USD"
+        result = AllocationResponse(
+            sectors=sectors,
+            total_value=round(total_value, 2),
+            currency=currency_str,
+        )
+        cache.set(
+            cache_key,
+            result.model_dump_json(),
+            TTL_STABLE,
+        )
+        return result
+
+    # ── W4: News & Sentiment (ASETPLTFRM-290) ─────────
+
+    @router.get(
+        "/portfolio/news",
+        response_model=PortfolioNewsResponse,
+    )
+    async def get_portfolio_news(
+        market: str = Query(
+            "india",
+            description="india|us",
+        ),
+        user: UserContext = Depends(get_current_user),
+    ):
+        """Recent news headlines for portfolio holdings
+        with aggregated sentiment."""
+        cache = get_cache()
+        cache_key = f"cache:portfolio:news" f":{user.user_id}:{market}"
+        hit = cache.get(cache_key)
+        if hit is not None:
+            return Response(
+                content=hit,
+                media_type="application/json",
+            )
+
+        stock_repo = _get_stock_repo()
+        holdings = stock_repo.get_portfolio_holdings(
+            user.user_id,
+        )
+        if holdings.empty:
+            return PortfolioNewsResponse()
+
+        holdings = holdings[
+            holdings["ticker"].apply(
+                lambda t: detect_market(t) == market,
+            )
+        ]
+        if holdings.empty:
+            return PortfolioNewsResponse()
+
+        tickers = holdings["ticker"].unique().tolist()
+
+        import yfinance as yf
+        from datetime import datetime, timezone
+
+        all_headlines: list[NewsHeadline] = []
+        for ticker in tickers[:10]:
+            try:
+                t = yf.Ticker(ticker)
+                news = t.news or []
+                for item in news[:3]:
+                    c = item.get("content", item)
+                    prov = c.get("provider", {})
+                    canon = c.get("canonicalUrl", {})
+                    title = c.get("title") or item.get("title", "")
+                    if not title:
+                        continue
+                    pub = c.get("pubDate") or item.get(
+                        "providerPublishTime",
+                        "",
+                    )
+                    if isinstance(pub, (int, float)):
+                        pub = datetime.fromtimestamp(
+                            pub,
+                            tz=timezone.utc,
+                        ).isoformat()
+                    all_headlines.append(
+                        NewsHeadline(
+                            title=title,
+                            url=(canon.get("url") or item.get("link", "")),
+                            source=(
+                                prov.get("displayName")
+                                or item.get(
+                                    "publisher",
+                                    "",
+                                )
+                            ),
+                            published_at=str(pub),
+                            ticker=ticker,
+                        )
+                    )
+            except Exception:
+                _logger.debug(
+                    "News fetch failed for %s",
+                    ticker,
+                )
+
+        # Sort by date descending, take top 10
+        all_headlines.sort(
+            key=lambda h: h.published_at,
+            reverse=True,
+        )
+        all_headlines = all_headlines[:10]
+
+        # Aggregate portfolio sentiment from Iceberg
+        total_weight = 0.0
+        weighted_score = 0.0
+        for _, h in holdings.iterrows():
+            ticker = h["ticker"]
+            qty = float(h.get("quantity", 0))
+            try:
+                series = stock_repo.get_sentiment_series(
+                    ticker,
+                )
+                if not series.empty:
+                    score = float(
+                        series["avg_score"].iloc[-1],
+                    )
+                    weighted_score += score * qty
+                    total_weight += qty
+            except Exception:
+                pass
+
+        port_sentiment = (
+            (weighted_score / total_weight) if total_weight > 0 else 0.0
+        )
+        port_label = _sentiment_label(port_sentiment)
+
+        result = PortfolioNewsResponse(
+            headlines=all_headlines,
+            portfolio_sentiment=round(
+                port_sentiment,
+                2,
+            ),
+            portfolio_sentiment_label=port_label,
+        )
+        cache.set(
+            cache_key,
+            result.model_dump_json(),
+            900,  # 15 min TTL for news
+        )
+        return result
+
+    # ── W5: Recommendations — MOVED to
+    # recommendation_routes.py (ASETPLTFRM-298) ────────
+    # Old rule-based endpoint replaced by Smart Funnel.
+    # Kept as dead code reference; will be removed in
+    # next cleanup pass.
+
+    async def _old_get_portfolio_recommendations(
+        market: str = Query(
+            "india",
+            description="india|us",
+        ),
+        user: UserContext = Depends(get_current_user),
+    ):
+        """DEPRECATED — see recommendation_routes.py."""
+        cache = get_cache()
+        cache_key = f"cache:portfolio:recs" f":{user.user_id}:{market}"
+        hit = cache.get(cache_key)
+        if hit is not None:
+            return Response(
+                content=hit,
+                media_type="application/json",
+            )
+
+        import pandas as _pd3
+
+        # Holdings via DuckDB (avoid PyIceberg).
+        try:
+            holdings = _duckdb_read(
+                "stocks.portfolio_transactions",
+                "SELECT ticker, quantity, "
+                "price AS avg_price, currency "
+                "FROM portfolio_transactions "
+                f"WHERE user_id = '{user.user_id}'"
+                " AND side = 'BUY'",
+            )
+        except Exception:
+            stock_repo = _get_stock_repo()
+            holdings = (
+                stock_repo.get_portfolio_holdings(
+                    user.user_id,
+                )
+            )
+        if holdings.empty:
+            return RecommendationsResponse()
+
+        holdings = holdings[
+            holdings["ticker"].apply(
+                lambda t: detect_market(t) == market,
+            )
+        ]
+        if holdings.empty:
+            return RecommendationsResponse()
+
+        tickers = holdings["ticker"].unique().tolist()
+        ph = ",".join(f"'{t}'" for t in tickers)
+        try:
+            info_df = _duckdb_read(
+                "stocks.company_info",
+                "SELECT ticker, company_name, "
+                "sector, industry, market_cap, "
+                "current_price "
+                "FROM company_info "
+                f"WHERE ticker IN ({ph})",
+            )
+        except Exception:
+            info_df = _pd3.DataFrame()
+        try:
+            _rc = (
+                _pd3.Timestamp.now()
+                - _pd3.DateOffset(days=10)
+            ).strftime("%Y-%m-%d")
+            ohlcv_df = _duckdb_read(
+                "stocks.ohlcv",
+                "SELECT ticker, date, close "
+                "FROM ohlcv "
+                f"WHERE ticker IN ({ph}) "
+                f"AND date >= '{_rc}' "
+                "ORDER BY ticker, date",
+            )
+        except Exception:
+            ohlcv_df = _pd3.DataFrame()
+        try:
+            analysis_df = _duckdb_read(
+                "stocks.analysis_summary",
+                "SELECT ticker, "
+                "annualized_return_pct, "
+                "annualized_volatility_pct, "
+                "sharpe_ratio, max_drawdown_pct, "
+                "rsi_signal, macd_signal_text "
+                "FROM analysis_summary "
+                f"WHERE ticker IN ({ph})",
+            )
+        except Exception:
+            analysis_df = _pd3.DataFrame()
+
+        info_map: dict = {}
+        if not info_df.empty:
+            for _, row in info_df.iterrows():
+                info_map[row["ticker"]] = row.to_dict()
+
+        # Build holdings with current values
+        recs: list[Recommendation] = []
+        total_value = 0.0
+        holding_data: list[dict] = []
+        sector_totals: dict[str, float] = {}
+
+        for _, h in holdings.iterrows():
+            ticker = h["ticker"]
+            qty = float(h.get("quantity", 0))
+            avg = float(h.get("avg_price", 0))
+            info = info_map.get(ticker, {})
+            sector = info.get("sector") or "Unknown"
+
+            cur = 0.0
+            t_df = (
+                ohlcv_df[ohlcv_df["ticker"] == ticker]
+                if not ohlcv_df.empty
+                else ohlcv_df
+            )
+            t_valid = t_df.dropna(subset=["close"])
+            if not t_valid.empty:
+                cur = float(t_valid.iloc[-1]["close"])
+
+            mkt_val = qty * cur
+            total_value += mkt_val
+            pnl_pct = ((cur - avg) / avg * 100) if avg > 0 else 0.0
+
+            holding_data.append(
+                {
+                    "ticker": ticker,
+                    "qty": qty,
+                    "avg": avg,
+                    "current": cur,
+                    "value": mkt_val,
+                    "pnl_pct": pnl_pct,
+                    "sector": sector,
+                }
+            )
+            sector_totals[sector] = sector_totals.get(sector, 0.0) + mkt_val
+
+        # Rule 1: Single stock overweight (>20%)
+        for hd in holding_data:
+            weight = (
+                (hd["value"] / total_value * 100) if total_value > 0 else 0.0
+            )
+            if weight > 20:
+                recs.append(
+                    Recommendation(
+                        type="overweight",
+                        severity="high",
+                        title=(
+                            f"{hd['ticker']} is " f"overweight ({weight:.0f}%)"
+                        ),
+                        description=(
+                            "Single stock exceeds 20% "
+                            "of portfolio. Consider "
+                            "trimming to reduce "
+                            "concentration risk."
+                        ),
+                        ticker=hd["ticker"],
+                        metric_value=round(weight, 1),
+                        threshold=20.0,
+                    )
+                )
+
+        # Rule 2: Sector concentration (>35%)
+        for sec, sec_val in sector_totals.items():
+            sec_wt = (sec_val / total_value * 100) if total_value > 0 else 0.0
+            if sec_wt > 35:
+                recs.append(
+                    Recommendation(
+                        type="sector_concentration",
+                        severity="high",
+                        title=(
+                            f"{sec} sector is " f"concentrated ({sec_wt:.0f}%)"
+                        ),
+                        description=(
+                            "Sector exceeds 35% of "
+                            "portfolio. Diversify "
+                            "across sectors to reduce "
+                            "sector-specific risk."
+                        ),
+                        metric_value=round(sec_wt, 1),
+                        threshold=35.0,
+                    )
+                )
+
+        # Rule 3: Missing major sectors
+        # Use yfinance sector names (not custom labels)
+        major = {
+            "Technology",
+            "Financial Services",
+            "Healthcare",
+        }
+        present = set(sector_totals.keys())
+        for sec in major - present:
+            recs.append(
+                Recommendation(
+                    type="missing_sector",
+                    severity="medium",
+                    title=f"No exposure to {sec}",
+                    description=(
+                        f"Consider adding {sec} "
+                        f"stocks for broader "
+                        f"diversification."
+                    ),
+                    metric_value=0.0,
+                    threshold=0.0,
+                )
+            )
+
+        # Rule 4: Underperformers (<-15% + bearish)
+        analysis_map: dict = {}
+        if not analysis_df.empty:
+            for _, row in analysis_df.iterrows():
+                analysis_map[str(row["ticker"])] = row.to_dict()
+
+        for hd in holding_data:
+            if hd["pnl_pct"] < -15:
+                an = analysis_map.get(
+                    hd["ticker"],
+                    {},
+                )
+                rsi_sig = str(
+                    an.get("rsi_signal", ""),
+                ).lower()
+                macd_sig = str(
+                    an.get("macd_signal_text", ""),
+                ).lower()
+                bearish = (
+                    "bear" in rsi_sig
+                    or "below" in rsi_sig
+                    or "bear" in macd_sig
+                )
+                if bearish:
+                    recs.append(
+                        Recommendation(
+                            type="underperformer",
+                            severity="medium",
+                            title=(
+                                f"{hd['ticker']} down "
+                                f"{hd['pnl_pct']:.1f}% "
+                                f"with bearish signals"
+                            ),
+                            description=(
+                                "Stock has significant "
+                                "unrealized loss and "
+                                "bearish technical "
+                                "indicators. Review "
+                                "position."
+                            ),
+                            ticker=hd["ticker"],
+                            metric_value=round(
+                                hd["pnl_pct"],
+                                1,
+                            ),
+                            threshold=-15.0,
+                        )
+                    )
+
+        # Rule 5: Low diversification (<5 holdings)
+        if len(holding_data) < 5:
+            recs.append(
+                Recommendation(
+                    type="low_diversification",
+                    severity="low",
+                    title=(f"Only {len(holding_data)} " f"holdings"),
+                    description=(
+                        "Portfolio has fewer than 5 "
+                        "stocks. Consider adding "
+                        "more for diversification."
+                    ),
+                    metric_value=float(
+                        len(holding_data),
+                    ),
+                    threshold=5.0,
+                )
+            )
+
+        # Sort by severity
+        sev_order = {"high": 0, "medium": 1, "low": 2}
+        recs.sort(
+            key=lambda r: sev_order.get(
+                r.severity,
+                3,
+            ),
+        )
+        recs = recs[:6]
+
+        # Portfolio health
+        high_count = sum(1 for r in recs if r.severity == "high")
+        health = (
+            "At Risk"
+            if high_count >= 2
+            else "Needs Attention" if high_count >= 1 else "Healthy"
+        )
+
+        result = RecommendationsResponse(
+            recommendations=recs,
+            portfolio_health=health,
+        )
+        cache.set(
+            cache_key,
+            result.model_dump_json(),
+            TTL_STABLE,
+        )
+        return result
+
     return router
 
 
@@ -1304,19 +2092,24 @@ _PERIOD_DAYS = {
 }
 
 
-from market_utils import detect_currency, detect_market
-
-
 def _is_currency_match(
     ticker: str,
     currency: str,
 ) -> bool:
     """True if ticker belongs to *currency*."""
     mkt = detect_market(ticker)
-    return (
-        (currency == "INR" and mkt == "india")
-        or (currency == "USD" and mkt == "us")
+    return (currency == "INR" and mkt == "india") or (
+        currency == "USD" and mkt == "us"
     )
+
+
+def _sentiment_label(score: float) -> str:
+    """Map sentiment score to label."""
+    if score >= 0.2:
+        return "Bullish"
+    if score <= -0.2:
+        return "Bearish"
+    return "Neutral"
 
 
 def _safe_float(val) -> float:
@@ -1366,7 +2159,19 @@ def _build_portfolio_performance(
         )
 
     tickers = buys["ticker"].unique().tolist()
-    ohlcv_df = stock_repo.get_ohlcv_batch(tickers)
+    import pandas as _pdp
+
+    ph = ",".join(f"'{t}'" for t in tickers)
+    try:
+        ohlcv_df = _duckdb_read(
+            "stocks.ohlcv",
+            "SELECT ticker, date, close "
+            "FROM ohlcv "
+            f"WHERE ticker IN ({ph}) "
+            "ORDER BY ticker, date",
+        )
+    except Exception:
+        ohlcv_df = _pdp.DataFrame()
     if ohlcv_df.empty:
         return PortfolioPerformanceResponse(
             currency=currency,
@@ -1601,13 +2406,55 @@ def _build_portfolio_forecast(
     current_value = 0.0
     total_invested = 0.0
 
+    # Batch reads: 2 DuckDB queries instead of
+    # 2*N per-holding scans.
+    import pandas as pd
+
+    holding_tickers = [
+        str(r["ticker"])
+        for _, r in holdings_df.iterrows()
+    ]
+    ph = ",".join(
+        f"'{t}'" for t in holding_tickers
+    )
+    try:
+        ohlcv_all = _duckdb_read(
+            "stocks.ohlcv",
+            "SELECT ticker, date, close "
+            "FROM ohlcv "
+            f"WHERE ticker IN ({ph}) "
+            "ORDER BY ticker, date",
+        )
+    except Exception:
+        ohlcv_all = pd.DataFrame()
+    ohlcv_grouped: dict[str, pd.DataFrame] = {}
+    if not ohlcv_all.empty:
+        ohlcv_grouped = dict(
+            tuple(ohlcv_all.groupby("ticker")),
+        )
+
+    try:
+        fc_all = _duckdb_read(
+            "stocks.forecasts",
+            "SELECT * FROM forecasts "
+            f"WHERE ticker IN ({ph})",
+        )
+    except Exception:
+        fc_all = pd.DataFrame()
+    # Filter to horizon_months=9 once for all tickers
+    if not fc_all.empty and "horizon_months" in (fc_all.columns):
+        fc_all = fc_all[fc_all["horizon_months"] == 9]
+    fc_grouped: dict[str, pd.DataFrame] = {}
+    if not fc_all.empty:
+        fc_grouped = dict(tuple(fc_all.groupby("ticker")))
+
     for _, row in holdings_df.iterrows():
         t = str(row["ticker"])
         qty = float(row["quantity"])
         avg_p = _safe_float(row.get("avg_price"))
 
         # Current price from OHLCV (skip NaN rows)
-        ohlcv = stock_repo.get_ohlcv(t)
+        ohlcv = ohlcv_grouped.get(t, pd.DataFrame())
         if ohlcv.empty:
             continue
         valid = ohlcv.dropna(subset=["close"])
@@ -1622,13 +2469,16 @@ def _build_portfolio_forecast(
         total_invested += qty * avg_p
         weights[t] = qty
 
-        # Always fetch 9M; client truncates
-        fc_df = stock_repo.get_latest_forecast_series(
-            t,
-            9,
-        )
+        # Latest forecast run for this ticker
+        fc_df = fc_grouped.get(t, pd.DataFrame())
         if fc_df.empty:
             continue
+        latest_run = fc_df["run_date"].max()
+        fc_df = (
+            fc_df[fc_df["run_date"] == latest_run]
+            .sort_values("forecast_date")
+            .reset_index(drop=True)
+        )
         forecasts[t] = [
             (
                 str(r["forecast_date"]),

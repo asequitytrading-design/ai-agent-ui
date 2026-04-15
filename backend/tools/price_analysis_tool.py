@@ -85,45 +85,54 @@ def analyse_stock_price(ticker: str) -> str:
     )
     sym = _sh._currency_symbol(_sh._load_currency(ticker))
 
-    # Iceberg freshness gate: return cached analysis only if
-    # it was run today AND OHLCV data hasn't been updated since.
+    # Iceberg freshness gate: return cached analysis if
+    # run within 7 days AND OHLCV data hasn't been
+    # updated since.  Covers weekends + holidays.
     try:
         repo_check = _sh._get_repo()
         if repo_check is not None:
-            latest = repo_check.get_latest_analysis_summary(
-                ticker
+            latest = (
+                repo_check.get_latest_analysis_summary(
+                    ticker,
+                )
             )
             if latest is not None:
                 ad = latest.get("analysis_date")
                 if ad is not None:
                     if hasattr(ad, "date"):
                         ad = ad.date()
-                    if ad == date.today():
-                        # Verify OHLCV hasn't been refreshed
-                        # since the analysis was generated.
+                    age = (date.today() - ad).days
+                    if age <= 7:
+                        # Verify OHLCV hasn't been
+                        # refreshed since analysis.
                         ohlcv_date = (
-                            repo_check.get_latest_ohlcv_date(
-                                ticker
+                            repo_check
+                            .get_latest_ohlcv_date(
+                                ticker,
                             )
                         )
                         if ohlcv_date is not None:
-                            if hasattr(ohlcv_date, "date"):
+                            if hasattr(
+                                ohlcv_date, "date",
+                            ):
                                 ohlcv_date = (
                                     ohlcv_date.date()
                                 )
                             if ohlcv_date <= ad:
                                 _logger.info(
-                                    "Analysis up-to-date"
-                                    " for %s (Iceberg)",
+                                    "Analysis fresh "
+                                    "for %s (%dd old)",
                                     ticker,
+                                    age,
                                 )
                                 return (
                                     f"Analysis for "
-                                    f"{ticker} is already"
-                                    f" up-to-date (run "
-                                    f"today). Use "
-                                    f"load_stock_data or"
-                                    f" the dashboard to "
+                                    f"{ticker} is "
+                                    f"up-to-date "
+                                    f"(run {ad}). "
+                                    f"Use load_stock"
+                                    f"_data or the "
+                                    f"dashboard to "
                                     f"view results."
                                 )
     except Exception as exc:
@@ -149,7 +158,6 @@ def analyse_stock_price(ticker: str) -> str:
         stats = _generate_summary_stats(df, ticker)
 
         repo = _sh._require_repo()
-        repo.upsert_technical_indicators(ticker, df)
         _iceberg_summary = {
             **movement,
             **stats,

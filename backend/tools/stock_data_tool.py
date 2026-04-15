@@ -15,7 +15,6 @@ Typical usage::
 """
 
 import asyncio
-import concurrent.futures
 import json
 import logging
 from datetime import date, datetime, timedelta
@@ -61,9 +60,7 @@ async def _async_lookup(symbol: str) -> dict | None:
     from backend.db.models.stock_master import StockMaster
     from sqlalchemy import or_, select
 
-    canonical = (
-        symbol.replace(".NS", "").replace(".BO", "").upper()
-    )
+    canonical = symbol.replace(".NS", "").replace(".BO", "").upper()
     factory = get_session_factory()
     async with factory() as session:
         result = await session.execute(
@@ -100,15 +97,14 @@ def _lookup_stock_master(symbol: str) -> dict | None:
         except RuntimeError:
             loop = None
 
-        if loop is not None:
-            # Inside an async context — run in a thread
-            with concurrent.futures.ThreadPoolExecutor(
-                max_workers=1,
-            ) as pool:
-                return pool.submit(
-                    asyncio.run,
-                    _async_lookup(symbol),
-                ).result()
+        if loop is not None and loop.is_running():
+            # Inside an async context — schedule on the
+            # running loop instead of creating a new one
+            fut = asyncio.run_coroutine_threadsafe(
+                _async_lookup(symbol),
+                loop,
+            )
+            return fut.result(timeout=5.0)
         return asyncio.run(_async_lookup(symbol))
     except Exception:
         _logger.debug(
@@ -117,6 +113,158 @@ def _lookup_stock_master(symbol: str) -> dict | None:
             symbol,
         )
         return None
+
+
+def _ensure_stock_master(
+    ticker: str,
+    info: dict | None = None,
+) -> None:
+    """Upsert ticker into stock_master if missing.
+
+    Called after successful yfinance fetch so the
+    pipeline scheduler picks up chat-discovered
+    tickers for daily refresh, Piotroski scoring,
+    and recommendations.
+
+    Args:
+        ticker: yfinance ticker (e.g. ``"AAPL"``,
+            ``"RELIANCE.NS"``).
+        info: Optional yfinance ``.info`` dict for
+            metadata enrichment.
+    """
+    try:
+        from backend.db.models.stock_master import (
+            StockMaster,
+        )
+        from market_utils import detect_market
+        from sqlalchemy import select
+        from sqlalchemy.ext.asyncio import (
+            AsyncSession,
+            create_async_engine,
+        )
+        from sqlalchemy.orm import sessionmaker
+        from sqlalchemy.pool import NullPool
+
+        from config import get_settings
+
+        market = detect_market(ticker)
+        if market == "india":
+            symbol = ticker.replace(
+                ".NS", "",
+            ).replace(".BO", "")
+            exchange = "NSE"
+            currency = "INR"
+        else:
+            symbol = ticker
+            exchange = "US"
+            currency = "USD"
+
+        name = symbol
+        sector = None
+        industry = None
+        market_cap = None
+        if info:
+            name = (
+                info.get("longName")
+                or info.get("shortName")
+                or symbol
+            )
+            sector = info.get("sector")
+            industry = info.get("industry")
+            mc = info.get("marketCap")
+            if mc is not None:
+                try:
+                    market_cap = int(mc)
+                except (ValueError, TypeError):
+                    pass
+            ccy = info.get("currency")
+            if ccy:
+                currency = ccy
+
+        async def _upsert():
+            eng = create_async_engine(
+                get_settings().database_url,
+                poolclass=NullPool,
+            )
+            async with AsyncSession(eng) as sess:
+                row = (
+                    await sess.execute(
+                        select(StockMaster).where(
+                            StockMaster.symbol
+                            == symbol,
+                        ),
+                    )
+                ).scalar_one_or_none()
+                if row is None:
+                    sess.add(
+                        StockMaster(
+                            symbol=symbol,
+                            name=name,
+                            exchange=exchange,
+                            yf_ticker=ticker,
+                            nse_symbol=(
+                                symbol
+                                if market == "india"
+                                else None
+                            ),
+                            sector=sector,
+                            industry=industry,
+                            market_cap=market_cap,
+                            currency=currency,
+                            is_active=True,
+                        ),
+                    )
+                    _logger.info(
+                        "stock_master: inserted %s "
+                        "(source=chat)",
+                        ticker,
+                    )
+                else:
+                    # Update metadata if richer
+                    changed = False
+                    for attr, val in (
+                        ("sector", sector),
+                        ("industry", industry),
+                        ("market_cap", market_cap),
+                        ("name", name),
+                    ):
+                        if (
+                            val
+                            and getattr(row, attr)
+                            != val
+                        ):
+                            setattr(row, attr, val)
+                            changed = True
+                    if changed:
+                        _logger.debug(
+                            "stock_master: updated "
+                            "%s metadata",
+                            ticker,
+                        )
+                await sess.commit()
+            await eng.dispose()
+
+        import concurrent.futures
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop and loop.is_running():
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=1,
+            ) as pool:
+                pool.submit(
+                    asyncio.run, _upsert(),
+                ).result(timeout=10)
+        else:
+            asyncio.run(_upsert())
+    except Exception:
+        _logger.debug(
+            "stock_master upsert failed for %s",
+            ticker,
+            exc_info=True,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -161,11 +309,10 @@ def fetch_stock_data(ticker: str, period: str = "10y") -> str:
             ticker,
             master["symbol"],
         )
-        canonical = master["symbol"]
-        existing = _check_existing_data(canonical)
-        if existing is not None:
-            # Use canonical for rest of function
-            ticker = canonical
+        existing = _check_existing_data(
+            master["symbol"],
+        )
+        # Keep ticker as-is (.NS) for yfinance/Iceberg
 
     _logger.info(
         "fetch_stock_data | ticker=%s | period=%s",
@@ -192,6 +339,11 @@ def fetch_stock_data(ticker: str, period: str = "10y") -> str:
             _update_registry(ticker, df, file_path)
             repo = _require_repo()
             repo.insert_ohlcv(ticker, df)
+            # Auto-register in stock_master for
+            # pipeline discovery (no info dict here,
+            # get_stock_info will enrich later).
+            if not master:
+                _ensure_stock_master(ticker)
             d_min = df.index.min().date()
             d_max = df.index.max().date()
             msg = (
@@ -346,6 +498,8 @@ def get_stock_info(ticker: str) -> str:
             "currency": info.get("currency", "USD"),
         }
         repo.insert_company_info(ticker, info)
+        # Enrich stock_master with sector/industry
+        _ensure_stock_master(ticker, info)
         return json.dumps(result, indent=2)
 
     except Exception as e:
@@ -448,8 +602,7 @@ def fetch_multiple_stocks(tickers: str, period: str = "10y") -> str:
         else:
             skip_count += 1
     lines = [
-        f"Batch fetch complete for {len(ticker_list)} "
-        f"tickers:",
+        f"Batch fetch complete for {len(ticker_list)} " f"tickers:",
         *results,
         f"\nSummary: {full_count} full, "
         f"{delta_count} delta, {skip_count} skipped, "
@@ -485,6 +638,52 @@ def get_dividend_history(ticker: str) -> str:
         ticker,
     )
     _ss._DATA_PROCESSED.mkdir(parents=True, exist_ok=True)
+
+    # Iceberg freshness: return cached dividends if
+    # last entry is within 7 days.
+    try:
+        repo_chk = _require_repo()
+        cached_df = repo_chk.get_dividends(ticker)
+        if not cached_df.empty:
+            last_ex = pd.to_datetime(
+                cached_df["ex_date"],
+            ).max()
+            if last_ex is not None:
+                age = (
+                    pd.Timestamp.now() - last_ex
+                ).days
+                # Dividends are quarterly/annual —
+                # 7-day cache avoids redundant fetches
+                # while still catching new declarations.
+                if age <= 90:
+                    n = len(cached_df)
+                    d_min = cached_df[
+                        "ex_date"
+                    ].min()
+                    d_max = cached_df[
+                        "ex_date"
+                    ].max()
+                    curr_sym = _currency_symbol(
+                        _load_currency(ticker),
+                    )
+                    last_amt = float(
+                        cached_df.sort_values(
+                            "ex_date",
+                        )["dividend_amount"].iloc[
+                            -1
+                        ],
+                    )
+                    return (
+                        f"[Source: iceberg]\n"
+                        f"Dividend history for "
+                        f"{ticker}: {n} payments. "
+                        f"Date range: {d_min} to "
+                        f"{d_max}. Most recent: "
+                        f"{curr_sym}{last_amt:.4f}"
+                        f" on {d_max}."
+                    )
+    except Exception:
+        pass
 
     try:
         dividends = yf.Ticker(ticker).dividends
@@ -537,6 +736,9 @@ _BALANCE_MAP = {
     "Stockholders Equity": "total_equity",
     "Total Debt": "total_debt",
     "Cash And Cash Equivalents": "cash_and_equivalents",
+    "Current Assets": "current_assets",
+    "Current Liabilities": "current_liabilities",
+    "Ordinary Shares Number": "shares_outstanding",
 }
 
 _CASHFLOW_MAP = {
@@ -609,51 +811,34 @@ def _extract_statement(
     return rows
 
 
-@tool
-def fetch_quarterly_results(ticker: str) -> str:
-    """Fetch quarterly financial statements from Yahoo Finance.
-
-    Retrieves quarterly income statement, balance sheet, and
-    cash flow data and persists to the Iceberg
-    ``stocks.quarterly_results`` table. Data is cached for 7 days.
+def _fetch_and_store_quarterly(
+    ticker: str,
+    repo,
+    force: bool = False,
+) -> str:
+    """Fetch quarterly statements and persist to Iceberg.
 
     Args:
-        ticker: Stock ticker symbol, e.g. ``"AAPL"``.
+        ticker: Uppercase ticker with suffix (e.g. RELIANCE.NS).
+        repo: StockRepository instance.
+        force: If True, skip 7-day freshness check.
 
     Returns:
-        Summary string describing fetched quarters.
-
-    Example:
-        >>> result = fetch_quarterly_results.invoke(
-        ...     {"ticker": "AAPL"}
-        ... )
-        >>> "AAPL" in result
-        True
+        Summary string.
     """
-    err = validate_ticker(ticker)
-    if err:
-        return f"Error: {err}"
-    ticker = ticker.upper().strip()
-    from tools._ticker_linker import auto_link_ticker
-
-    auto_link_ticker(ticker)
-    _logger.info(
-        "fetch_quarterly_results | ticker=%s",
-        ticker,
-    )
-
     try:
-        repo = _require_repo()
-
-        # Check freshness (7-day cache)
-        cached = repo.get_quarterly_results_if_fresh(ticker, days=7)
-        if cached is not None:
-            n = len(cached)
-            return (
-                f"Quarterly results for {ticker} are "
-                f"up-to-date ({n} records, fetched "
-                f"within last 7 days)."
+        if not force:
+            cached = repo.get_quarterly_results_if_fresh(
+                ticker,
+                days=7,
             )
+            if cached is not None:
+                n = len(cached)
+                return (
+                    f"Quarterly results for {ticker} are "
+                    f"up-to-date ({n} records, fetched "
+                    f"within last 7 days)."
+                )
 
         yt = yf.Ticker(ticker)
         all_rows: list[dict] = []
@@ -738,6 +923,46 @@ def fetch_quarterly_results(ticker: str) -> str:
             exc_info=True,
         )
         return f"Error fetching quarterly results " f"for '{ticker}': {e}"
+
+
+@tool
+def fetch_quarterly_results(ticker: str) -> str:
+    """Fetch quarterly financial statements from Yahoo Finance.
+
+    Retrieves quarterly income statement, balance sheet, and
+    cash flow data and persists to the Iceberg
+    ``stocks.quarterly_results`` table. Data is cached for 7 days.
+
+    Args:
+        ticker: Stock ticker symbol, e.g. ``"AAPL"``.
+
+    Returns:
+        Summary string describing fetched quarters.
+
+    Example:
+        >>> result = fetch_quarterly_results.invoke(
+        ...     {"ticker": "AAPL"}
+        ... )
+        >>> "AAPL" in result
+        True
+    """
+    err = validate_ticker(ticker)
+    if err:
+        return f"Error: {err}"
+    ticker = ticker.upper().strip()
+    from tools._ticker_linker import auto_link_ticker
+
+    auto_link_ticker(ticker)
+    _logger.info(
+        "fetch_quarterly_results | ticker=%s",
+        ticker,
+    )
+    repo = _require_repo()
+    return _fetch_and_store_quarterly(
+        ticker,
+        repo,
+        force=False,
+    )
 
 
 @tool

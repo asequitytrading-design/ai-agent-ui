@@ -12,8 +12,8 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import logging
+import types
 from datetime import date
-from functools import partial
 
 import yfinance as yf
 
@@ -24,14 +24,14 @@ from sqlalchemy import select
 _logger = logging.getLogger(__name__)
 
 # Fields to check and patch from stock_master
-_PATCH_MAP = {
+_PATCH_MAP = types.MappingProxyType({
     # iceberg_key: (stock_master_attr, yfinance_info_key)
     "company_name": ("name", "longName"),
     "sector": ("sector", "sector"),
     "industry": ("industry", "industry"),
     "market_cap": ("market_cap", "marketCap"),
     "currency": ("currency", "currency"),
-}
+})
 
 
 async def _load_master_map() -> dict[str, dict]:

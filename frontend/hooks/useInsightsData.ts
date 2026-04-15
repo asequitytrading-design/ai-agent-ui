@@ -18,6 +18,10 @@ import type {
   SectorsResponse,
   CorrelationResponse,
   QuarterlyResponse,
+  PiotroskiResponse,
+  RecommendationHistoryResponse,
+  RecommendationResponse,
+  RecommendationStatsResponse,
 } from "@/lib/types";
 
 export interface InsightsData<T> {
@@ -106,5 +110,51 @@ export function useQuarterly(
 ): InsightsData<QuarterlyResponse> {
   return useInsightsFetch<QuarterlyResponse>(
     `/insights/quarterly?statement_type=${statementType}`,
+  );
+}
+
+export function usePiotroski(
+  minScore: number = 0,
+  sector: string = "all",
+  market: string = "all",
+): InsightsData<PiotroskiResponse> {
+  const params = new URLSearchParams();
+  if (minScore > 0)
+    params.set("min_score", String(minScore));
+  if (sector !== "all")
+    params.set("sector", sector);
+  if (market !== "all")
+    params.set("market", market);
+  const qs = params.toString();
+  return useInsightsFetch<PiotroskiResponse>(
+    `/insights/piotroski${qs ? `?${qs}` : ""}`,
+  );
+}
+
+// ---------------------------------------------------------
+// LLM Portfolio Recommendations (ASETPLTFRM-298)
+// ---------------------------------------------------------
+
+export function useRecommendationHistory(
+  monthsBack: number = 6,
+): InsightsData<RecommendationHistoryResponse> {
+  return useInsightsFetch<RecommendationHistoryResponse>(
+    `/dashboard/portfolio/recommendations/history?months_back=${monthsBack}`,
+  );
+}
+
+export function useRecommendationStats(): InsightsData<RecommendationStatsResponse> {
+  return useInsightsFetch<RecommendationStatsResponse>(
+    `/dashboard/portfolio/recommendations/stats`,
+  );
+}
+
+export function useRunDetail(
+  runId: string | null,
+): InsightsData<RecommendationResponse> {
+  return useInsightsFetch<RecommendationResponse>(
+    runId
+      ? `/dashboard/portfolio/recommendations/${runId}`
+      : null,
   );
 }

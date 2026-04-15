@@ -10,7 +10,12 @@ import {
   useState,
   useMemo,
   useCallback,
+  Suspense,
 } from "react";
+import {
+  useSearchParams,
+  useRouter,
+} from "next/navigation";
 import {
   useScreener,
   useTargets,
@@ -19,6 +24,7 @@ import {
   useSectors,
   useCorrelation,
   useQuarterly,
+  usePiotroski,
 } from "@/hooks/useInsightsData";
 import {
   InsightsTable,
@@ -27,6 +33,8 @@ import {
 import { InsightsFilters } from "@/components/insights/InsightsFilters";
 import { PlotlyChart } from "@/components/charts/PlotlyChart";
 import { CorrelationHeatmap } from "@/components/charts/CorrelationHeatmap";
+import { PiotroskiBadge } from "@/components/insights/PiotroskiBadge";
+import { RecommendationHistoryTab } from "@/components/insights/RecommendationHistoryTab";
 import { usePortfolio } from "@/hooks/usePortfolio";
 import { WidgetSkeleton } from "@/components/widgets/WidgetSkeleton";
 import { WidgetError } from "@/components/widgets/WidgetError";
@@ -37,6 +45,7 @@ import type {
   RiskRow,
   SectorRow,
   QuarterlyRow,
+  PiotroskiRow,
 } from "@/lib/types";
 
 // ---------------------------------------------------------------
@@ -50,7 +59,9 @@ type TabId =
   | "risk"
   | "sectors"
   | "correlation"
-  | "quarterly";
+  | "quarterly"
+  | "piotroski"
+  | "recommendations";
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "screener", label: "Screener" },
@@ -60,6 +71,8 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "dividends", label: "Dividends" },
   { id: "correlation", label: "Correlation" },
   { id: "quarterly", label: "Quarterly" },
+  { id: "piotroski", label: "Piotroski F-Score" },
+  { id: "recommendations", label: "Recommendation History" },
 ];
 
 // ---------------------------------------------------------------
@@ -218,6 +231,45 @@ const screenerCols: Column<ScreenerRow>[] = [
     key: "rsi_signal",
     label: "RSI Signal",
     render: (r) => signalBadge(r.rsi_signal),
+  },
+  {
+    key: "sentiment_score",
+    label: "Sentiment",
+    numeric: true,
+    tooltip:
+      "LLM-scored sentiment from recent news. " +
+      "Range: -1 (bearish) to +1 (bullish). " +
+      "Each headline scored via Groq LLM, " +
+      "averaged across Yahoo Finance, Reuters " +
+      "and other sources.",
+    render: (r) => {
+      if (r.sentiment_score == null) return "—";
+      const s = r.sentiment_score;
+      const label =
+        s >= 0.3
+          ? "Bullish"
+          : s <= -0.3
+            ? "Bearish"
+            : "Neutral";
+      const color =
+        s >= 0.3
+          ? "text-emerald-600 dark:text-emerald-400"
+          : s <= -0.3
+            ? "text-red-600 dark:text-red-400"
+            : "text-gray-600 dark:text-gray-400";
+      return (
+        <span
+          className={`${color} cursor-help`}
+          title={`Score: ${s.toFixed(3)} from ${r.sentiment_headlines ?? 0} headlines`}
+        >
+          {label}
+          <span className="ml-1 text-[10px] opacity-60">
+            {s >= 0 ? "+" : ""}
+            {s.toFixed(2)}
+          </span>
+        </span>
+      );
+    },
   },
   {
     key: "macd_signal",
@@ -556,6 +608,97 @@ const sectorCols: Column<SectorRow>[] = [
   },
 ];
 
+const piotroskiCols: Column<PiotroskiRow>[] = [
+  { key: "ticker", label: "Ticker" },
+  {
+    key: "company_name",
+    label: "Company",
+    render: (r) => r.company_name ?? "\u2014",
+  },
+  {
+    key: "total_score",
+    label: "Score",
+    numeric: true,
+    render: (r) => (
+      <PiotroskiBadge
+        score={r.total_score}
+        label={r.label}
+      />
+    ),
+  },
+  {
+    key: "label",
+    label: "Rating",
+    render: (r) => r.label,
+  },
+  {
+    key: "sector",
+    label: "Sector",
+    render: (r) => r.sector ?? "\u2014",
+  },
+  {
+    key: "market_cap",
+    label: "MCap (Cr)",
+    numeric: true,
+    render: (r) =>
+      r.market_cap != null
+        ? (r.market_cap / 1e7).toFixed(0)
+        : "\u2014",
+  },
+  {
+    key: "revenue",
+    label: "Rev (Cr)",
+    numeric: true,
+    render: (r) =>
+      r.revenue != null
+        ? (r.revenue / 1e7).toFixed(0)
+        : "\u2014",
+  },
+  {
+    key: "avg_volume",
+    label: "Avg Vol",
+    numeric: true,
+    render: (r) =>
+      r.avg_volume != null
+        ? r.avg_volume.toLocaleString()
+        : "\u2014",
+  },
+  {
+    key: "action",
+    label: "Action",
+    sortable: false,
+    render: (r) => (
+      <button
+        title="Stock Analysis"
+        onClick={() =>
+          window.open(
+            `/analytics/analysis?ticker=${encodeURIComponent(r.ticker)}&tab=analysis`,
+            "_blank",
+          )
+        }
+        className="flex h-7 w-7 items-center
+          justify-center rounded-md border
+          border-gray-200 text-gray-400
+          transition-all hover:border-indigo-400
+          hover:bg-indigo-50 hover:text-indigo-600
+          dark:border-gray-700 dark:text-gray-500
+          dark:hover:border-indigo-500
+          dark:hover:bg-indigo-500/10
+          dark:hover:text-indigo-400"
+      >
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 20 20"
+          fill="currentColor"
+          className="h-3.5 w-3.5"
+        >
+          <path d="M15.5 2A1.5 1.5 0 0014 3.5v13a1.5 1.5 0 001.5 1.5h1a1.5 1.5 0 001.5-1.5v-13A1.5 1.5 0 0016.5 2h-1zM9.5 6A1.5 1.5 0 008 7.5v9A1.5 1.5 0 009.5 18h1a1.5 1.5 0 001.5-1.5v-9A1.5 1.5 0 0010.5 6h-1zM3.5 10A1.5 1.5 0 002 11.5v5A1.5 1.5 0 003.5 18h1A1.5 1.5 0 006 16.5v-5A1.5 1.5 0 004.5 10h-1z" />
+        </svg>
+      </button>
+    ),
+  },
+];
+
 // ---------------------------------------------------------------
 // Tab content components
 // ---------------------------------------------------------------
@@ -565,17 +708,24 @@ function ScreenerTab() {
   const [market, setMarket] = useState("all");
   const [sector, setSector] = useState("all");
   const [rsiFilter, setRsiFilter] = useState("all");
+  const [tag, setTag] = useState("all");
 
   const filtered = useMemo(() => {
     if (!data.value?.rows) return [];
-    return applyFilters(
+    let rows = applyFilters(
       data.value.rows,
       market,
       sector,
       "all",
       rsiFilter,
     );
-  }, [data.value, market, sector, rsiFilter]);
+    if (tag !== "all") {
+      rows = rows.filter(
+        (r) => r.tags?.includes(tag),
+      );
+    }
+    return rows;
+  }, [data.value, market, sector, rsiFilter, tag]);
 
   if (data.loading) return <WidgetSkeleton />;
   if (data.error)
@@ -589,6 +739,9 @@ function ScreenerTab() {
         sector={sector}
         onSectorChange={setSector}
         sectors={data.value?.sectors ?? []}
+        tag={tag}
+        onTagChange={setTag}
+        availableTags={data.value?.tags ?? []}
         rsiFilter={rsiFilter}
         onRsiFilterChange={setRsiFilter}
       />
@@ -1200,13 +1353,129 @@ function QuarterlyTab() {
   );
 }
 
+function PiotroskiTab() {
+  const [sector, setSector] = useState("all");
+  const [minScore, setMinScore] = useState(0);
+  const [market, setMarket] = useState("all");
+  const data = usePiotroski(minScore, sector, market);
+
+  const filtered = useMemo(() => {
+    if (!data.value?.rows) return [];
+    return data.value.rows;
+  }, [data.value]);
+
+  if (data.loading) return <WidgetSkeleton />;
+  if (data.error)
+    return (
+      <WidgetError
+        message={data.error}
+        data-testid="insights-error"
+      />
+    );
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        {/* Sector filter */}
+        {(data.value?.sectors ?? []).length > 0 && (
+          <select
+            data-testid="piotroski-sector-filter"
+            value={sector}
+            onChange={(e) =>
+              setSector(e.target.value)
+            }
+            className="rounded-lg border border-gray-300
+              dark:border-gray-600 bg-white dark:bg-gray-800
+              px-2.5 py-1.5 text-sm
+              text-gray-700 dark:text-gray-200
+              focus:outline-none focus:ring-2
+              focus:ring-indigo-500/40"
+          >
+            <option value="all">All Sectors</option>
+            {(data.value?.sectors ?? []).map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+        )}
+        {/* Market filter */}
+        <select
+          data-testid="piotroski-market-filter"
+          value={market}
+          onChange={(e) =>
+            setMarket(e.target.value)
+          }
+          className="rounded-lg border border-gray-300
+            dark:border-gray-600 bg-white dark:bg-gray-800
+            px-2.5 py-1.5 text-sm
+            text-gray-700 dark:text-gray-200
+            focus:outline-none focus:ring-2
+            focus:ring-indigo-500/40"
+        >
+          <option value="all">All Markets</option>
+          <option value="india">India</option>
+          <option value="us">US</option>
+        </select>
+        {/* Min score filter */}
+        <select
+          data-testid="piotroski-score-filter"
+          value={minScore}
+          onChange={(e) =>
+            setMinScore(Number(e.target.value))
+          }
+          className="rounded-lg border border-gray-300
+            dark:border-gray-600 bg-white dark:bg-gray-800
+            px-2.5 py-1.5 text-sm
+            text-gray-700 dark:text-gray-200
+            focus:outline-none focus:ring-2
+            focus:ring-indigo-500/40"
+        >
+          <option value={0}>All Scores</option>
+          <option value={8}>Strong (8-9)</option>
+          <option value={5}>Moderate+ (5-9)</option>
+        </select>
+        {data.value?.score_date && (
+          <span className="text-xs text-gray-400 dark:text-gray-500 ml-auto">
+            Scored: {data.value.score_date}
+          </span>
+        )}
+      </div>
+      <InsightsTable<PiotroskiRow>
+        columns={piotroskiCols}
+        rows={filtered}
+        defaultSort={{
+          col: "total_score",
+          dir: "desc",
+        }}
+      />
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------
 
-export default function InsightsPage() {
+function InsightsPageInner() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
   const [activeTab, setActiveTab] =
-    useState<TabId>("screener");
+    useState<TabId>(
+      (searchParams.get("tab") as TabId) ??
+        "screener",
+    );
+
+  const handleTabChange = useCallback(
+    (id: TabId) => {
+      setActiveTab(id);
+      router.replace(
+        `/analytics/insights?tab=${id}`,
+        { scroll: false },
+      );
+    },
+    [router],
+  );
 
   const renderTab = useCallback(() => {
     switch (activeTab) {
@@ -1224,6 +1493,10 @@ export default function InsightsPage() {
         return <CorrelationTab />;
       case "quarterly":
         return <QuarterlyTab />;
+      case "piotroski":
+        return <PiotroskiTab />;
+      case "recommendations":
+        return <RecommendationHistoryTab />;
     }
   }, [activeTab]);
 
@@ -1235,7 +1508,7 @@ export default function InsightsPage() {
           <button
             key={tab.id}
             data-testid={`insights-tab-${tab.id}`}
-            onClick={() => setActiveTab(tab.id)}
+            onClick={() => handleTabChange(tab.id)}
             className={`
               whitespace-nowrap px-3 py-2 text-sm
               font-medium rounded-t-lg transition-colors
@@ -1256,5 +1529,13 @@ export default function InsightsPage() {
         {renderTab()}
       </div>
     </div>
+  );
+}
+
+export default function InsightsPage() {
+  return (
+    <Suspense fallback={null}>
+      <InsightsPageInner />
+    </Suspense>
   );
 }

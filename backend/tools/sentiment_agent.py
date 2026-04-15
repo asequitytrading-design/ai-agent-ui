@@ -68,6 +68,10 @@ def _get_llm():
             else None
         )
 
+        from observability import (
+            get_obs_collector,
+        )
+
         return FallbackLLM(
             groq_models=tiers,
             anthropic_model=anthropic,
@@ -75,6 +79,7 @@ def _get_llm():
             agent_id="sentiment",
             token_budget=get_token_budget(),
             compressor=MessageCompressor(),
+            obs_collector=get_obs_collector(),
             cascade_profile="tool",
             ollama_model=ollama,
             ollama_first=True,

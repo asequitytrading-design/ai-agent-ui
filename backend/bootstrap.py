@@ -76,6 +76,8 @@ def setup_tools(registry):
     try:
         from tools.portfolio_tools import (
             get_dividend_projection,
+            get_portfolio_comparison,
+            get_portfolio_history,
             get_portfolio_holdings,
             get_portfolio_performance,
             get_portfolio_summary,
@@ -86,6 +88,8 @@ def setup_tools(registry):
 
         registry.register(get_portfolio_holdings)
         registry.register(get_portfolio_performance)
+        registry.register(get_portfolio_history)
+        registry.register(get_portfolio_comparison)
         registry.register(get_sector_allocation)
         registry.register(get_dividend_projection)
         registry.register(suggest_rebalancing)
@@ -139,6 +143,27 @@ def setup_tools(registry):
     except Exception:
         _logger.warning(
             "Sector discovery tool registration failed",
+            exc_info=True,
+        )
+
+    # Register recommendation tools
+    try:
+        from tools.recommendation_tools import (
+            generate_recommendations,
+            get_recommendation_detail,
+            get_recommendation_history,
+            get_recommendation_performance,
+        )
+
+        registry.register(generate_recommendations)
+        registry.register(get_recommendation_detail)
+        registry.register(get_recommendation_history)
+        registry.register(
+            get_recommendation_performance,
+        )
+    except Exception:
+        _logger.warning(
+            "Recommendation tools registration failed",
             exc_info=True,
         )
 

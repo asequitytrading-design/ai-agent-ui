@@ -16,6 +16,7 @@ The agent framework lives in `backend/agents/`. It uses a **LangGraph supervisor
 | `agents/configs/forecaster.py` | Forecaster config (Prophet models) |
 | `agents/configs/research.py` | Research Agent config (news + sentiment) |
 | `agents/configs/sentiment.py` | Sentiment Agent config (3-source headlines, market mood) |
+| `agents/configs/recommendation.py` | Recommendation Agent config (Smart Funnel, skip_synthesis) |
 | `agents/nodes/guardrail.py` | Content safety + financial relevance gate |
 | `agents/nodes/router_node.py` | Tier 1 keyword-based intent classifier (zero LLM) |
 | `agents/nodes/llm_classifier.py` | Tier 2 LLM fallback classifier (1 cheap call) |
@@ -61,7 +62,7 @@ User Message
   → router_node (Tier 1: keyword match, zero LLM)
   → llm_classifier (Tier 2: LLM fallback if router uncertain)
   → supervisor (intent → sub-agent mapper)
-  → sub_agent node (portfolio | stock_analyst | forecaster | research | sentiment)
+  → sub_agent node (portfolio | stock_analyst | forecaster | research | sentiment | recommendation)
   → log_query (audit to Iceberg)
   → synthesis (output formatting)
   → Response
@@ -98,6 +99,7 @@ Each sub-agent is configured via a dataclass in `agents/configs/`:
 | `forecaster.py` | Forecaster | Prophet models, horizon selection |
 | `research.py` | Research Agent | News search + analyst recommendations |
 | `sentiment.py` | Sentiment Agent | 3-source headlines, market mood, hybrid cached/live UX |
+| `recommendation.py` | Recommendation Agent | Smart Funnel pipeline, max_tool_rounds=1, skip_synthesis=True |
 
 ### Dynamic Context Injection
 

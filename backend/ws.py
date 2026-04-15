@@ -464,13 +464,25 @@ def _run_graph(
 
             ctx = context_store.get(session_id)
             if ctx is None:
-                ctx = ConversationContext(
-                    session_id=session_id,
+                # Try resume from user's last session
+                ctx = context_store.get_latest_for_user(
+                    user_id,
                 )
+                if ctx is not None:
+                    ctx.session_id = session_id
+                else:
+                    ctx = ConversationContext(
+                        session_id=session_id,
+                    )
+            if not ctx.user_id:
+                ctx.user_id = user_id
             ctx.last_agent = result.get(
                 "current_agent", "",
             )
             ctx.last_intent = result.get("intent", "")
+            ctx.last_response = (
+                result.get("final_response", "")[:500]
+            )
             tickers = result.get("tickers", [])
             ctx.current_topic = (
                 f"{', '.join(tickers)} "

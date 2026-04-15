@@ -4,6 +4,136 @@ Session-by-session record of what was built, changed, and fixed.
 
 ---
 
+## Apr 14, 2026 — Data Health Fix Panel + ETF Ingestion + ticker_type
+
+### Features
+- **Data Health Fix Panel**: Unified async fix buttons on all 5 Maintenance cards (OHLCV, Analytics, Sentiment, Piotroski, Forecasts) with live progress bars. Triggers same pipeline executors as scheduler.
+- **ticker_type system**: New `ticker_type` column on `stock_registry` — classifies tickers as `stock` (755), `etf` (54), `index` (4), `commodity` (4). Pipeline filtering via `_analyzable_tickers()` (stock+etf) and `_has_financials()` (stock only).
+- **54 NSE ETFs ingested**: Broad market, sectoral, factor, gold/silver, international, debt, thematic ETFs with 10y OHLCV data. Analytics, sentiment, and forecasts computed for all ETFs.
+- **Indian index currency fix**: `^NSEI` chart shows ₹ instead of $. `detect_market()` now recognizes Indian index tickers. Frontend passes `registryMarket` to `tickerCurrency()`.
+- **Forecast tab filtering**: Hides indices/commodities from dropdown, shows stocks+ETFs. Auto-redirects if non-analyzable ticker selected.
+- **Company name fallback**: Piotroski insights endpoint patches 81 empty company names from `company_info` at query time.
+
+### Performance
+- Data health DuckDB queries parallelized via ThreadPoolExecutor: **2.4s → 1.4s** (42% faster)
+- `invalidate_metadata()` on every health scan to prevent stale DuckDB reads after fix runs
+
+### API Endpoints (new)
+- `POST /v1/admin/data-health/fix` — async fix trigger, returns `run_id`
+- `GET /v1/admin/data-health/fix/{run_id}/status` — progress polling
+
+### Database
+- New column: `stock_registry.ticker_type` (VARCHAR(20), default "stock", indexed)
+- Alembic migration: `b2c3d4e5f6a7_add_ticker_type_to_registry`
+- `get_scheduler_run_by_id()` added to `pg_stocks.py`
+
+### New Files
+- `data/universe/nse_etfs.csv` — 54 NSE ETFs seed file
+- `backend/db/migrations/versions/b2c3d4e5f6a7_add_ticker_type_to_registry.py`
+
+### Jira
+- ASETPLTFRM-305: Fix portfolio comparison chat (round-robin synthesis) → Sprint 7
+
+---
+
+## Apr 13, 2026 — Market Ticker: Nifty 50 + Sensex Header
+
+### Features
+- Real-time Nifty 50 + Sensex ticker in AppHeader center
+- Backend `GET /v1/market/indices` — JWT-protected, dual-source
+- NSE India `/api/allIndices` (primary for Nifty, cookie session)
+- Yahoo Finance v7 `^BSESN` (Sensex) + `^NSEI` (Nifty fallback)
+- Redis cache: 30s TTL (market open), 300s (closed)
+- PG persistence: `stocks.market_indices` single-row table
+- Market hours gating: Mon-Fri 09:00–15:30 IST, zero upstream off-hours
+- First-call-of-day seeding: one upstream fetch if no data for today
+- Frontend 30s polling via `apiFetch` + `setInterval`
+- Green/red change % + "Closed" label off-hours
+- Hidden on mobile (`hidden md:flex`)
+
+### Bug Fixes
+- `date.today()` returns UTC in Docker — fixed to `datetime.now(IST).date()`
+- `apiFetch` relative URL hits Next.js not backend — fixed to `${API_URL}/...`
+
+### Database
+- New table: `stocks.market_indices` (id, nifty_data JSONB, sensex_data JSONB, market_state, fetched_at)
+- Alembic migration: `a1b2c3d4e5f6_add_market_indices_table`
+
+### Tests
+- 11 backend tests: market hours boundaries, cache hit, off-hours PG, seed logic, 503 fallback
+
+### Jira: ASETPLTFRM-304 (done, 5 SP)
+
+---
+
+## Apr 11–12, 2026 — Forecast Optimization + Scheduler Features + Data Health
+
+### Performance (Forecast Pipeline)
+- Batch OHLCV load: 167s → 0.87s (single DuckDB query for 748 tickers)
+- Batch freshness check: 329s → 0.44s (DuckDB → dict lookup)
+- Regressor cache: 1.6s → 0.05s/ticker (scope-keyed TTL)
+- Bulk Iceberg writes: 11.5 min → 2s (2 commits vs 2,244)
+- CV reuse: 30-day TTL skips cross-validation on weekly reruns
+- Nested parallelism disabled: `parallel=None`, `workers=cpu_count//2`
+- Weekly 748 tickers: ~33 min → ~8 min
+
+### Performance (Database)
+- `scheduler_runs` migrated Iceberg → PostgreSQL: update 9s → 14ms
+- NullPool for sync→async PG bridge (no connection leaks)
+- PG `max_connections` 20 → 50
+
+### Features
+- Pipeline create/edit form with ordered step editor
+- Force run option (UI → API → scheduler → pipeline → executor)
+- Sentiment column on Screener (after RSI Signal)
+- Market filter on Piotroski F-Score tab
+- Tag/Index filter on Screener (9 tags: Nifty 50/100/500, cap sizes)
+- Data Health dashboard (5 cards with fix buttons)
+- URL tab persistence on Admin, Insights, Analysis pages
+- 15s auto-refresh on Scheduler Run History
+
+### Bug Fixes
+- Pipeline stuck after step 1 (`get_scheduler_runs` DuckDB path missing return)
+- Standalone job runs invisible (`append_scheduler_run` missing `pipeline_run_id`)
+- Piotroski scores overwritten (scoped delete by ticker, not date)
+- `execute_run_piotroski` missing `force` parameter
+- Backtest overlay missing from batch forecast executor
+- KPI tooltips clipped (portal-based rendering)
+- Forecast duration not shown in Run History
+
+### Data Cleanup
+- 215 NaN OHLCV rows cleaned + 211 tickers backfilled from yfinance
+
+### Documentation
+- `docs/backend/scheduler.md` — scheduler & pipeline orchestration
+- `docs/backend/maintenance.md` — data health dashboard
+- `README.md` comprehensive rewrite
+- `CLAUDE.md` restructured with performance-first rules
+
+### Jira: ASETPLTFRM-286 (done), 299 (done), 301 (done), 302 (created)
+
+---
+
+## Apr 10, 2026 — Pipeline DAG + Piotroski F-Score + DuckDB Migration
+
+### Features
+- Pipeline + PipelineStep ORM models, PipelineExecutor, 6 API endpoints
+- India & USA daily pipelines (4 steps each)
+- Interactive DAG visualization with "Run from here"
+- Piotroski F-Score: 747 stocks scored, batch scheduler job
+- 5 new CLI commands: analytics, sentiment, forecast, indices, refresh
+
+### Performance (DuckDB Migration)
+- All insights + dashboard reads migrated from PyIceberg to DuckDB
+- DuckDB metadata cache with auto-invalidation
+- Screener: 3.2s → 0.11s, Registry: 5.5s → 0.17s, Home: 3.6s → 0.05s
+
+### Data Cleanup
+- Sentiment deduplication, company_info upsert, TI table truncated
+- Dividends API limited to 2 years
+
+---
+
 ## Mar 30, 2026 — Context-Aware Chat + Recency-Aware News + Bug Fixes
 
 ### Context-Aware Chat Phase 1 (19 SP, ASETPLTFRM-249–256)

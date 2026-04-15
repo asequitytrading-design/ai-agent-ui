@@ -75,6 +75,13 @@ class SubAgentConfig:
     format_response: (
         Callable[[str, list], str] | None
     ) = None
+    max_tool_rounds: int = 0
+    """Max tool-calling iterations. 0 = use global
+    MAX_ITERATIONS. Set to 1 for agents whose tools
+    return complete responses (e.g. recommendation)."""
+    skip_synthesis: bool = False
+    """Skip the synthesis LLM pass. Set True when
+    tools already return well-formatted output."""
 
 
 def _infer_data_source(
@@ -190,6 +197,48 @@ def _make_sub_agent_node(
             agent_id.
     """
 
+    def _strip_tool_metadata(
+        msgs: list,
+    ) -> list:
+        """Strip tool_calls and ToolMessages for synthesis.
+
+        gpt-oss models hallucinate tool calls when they
+        see tool-formatted messages (ASETPLTFRM-297).
+        Convert tool results to plain text so the
+        synthesis LLM only sees content.
+        """
+        cleaned = []
+        for m in msgs:
+            if isinstance(m, ToolMessage):
+                # Convert tool result to plain text.
+                # CRITICAL: avoid "[Tool result" or
+                # any tool-like prefix — gpt-oss models
+                # hallucinate tool calls from these.
+                cleaned.append(
+                    HumanMessage(
+                        content=(
+                            f"Data from {m.name}:\n"
+                            f"{m.content}"
+                        ),
+                    )
+                )
+            elif isinstance(m, AIMessage):
+                if getattr(m, "tool_calls", None):
+                    # Strip tool_calls, keep content
+                    if m.content:
+                        cleaned.append(
+                            AIMessage(
+                                content=m.content,
+                            )
+                        )
+                    # else: skip empty AI messages that
+                    # were just tool call wrappers
+                else:
+                    cleaned.append(m)
+            else:
+                cleaned.append(m)
+        return cleaned
+
     def _build_synthesis_llm():
         """Create synthesis-tier FallbackLLM."""
         try:
@@ -214,6 +263,10 @@ def _make_sub_agent_node(
                 ).split(",")
                 if t.strip()
             ]
+            from observability import (
+                get_obs_collector,
+            )
+
             return FallbackLLM(
                 groq_models=tiers,
                 anthropic_model="claude-sonnet-4-6",
@@ -221,6 +274,7 @@ def _make_sub_agent_node(
                 agent_id=config.agent_id,
                 token_budget=get_token_budget(),
                 compressor=MessageCompressor(),
+                obs_collector=get_obs_collector(),
                 cascade_profile="synthesis",
                 pool_groups=get_pool_groups(
                     "synthesis",
@@ -349,6 +403,12 @@ def _make_sub_agent_node(
         data_sources: list[str] = []
 
         response = None
+        _max_rounds = (
+            config.max_tool_rounds
+            if config.max_tool_rounds > 0
+            else MAX_ITERATIONS
+        )
+        _tool_rounds_done = 0
         for iteration in range(MAX_ITERATIONS):
             events.append({
                 "type": "thinking",
@@ -356,9 +416,18 @@ def _make_sub_agent_node(
                 "agent": config.agent_id,
             })
 
-            response = llm_with_tools.invoke(
-                messages, iteration=iteration + 1,
-            )
+            # After max_tool_rounds, invoke WITHOUT
+            # tools to force text-only response.
+            if _tool_rounds_done >= _max_rounds:
+                response = llm.invoke(
+                    messages,
+                    iteration=iteration + 1,
+                )
+            else:
+                response = llm_with_tools.invoke(
+                    messages,
+                    iteration=iteration + 1,
+                )
             messages.append(response)
 
             if not getattr(
@@ -412,17 +481,57 @@ def _make_sub_agent_node(
                     ToolMessage(
                         content=result,
                         tool_call_id=tc["id"],
+                        name=name,
                     )
                 )
+
+            # Count this as a tool round
+            _tool_rounds_done += 1
+
+            # For skip_synthesis agents: tool output IS
+            # the final answer. Break immediately after
+            # first tool round to prevent the LLM from
+            # hallucinating a "presentation" of the
+            # tool output.
+            if (
+                config.skip_synthesis
+                and _tool_rounds_done >= _max_rounds
+            ):
+                # Use last ToolMessage as final response
+                last_tool_msg = messages[-1]
+                if isinstance(last_tool_msg, ToolMessage):
+                    return {
+                        "messages": [
+                            AIMessage(
+                                content=last_tool_msg.content,
+                            ),
+                        ],
+                        "tool_events": events,
+                        "final_response": (
+                            last_tool_msg.content
+                        ),
+                        "data_sources_used": data_sources,
+                        "current_agent": config.agent_id,
+                    }
 
         # Synthesis pass: if tools were called, re-invoke
         # with synthesis-tier models for higher quality
         # final text (gpt-oss-120b > llama-3.3-70b).
+        #
+        # IMPORTANT: Strip tool_calls from AIMessages
+        # and convert ToolMessages to HumanMessages
+        # before sending to synthesis.  gpt-oss models
+        # hallucinate tool calls when they see tool-
+        # formatted messages (ASETPLTFRM-297).
         _had_tools = any(
             e.get("type") == "tool_done"
             for e in events
         )
-        if _had_tools and response is not None:
+        if (
+            _had_tools
+            and response is not None
+            and not config.skip_synthesis
+        ):
             syn_llm = _build_synthesis_llm()
             if syn_llm is not None:
                 try:
@@ -430,8 +539,12 @@ def _make_sub_agent_node(
                         "Synthesis pass for %s",
                         config.agent_id,
                     )
-                    response = syn_llm.invoke(
+                    # Build clean messages for synthesis
+                    syn_msgs = _strip_tool_metadata(
                         messages,
+                    )
+                    response = syn_llm.invoke(
+                        syn_msgs,
                         iteration=iteration + 2,
                     )
                     messages.append(response)
