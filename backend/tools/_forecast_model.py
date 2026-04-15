@@ -177,21 +177,24 @@ def _train_prophet_model(
     model._regime_growth = rcfg.growth
 
     # Add external regressors (VIX, index return, etc.)
+    # Single bulk merge instead of per-column loop.
     train_df = prophet_df.copy()
     if regressors is not None and not regressors.empty:
-        for col in regressors.columns:
-            if col == "ds":
-                continue
+        reg_cols = [
+            c for c in regressors.columns if c != "ds"
+        ]
+        for col in reg_cols:
             model.add_regressor(col)
-            train_df = train_df.merge(
-                regressors[["ds", col]],
-                on="ds",
-                how="left",
+        train_df = train_df.merge(
+            regressors, on="ds", how="left",
+        )
+        for col in reg_cols:
+            train_df[col] = (
+                train_df[col].ffill().bfill()
             )
-            train_df[col] = train_df[col].ffill().bfill()
         _logger.info(
             "Added regressors: %s",
-            list(regressors.columns.drop("ds", errors="ignore")),
+            reg_cols,
         )
 
     model.fit(train_df)
@@ -279,17 +282,15 @@ def _generate_forecast(
             future["cap"] = raw_cap
             future["floor"] = raw_floor
 
-    # Merge regressors into future dataframe.
+    # Merge regressors into future dataframe (single bulk merge).
     if regressors is not None and not regressors.empty:
-        for col in regressors.columns:
-            if col == "ds":
-                continue
-            future = future.merge(
-                regressors[["ds", col]],
-                on="ds",
-                how="left",
-            )
-            # Forward-fill known values into future dates.
+        reg_cols = [
+            c for c in regressors.columns if c != "ds"
+        ]
+        future = future.merge(
+            regressors, on="ds", how="left",
+        )
+        for col in reg_cols:
             future[col] = future[col].ffill().bfill()
 
     forecast = model.predict(future)

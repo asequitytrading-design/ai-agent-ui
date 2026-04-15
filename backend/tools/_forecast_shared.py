@@ -525,11 +525,16 @@ def _merge_macro_regressors(
     return regressors
 
 
-# Calendar feature names that must be computed per date
-# rather than broadcast as scalar values.
-_CALENDAR_FEATURES = frozenset(
-    {"day_of_week", "month_of_year", "expiry_proximity"}
-)
+# Features to ADD as Prophet regressors (|beta| > 0.0015
+# based on empirical measurement across 4 large-cap India
+# tickers). Others are still computed for confidence score
+# and technical bias but NOT fed to Prophet.
+_PROPHET_REGRESSOR_FEATURES = frozenset({
+    "revenue_growth",
+    "volume_anomaly",
+    "trend_strength",
+    "sr_position",
+})
 
 
 def _enrich_regressors(
@@ -538,29 +543,23 @@ def _enrich_regressors(
     tier1_features: dict[str, float],
     tier2_features: dict[str, float],
 ) -> pd.DataFrame:
-    """Merge Tier 1/2 features into regressor DataFrame.
+    """Merge high-signal Tier 1/2 features as regressors.
 
-    Scalar features (most Tier 1/2) are broadcast across
-    all dates.  Calendar features (``day_of_week``,
-    ``month_of_year``, ``expiry_proximity``) are computed
-    per date from the ``ds`` column.
+    Only features in ``_PROPHET_REGRESSOR_FEATURES`` are
+    added to the regressor DataFrame. Low-signal features
+    (day_of_week, month_of_year, piotroski, etc.) are
+    excluded — Prophet seasonality already covers calendar
+    effects and constant scalars add no signal.
 
     Args:
-        regressors: DataFrame with a ``ds`` column
-            (datetime-like) representing forecast dates.
-        ticker: Ticker symbol (unused here, reserved for
-            per-ticker future extensions).
-        tier1_features: Tier 1 feature dict, e.g. from
-            ``_build_tier1_features()``.
-        tier2_features: Tier 2 feature dict, e.g. from
-            ``_build_tier2_features()``.
+        regressors: DataFrame with a ``ds`` column.
+        ticker: Ticker symbol (reserved).
+        tier1_features: Tier 1 feature dict.
+        tier2_features: Tier 2 feature dict.
 
     Returns:
-        Enriched regressors DataFrame with new columns
-        added (existing columns are not overwritten).
+        Enriched regressors DataFrame.
     """
-    from tools._forecast_features import _days_to_expiry
-
     combined: dict[str, float] = {
         **tier1_features,
         **tier2_features,
@@ -568,25 +567,7 @@ def _enrich_regressors(
     result = regressors.copy()
 
     for name, scalar in combined.items():
-        if name in _CALENDAR_FEATURES:
-            # Compute per-date from the ds column.
-            ds_col = pd.to_datetime(result["ds"])
-            if name == "day_of_week":
-                result[name] = (
-                    ds_col.dt.dayofweek / 4.0
-                )
-            elif name == "month_of_year":
-                result[name] = ds_col.dt.month / 12.0
-            elif name == "expiry_proximity":
-                result[name] = ds_col.apply(
-                    lambda d: _days_to_expiry(
-                        d.date()
-                        if hasattr(d, "date")
-                        else d
-                    )
-                )
-        else:
-            # Broadcast scalar across all rows.
+        if name in _PROPHET_REGRESSOR_FEATURES:
             result[name] = scalar
 
     return result
