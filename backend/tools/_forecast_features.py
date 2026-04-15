@@ -322,6 +322,25 @@ def compute_tier2_features(
         return out
 
     df = ohlcv_df.copy()
+
+    # Normalise column names: yfinance uses Title-case with
+    # DatetimeIndex; Iceberg/DuckDB uses lower-case with a
+    # ``date`` column.  Unify to lower-case + ``date`` column.
+    df.columns = [c.lower().replace(" ", "_") for c in df.columns]
+    if "date" not in df.columns and df.index.name in (
+        "date", "Date",
+    ):
+        df = df.reset_index()
+        df.rename(
+            columns={df.columns[0]: "date"}, inplace=True,
+        )
+    elif "date" not in df.columns:
+        # Last resort: use index as date
+        df = df.reset_index()
+        df.rename(
+            columns={df.columns[0]: "date"}, inplace=True,
+        )
+
     df = df.sort_values("date").reset_index(drop=True)
 
     last_row = df.iloc[-1]
@@ -368,6 +387,15 @@ def compute_tier2_features(
     if sector_index_df is not None and len(sector_index_df) >= 21:
         try:
             sdf = sector_index_df.copy()
+            sdf.columns = [
+                c.lower().replace(" ", "_") for c in sdf.columns
+            ]
+            if "date" not in sdf.columns:
+                sdf = sdf.reset_index()
+                sdf.rename(
+                    columns={sdf.columns[0]: "date"},
+                    inplace=True,
+                )
             sdf = sdf.sort_values("date").reset_index(drop=True)
             ticker_ret = (
                 float(df["close"].iloc[-1])
@@ -386,6 +414,15 @@ def compute_tier2_features(
         # Fallback: use available data
         try:
             sdf = sector_index_df.copy()
+            sdf.columns = [
+                c.lower().replace(" ", "_") for c in sdf.columns
+            ]
+            if "date" not in sdf.columns:
+                sdf = sdf.reset_index()
+                sdf.rename(
+                    columns={sdf.columns[0]: "date"},
+                    inplace=True,
+                )
             sdf = sdf.sort_values("date").reset_index(drop=True)
             n = min(len(df), len(sdf))
             ticker_ret = (
