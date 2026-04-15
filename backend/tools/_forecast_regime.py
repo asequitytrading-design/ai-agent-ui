@@ -27,6 +27,7 @@ Notes
 import logging
 from dataclasses import dataclass
 
+import numpy as np
 import pandas as pd
 
 _logger = logging.getLogger(__name__)
@@ -39,6 +40,10 @@ _STABLE_UPPER = 30.0   # < 30 → stable
 _MODERATE_UPPER = 60.0  # 30–59.99 → moderate; ≥ 60 → volatile
 
 _REGIMES = ("stable", "moderate", "volatile")
+
+# Technical-bias adjustment limits.
+MAX_BIAS = 0.15    # ±15 % cap on total additive bias
+_TAPER_DAYS = 30   # bias tapers linearly to 0 over 30 days
 
 # Prophet constructor kwargs per regime.
 _REGIME_CONFIG: dict[str, dict] = {
@@ -218,3 +223,106 @@ def get_regime_config(
         changepoint_prior_scale=cfg["changepoint_prior_scale"],
         changepoint_range=cfg["changepoint_range"],
     )
+
+
+def apply_technical_bias(
+    forecast_df: pd.DataFrame,
+    analysis_row: dict | None,
+) -> tuple[pd.DataFrame, dict]:
+    """Adjust a Prophet forecast for technical-analysis bias.
+
+    Reads RSI, MACD, and volume-spike signals from *analysis_row*
+    and applies a linearly-tapered multiplier to ``yhat``,
+    ``yhat_lower``, and ``yhat_upper`` for each forecast row.
+
+    Parameters
+    ----------
+    forecast_df:
+        Prophet forecast DataFrame with at minimum the columns
+        ``ds``, ``yhat``, ``yhat_lower``, ``yhat_upper``.
+    analysis_row:
+        Dict produced by the analysis-summary pipeline.
+        Expected keys: ``rsi_14`` (float), ``macd`` (float),
+        ``macd_signal_line`` (float), ``volume_spike`` (bool),
+        ``price_direction`` (``"up"``/``"down"``/``"flat"``).
+        Pass ``None`` to skip adjustment.
+
+    Returns
+    -------
+    tuple[pd.DataFrame, dict]
+        * Adjusted copy of *forecast_df* (original is not mutated).
+        * Metadata dict: ``{"total_bias": float,
+          "signals": list[str]}``.
+
+    Notes
+    -----
+    * Individual signal biases are summed then clamped to
+      ``[-MAX_BIAS, +MAX_BIAS]`` (±15 %).
+    * Taper: ``taper = max(0, 1 − day_index / 30)``.
+      Full effect at day 0; zero at day ≥ 30.
+    * ``multiplier = 1.0 + total_bias × taper`` is applied
+      element-wise via vectorised pandas operations.
+    """
+    _empty_meta: dict = {"total_bias": 0.0, "signals": []}
+
+    if analysis_row is None:
+        return forecast_df.copy(), _empty_meta
+
+    total_bias = 0.0
+    signals: list[str] = []
+
+    # --- RSI signal ---
+    rsi = analysis_row.get("rsi_14")
+    if rsi is not None:
+        if rsi > 75:
+            total_bias -= 0.15
+            signals.append("rsi_overbought")
+        elif rsi < 25:
+            total_bias += 0.15
+            signals.append("rsi_oversold")
+
+    # --- MACD signal ---
+    macd = analysis_row.get("macd")
+    macd_sig = analysis_row.get("macd_signal_line")
+    if macd is not None and macd_sig is not None:
+        if macd < macd_sig:
+            total_bias -= 0.08
+            signals.append("macd_bearish")
+        elif macd > macd_sig:
+            total_bias += 0.08
+            signals.append("macd_bullish")
+
+    # --- Volume-spike signal ---
+    vol_spike = analysis_row.get("volume_spike", False)
+    price_dir = analysis_row.get("price_direction", "flat")
+    if vol_spike:
+        if price_dir == "down":
+            total_bias -= 0.05
+            signals.append("vol_spike_down")
+        elif price_dir == "up":
+            total_bias += 0.05
+            signals.append("vol_spike_up")
+
+    # Clamp to ±MAX_BIAS
+    total_bias = max(-MAX_BIAS, min(MAX_BIAS, total_bias))
+
+    if total_bias == 0.0:
+        return forecast_df.copy(), {"total_bias": 0.0, "signals": signals}
+
+    _logger.debug(
+        "apply_technical_bias: total_bias=%.4f signals=%s",
+        total_bias,
+        signals,
+    )
+
+    # Vectorised taper: shape (n,), full weight at index 0, zero at ≥30
+    n = len(forecast_df)
+    day_indices = np.arange(n, dtype=float)
+    taper = np.clip(1.0 - day_indices / _TAPER_DAYS, 0.0, None)
+    multiplier = 1.0 + total_bias * taper
+
+    adj = forecast_df.copy()
+    for col in ("yhat", "yhat_lower", "yhat_upper"):
+        adj[col] = adj[col] * multiplier
+
+    return adj, {"total_bias": float(total_bias), "signals": signals}

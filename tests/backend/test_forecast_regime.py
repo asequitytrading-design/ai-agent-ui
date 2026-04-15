@@ -155,3 +155,159 @@ class TestBuildProphetConfig:
         from tools._forecast_regime import build_prophet_config
         with pytest.raises(ValueError, match="Unknown regime"):
             build_prophet_config("unknown_regime")
+
+
+# ---------------------------------------------------------------------------
+# Helpers for TestApplyTechnicalBias
+# ---------------------------------------------------------------------------
+
+def _make_forecast_df(
+    n: int = 40,
+    base_price: float = 100.0,
+    start: str = "2025-01-01",
+) -> pd.DataFrame:
+    """Build a minimal Prophet forecast DataFrame."""
+    dates = pd.date_range(start, periods=n, freq="D")
+    return pd.DataFrame(
+        {
+            "ds": dates,
+            "yhat": [base_price] * n,
+            "yhat_lower": [base_price * 0.95] * n,
+            "yhat_upper": [base_price * 1.05] * n,
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
+# TestApplyTechnicalBias
+# ---------------------------------------------------------------------------
+
+class TestApplyTechnicalBias:
+    """apply_technical_bias(forecast_df, analysis_row) → (df, metadata)."""
+
+    def test_overbought_dampens_bullish(self):
+        """RSI=80 → overbought bias of -15%, day 1 yhat should be reduced."""
+        from tools._forecast_regime import apply_technical_bias
+
+        df = _make_forecast_df()
+        analysis = {
+            "rsi_14": 80.0,
+            "macd": 0.0,
+            "macd_signal_line": 0.0,
+            "volume_spike": False,
+            "price_direction": "flat",
+        }
+        adj_df, meta = apply_technical_bias(df, analysis)
+
+        # Day 1 (index 1) should have taper > 0 and bias < 0
+        # so yhat should be less than original 100.0
+        assert adj_df["yhat"].iloc[1] < df["yhat"].iloc[1]
+        assert meta["total_bias"] < 0.0
+        assert "rsi_overbought" in meta["signals"]
+
+    def test_oversold_dampens_bearish(self):
+        """RSI=20 → oversold bias of +15%, day 1 yhat should be increased."""
+        from tools._forecast_regime import apply_technical_bias
+
+        df = _make_forecast_df()
+        analysis = {
+            "rsi_14": 20.0,
+            "macd": 0.0,
+            "macd_signal_line": 0.0,
+            "volume_spike": False,
+            "price_direction": "flat",
+        }
+        adj_df, meta = apply_technical_bias(df, analysis)
+
+        assert adj_df["yhat"].iloc[1] > df["yhat"].iloc[1]
+        assert meta["total_bias"] > 0.0
+        assert "rsi_oversold" in meta["signals"]
+
+    def test_taper_at_day_30(self):
+        """Day 35 should be unadjusted (taper = 0 at day >= 30)."""
+        from tools._forecast_regime import apply_technical_bias
+
+        df = _make_forecast_df(n=40)
+        analysis = {
+            "rsi_14": 80.0,
+            "macd": 0.0,
+            "macd_signal_line": 0.0,
+            "volume_spike": False,
+            "price_direction": "flat",
+        }
+        adj_df, _ = apply_technical_bias(df, analysis)
+
+        # Day 35 (index 35): taper should be 0, so yhat unchanged
+        original = df["yhat"].iloc[35]
+        adjusted = adj_df["yhat"].iloc[35]
+        assert abs(adjusted - original) < 1e-9
+
+    def test_cap_at_15_pct(self):
+        """Stack all bearish signals — total bias must be capped at -15%."""
+        from tools._forecast_regime import apply_technical_bias
+
+        df = _make_forecast_df()
+        # RSI overbought (-15%) + MACD bearish (-8%) + vol spike down (-5%)
+        # uncapped sum = -28%, capped = -15%
+        analysis = {
+            "rsi_14": 80.0,
+            "macd": -1.0,
+            "macd_signal_line": 0.0,
+            "volume_spike": True,
+            "price_direction": "down",
+        }
+        adj_df, meta = apply_technical_bias(df, analysis)
+
+        # At day 0, taper=1.0, so multiplier = 1 + (-0.15) = 0.85
+        ratio = adj_df["yhat"].iloc[0] / df["yhat"].iloc[0]
+        assert ratio >= 0.85 - 1e-9
+        assert abs(meta["total_bias"]) <= 0.15 + 1e-9
+
+    def test_no_signal_no_change(self):
+        """RSI=50, neutral MACD, no volume spike → DataFrame unchanged."""
+        from tools._forecast_regime import apply_technical_bias
+
+        df = _make_forecast_df()
+        analysis = {
+            "rsi_14": 50.0,
+            "macd": 1.0,
+            "macd_signal_line": 1.0,
+            "volume_spike": False,
+            "price_direction": "flat",
+        }
+        adj_df, meta = apply_technical_bias(df, analysis)
+
+        pd.testing.assert_frame_equal(adj_df, df)
+        assert meta["total_bias"] == 0.0
+        assert meta["signals"] == []
+
+    def test_none_analysis_no_change(self):
+        """analysis_row=None → DataFrame unchanged, total_bias=0."""
+        from tools._forecast_regime import apply_technical_bias
+
+        df = _make_forecast_df()
+        adj_df, meta = apply_technical_bias(df, None)
+
+        pd.testing.assert_frame_equal(adj_df, df)
+        assert meta["total_bias"] == 0.0
+        assert meta["signals"] == []
+
+    def test_returns_metadata(self):
+        """Metadata must contain 'total_bias' (float) and 'signals' (list)."""
+        from tools._forecast_regime import apply_technical_bias
+
+        df = _make_forecast_df()
+        analysis = {
+            "rsi_14": 80.0,
+            "macd": -1.0,
+            "macd_signal_line": 0.0,
+            "volume_spike": False,
+            "price_direction": "flat",
+        }
+        _, meta = apply_technical_bias(df, analysis)
+
+        assert isinstance(meta, dict)
+        assert "total_bias" in meta
+        assert "signals" in meta
+        assert isinstance(meta["total_bias"], float)
+        assert isinstance(meta["signals"], list)
