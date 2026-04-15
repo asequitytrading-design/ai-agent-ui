@@ -1735,19 +1735,41 @@ def execute_run_forecasts(
             },
         )
 
+        # ── Sanity gate: skip forecast series for
+        # extreme predictions (>200% deviation) ──
+        _any_extreme = any(
+            abs(
+                summary.get("targets", {})
+                .get(mk, {})
+                .get("pct_change", 0)
+            )
+            > 200
+            for mk in ("3m", "6m", "9m")
+        )
+
         # Accumulate for bulk write after parallel loop.
         with _write_lock:
             _pending_runs.append(
                 (yf_ticker, horizon_months, run_dict),
             )
-            _pending_series.append(
-                (
+            if not _any_extreme:
+                _pending_series.append(
+                    (
+                        yf_ticker,
+                        horizon_months,
+                        run_date,
+                        forecast_df,
+                    ),
+                )
+            else:
+                _logger.warning(
+                    "[forecast] %s: extreme prediction "
+                    "— skipping series write (3m=%s%%)",
                     yf_ticker,
-                    horizon_months,
-                    run_date,
-                    forecast_df,
-                ),
-            )
+                    summary.get("targets", {})
+                    .get("3m", {})
+                    .get("pct_change", "?"),
+                )
 
     _write_lock = threading.Lock()
     _pending_runs: list[tuple] = []

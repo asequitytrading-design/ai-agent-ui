@@ -772,7 +772,34 @@ function ForecastTab({
       </div>
 
       {/* Forecast target cards */}
-      {targets.length > 0 && (
+      {targets.length > 0 && (() => {
+        const isExtreme = targets.some(
+          (t) => Math.abs(t.pct_change) > 200,
+        );
+        if (isExtreme) {
+          return (
+            <div
+              className="
+                p-4 rounded-lg border
+                bg-amber-50 dark:bg-amber-900/20
+                border-amber-200 dark:border-amber-800
+                text-amber-700 dark:text-amber-400
+                text-sm
+              "
+            >
+              <p className="font-medium mb-1">
+                Low confidence forecast
+              </p>
+              <p className="text-xs">
+                This ticker&apos;s forecast shows extreme
+                predictions (&gt;200% deviation) which are
+                unreliable. The model struggles with
+                highly volatile price histories.
+              </p>
+            </div>
+          );
+        }
+        return (
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           {targets.map((target, idx) => {
             const isPositive = target.pct_change >= 0;
@@ -844,7 +871,8 @@ function ForecastTab({
             );
           })}
         </div>
-      )}
+        );
+      })()}
 
       {/* Accuracy metrics */}
       {summary &&
