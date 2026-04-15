@@ -238,6 +238,11 @@ class Settings(BaseSettings):
     trace_sample_rate: float = 1.0  # 1.0 = 100% (dev)
     hide_trace_io: bool = False  # True in prod only
 
+    # ── Sentiment scoring backend ─────────────────
+    # "finbert"  — local FinBERT model (zero API cost)
+    # "llm"      — FallbackLLM cascade (default)
+    sentiment_scorer: str = "finbert"
+
     # ── Forecast: Phase 3 ──────────────────────────
     ensemble_enabled: bool = False  # XGBoost ensemble
 

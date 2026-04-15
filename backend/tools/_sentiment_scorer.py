@@ -91,6 +91,46 @@ def score_headlines(
     """
     if not headlines:
         return None
+
+    # ── FinBERT batch path (zero API cost) ──
+    try:
+        from config import get_settings
+        scorer = getattr(
+            get_settings(), "sentiment_scorer", "llm"
+        )
+    except Exception:
+        scorer = "llm"
+
+    if scorer == "finbert":
+        try:
+            from tools._sentiment_finbert import (
+                score_headlines_finbert,
+                compute_weighted_score,
+            )
+            from tools._date_utils import (
+                time_decay_weight,
+            )
+            titles = [h.title for h in headlines]
+            scored = score_headlines_finbert(titles)
+            if scored:
+                decay_weights = [
+                    h.weight * time_decay_weight(
+                        h.published
+                    )
+                    for h in headlines
+                ]
+                result = compute_weighted_score(
+                    scored, decay_weights,
+                )
+                if result is not None:
+                    return result
+        except Exception as exc:
+            _logger.warning(
+                "FinBERT scoring failed, falling "
+                "back to LLM: %s", exc,
+            )
+
+    # ── Existing LLM path (unchanged) ──
     if llm is None:
         return None
 
