@@ -1470,6 +1470,39 @@ def execute_run_forecasts(
             )
 
         prophet_df = _prepare_data_for_prophet(df)
+
+        # ── Low-data ticker gate ──
+        # Tickers with <730 days can't run CV. Skip if
+        # last forecast is <30 days old (monthly cadence
+        # even on forced runs). First-ever runs proceed.
+        _MIN_CV_ROWS = 730
+        if len(prophet_df) < _MIN_CV_ROWS:
+            fc_run = _fc_run_cache.get(yf_ticker)
+            if fc_run:
+                from datetime import timedelta
+
+                rd = fc_run.get("run_date")
+                if rd is not None:
+                    if hasattr(rd, "date"):
+                        rd = rd.date()
+                    cutoff_30d = (
+                        datetime.now(
+                            timezone.utc,
+                        ).date()
+                        - timedelta(days=30)
+                    )
+                    if rd >= cutoff_30d:
+                        _logger.info(
+                            "[scheduler] %s: low-data"
+                            " (%d rows < %d), last"
+                            " run %s < 30d. Skipped.",
+                            yf_ticker,
+                            len(prophet_df),
+                            _MIN_CV_ROWS,
+                            rd,
+                        )
+                        return
+
         current_price = float(
             prophet_df["y"].iloc[-1],
         )

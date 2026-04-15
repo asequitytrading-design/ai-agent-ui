@@ -216,6 +216,52 @@ def forecast_stock(ticker: str, months: int = 9) -> str:
             )
 
         prophet_df = _prepare_data_for_prophet(df)
+
+        # ── Low-data ticker: serve cached forecast ──
+        # Tickers with <730 days can't run CV. Reuse
+        # existing forecast if <30 days old instead of
+        # recomputing (saves ~8s per ticker).
+        _MIN_CV_ROWS = 730
+        if len(prophet_df) < _MIN_CV_ROWS:
+            try:
+                repo = _sh._get_repo()
+                if repo:
+                    prev = repo.get_latest_forecast_run(
+                        ticker, months,
+                    )
+                    if prev and prev.get("run_date"):
+                        import datetime as _dt
+                        rd = prev["run_date"]
+                        if hasattr(rd, "date"):
+                            rd = rd.date()
+                        age = (
+                            _dt.date.today() - rd
+                        ).days
+                        if age < 30:
+                            _logger.info(
+                                "forecast_stock: %s "
+                                "low-data (%d rows), "
+                                "reusing %d-day old "
+                                "forecast",
+                                ticker,
+                                len(prophet_df),
+                                age,
+                            )
+                            return (
+                                f"Forecast for {ticker}"
+                                f" (cached {age}d ago,"
+                                f" low data — "
+                                f"{len(prophet_df)} "
+                                f"trading days):\n"
+                                f"Sentiment: "
+                                f"{prev.get('sentiment')}"
+                                f"\nNote: Limited price "
+                                f"history — forecast "
+                                f"confidence is low."
+                            )
+            except Exception:
+                pass
+
         current_price = float(prophet_df["y"].iloc[-1])
 
         # Load regressors from Iceberg (VIX, index,
