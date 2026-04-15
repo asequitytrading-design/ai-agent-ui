@@ -1412,22 +1412,8 @@ def execute_run_forecasts(
         stock_repo.get_quarterly_results_batch(tickers)
     )
 
-    # ── Pre-load sector index OHLCV ──
-    from tools._forecast_features import (
-        get_sector_index_mapping,
-    )
-
-    _market = "india" if scope == "india" else "us"
-    sector_map = get_sector_index_mapping(_market)
-    _sector_ohlcv_cache: dict[str, pd.DataFrame] = {}
-    _sector_tickers = list(set(sector_map.values()))
-    for _st in _sector_tickers:
-        try:
-            _sdf = stock_repo.get_ohlcv(_st)
-            if _sdf is not None and not _sdf.empty:
-                _sector_ohlcv_cache[_st] = _sdf
-        except Exception:
-            pass
+    # Sector index pre-load removed — sector_relative_strength
+    # dropped from Prophet regressors (|beta| < 0.001).
 
     def _forecast_one(ticker):
         yf_ticker = yf_map.get(ticker, ticker)
@@ -1525,16 +1511,8 @@ def execute_run_forecasts(
         )
 
         # ── Tier 2 features ──
-        company_sector = (analysis_row or {}).get(
-            "sector", "",
-        )
-        sector_idx = sector_map.get(company_sector)
-        sector_df = _sector_ohlcv_cache.get(
-            sector_idx,
-        )
-
         tier2 = compute_tier2_features(
-            df, sector_df, earnings_dates=None,
+            df, None, earnings_dates=None,
         )
 
         # ── Enrich regressors ──
