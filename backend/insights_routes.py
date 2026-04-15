@@ -80,6 +80,22 @@ def _safe_int(val) -> int | None:
         return None
 
 
+def _parse_confidence(val) -> dict | None:
+    """Parse confidence_components from JSON string or dict."""
+    if val is None:
+        return None
+    if isinstance(val, dict):
+        return val
+    if isinstance(val, str):
+        try:
+            import json
+
+            return json.loads(val)
+        except (json.JSONDecodeError, TypeError):
+            return None
+    return None
+
+
 def _safe_str(val) -> str | None:
     """Convert to str or return None for NaN."""
     if val is None:
@@ -443,7 +459,9 @@ def create_insights_router() -> APIRouter:
                 "target_6m_pct_change, "
                 "target_9m_price, "
                 "target_9m_pct_change, "
-                "sentiment "
+                "sentiment, "
+                "confidence_score, "
+                "confidence_components "
                 "FROM forecast_runs "
                 f"WHERE ticker IN ({ph})",
             )
@@ -490,6 +508,12 @@ def create_insights_router() -> APIRouter:
                     target_9m_price=_safe(row.get("target_9m_price")),
                     target_9m_pct=_safe(row.get("target_9m_pct_change")),
                     sentiment=str(row.get("sentiment", "")) or None,
+                    confidence_score=_safe(
+                        row.get("confidence_score")
+                    ),
+                    confidence_components=_parse_confidence(
+                        row.get("confidence_components")
+                    ),
                     market=_market(t),
                     sector=_sector_for_ticker(
                         t,

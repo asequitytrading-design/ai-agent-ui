@@ -68,6 +68,8 @@ class TargetRow(BaseModel):
     sentiment: str | None = None
     market: str = "us"
     sector: str | None = None
+    confidence_score: float | None = None
+    confidence_components: dict | None = None
 
 
 class TargetsResponse(BaseModel):
