@@ -941,10 +941,14 @@ def create_app(
         Args:
             dry_run: If True (default), report only.
         """
+        import asyncio
+
         from stocks.retention import RetentionManager
 
         mgr = RetentionManager()
-        results = mgr.run_cleanup(dry_run=dry_run)
+        results = await asyncio.to_thread(
+            mgr.run_cleanup, dry_run=dry_run,
+        )
         return {
             "results": [
                 {
@@ -1056,10 +1060,13 @@ def create_app(
         table_ids = body.get("table_ids", [])
         if not table_ids:
             return {"results": []}
+        import asyncio
+
         from stocks.retention import RetentionManager
 
         mgr = RetentionManager()
-        results = mgr.run_cleanup_tables(
+        results = await asyncio.to_thread(
+            mgr.run_cleanup_tables,
             table_ids,
             dry_run=False,
         )
