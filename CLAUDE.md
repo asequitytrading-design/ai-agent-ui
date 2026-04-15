@@ -33,6 +33,8 @@
 ## Project Overview
 
 Fullstack agentic chat app with stock analysis and Prophet forecasting.
+Volatility-regime adaptive forecasts with confidence scoring
+(High/Medium/Low badges). FinBERT batch sentiment + XGBoost ensemble.
 Native portfolio dashboard with TradingView lightweight-charts +
 react-plotly.js. Memory-augmented chat with pgvector semantic
 retrieval. Dual payment gateways (Razorpay INR + Stripe USD).
@@ -77,7 +79,7 @@ ollama-profile embedding                    # load nomic-embed-text (memory vect
 ollama-profile status                       # check loaded model
 ```
 
-**Key dirs**: `backend/` (agents, tools, config), `backend/pipeline/` (stock data pipeline, 19 CLI commands), `backend/jobs/` (scheduler executors, pipeline chaining, gap filler), `backend/db/` (ORM models, async engine, Alembic migrations, DuckDB layer), `auth/` (JWT + RBAC + OAuth PKCE), `stocks/` (Iceberg — 12 OLAP tables), `frontend/` (SPA), `dashboard/` (legacy Dash callbacks — all pages migrated to Next.js), `hooks/` (pre-commit, pre-push).
+**Key dirs**: `backend/` (agents, tools, config), `backend/pipeline/` (stock data pipeline, 19 CLI commands), `backend/jobs/` (scheduler executors, pipeline chaining, gap filler), `backend/db/` (ORM models, async engine, Alembic migrations, DuckDB layer), `backend/tools/` (forecast: `_forecast_regime.py`, `_forecast_features.py`, `_forecast_model.py`, `_forecast_ensemble.py`; sentiment: `_sentiment_finbert.py`, `_sentiment_scorer.py`), `auth/` (JWT + RBAC + OAuth PKCE), `stocks/` (Iceberg — 14 OLAP tables), `frontend/` (SPA), `dashboard/` (legacy Dash callbacks — all pages migrated to Next.js), `hooks/` (pre-commit, pre-push).
 
 **Docker files**: `Dockerfile.backend`, `Dockerfile.frontend`,
 `Dockerfile.docs`, `docker-compose.yml`,
@@ -155,7 +157,7 @@ append-only analytics.
 | `pipelines` | `backend/db/models/pipeline.py` | Pipeline chain definitions |
 | `pipeline_steps` | `backend/db/models/pipeline.py` | Ordered steps within pipelines |
 
-### Iceberg tables (14 — append / scoped-delete)
+### Iceberg tables (14 — append / scoped-delete, 27 cols in forecast_runs)
 
 `audit_log`, `usage_history`, `company_info`, `dividends`, `ohlcv`,
 `analysis_summary`, `forecast_runs`, `forecasts`, `quarterly_results`,
@@ -306,8 +308,10 @@ Run `list_memories` to browse all topics. Key categories:
   ±15%, tapering over 30 days. Does NOT change model — post-processing.
 - **Confidence score**: 5-component weighted score (direction, MASE,
   coverage, interval, data completeness). <0.25 = rejected (hidden).
-- **Sector indices for enrichment**: 10 sector index tickers (5 India,
-  5 US) ingested via bulk-download for sector relative strength.
+- **Sector indices**: 10 sector index tickers (5 India, 5 US)
+  in pipeline for bulk-download. `sector_relative_strength`
+  dropped from Prophet (|beta| < 0.001) but available for
+  future use.
 - **FinBERT sentiment**: `sentiment_scorer=finbert` in config
   routes batch scoring to ProsusAI/finbert (CPU, zero API
   cost). LLM cascade kept for chat.
@@ -431,7 +435,7 @@ flake8 backend/ auth/ stocks/ scripts/
 cd frontend && npx eslint . --fix
 
 # Test
-python -m pytest tests/ -v        # all (~755 tests)
+python -m pytest tests/ -v        # all (~834 tests)
 cd frontend && npx vitest run     # frontend (18 tests)
 cd e2e && npm test                # E2E (~219 tests, needs live services)
 
