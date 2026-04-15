@@ -2359,7 +2359,14 @@ class StockRepository:
         )
         if df.empty:
             return None
-        return df.sort_values("run_date", ascending=False).iloc[0].to_dict()
+        sort_col = (
+            "computed_at"
+            if "computed_at" in df.columns
+            else "run_date"
+        )
+        return df.sort_values(
+            sort_col, ascending=False,
+        ).iloc[0].to_dict()
 
     def get_all_latest_forecast_runs(
         self, horizon_months: int
@@ -3592,7 +3599,15 @@ class StockRepository:
             )
             if df.empty:
                 return df
-            idx = df.groupby("ticker")["run_date"].idxmax()
+            # Use computed_at (exact timestamp) to pick
+            # the truly latest run when multiple runs
+            # share the same run_date.
+            sort_col = (
+                "computed_at"
+                if "computed_at" in df.columns
+                else "run_date"
+            )
+            idx = df.groupby("ticker")[sort_col].idxmax()
             return df.loc[idx].reset_index(drop=True)
         except Exception as exc:
             _logger.warning(
