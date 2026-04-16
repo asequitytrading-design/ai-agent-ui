@@ -38,7 +38,7 @@ export class ChatPage extends BasePage {
   }
 
   async goto(): Promise<void> {
-    await super.goto("/");
+    await super.goto("/dashboard");
   }
 
   /** Type a message and send it. */

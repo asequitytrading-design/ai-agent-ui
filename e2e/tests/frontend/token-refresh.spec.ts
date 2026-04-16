@@ -26,7 +26,7 @@ test.describe("Token refresh", () => {
       }),
     );
 
-    await page.goto("/");
+    await page.goto("/dashboard");
 
     // The app should redirect to /login when it gets a 401
     await page.waitForURL(/\/login/, { timeout: 15_000 });
@@ -37,7 +37,7 @@ test.describe("Token refresh", () => {
     page,
   }) => {
     // Just verify that with valid storageState, the page loads
-    await page.goto("/");
+    await page.goto("/dashboard");
     await expect(
       page.getByTestId("chat-message-input"),
     ).toBeVisible({ timeout: 15_000 });

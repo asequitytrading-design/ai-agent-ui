@@ -11,7 +11,7 @@ test.describe("Profile management", () => {
 
   test.beforeEach(async ({ page }) => {
     profilePage = new ProfileModalPage(page);
-    await page.goto("/");
+    await page.goto("/dashboard");
     await expect(
       page.getByTestId("chat-message-input"),
     ).toBeVisible({ timeout: 15_000 });
