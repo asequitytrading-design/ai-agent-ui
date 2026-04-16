@@ -90,6 +90,7 @@ PORTFOLIO_CONFIG = SubAgentConfig(
         "and rebalancing suggestions."
     ),
     system_prompt=_PORTFOLIO_SYSTEM_PROMPT,
+    skip_synthesis=True,
     tool_names=[
         "get_portfolio_holdings",
         "get_portfolio_performance",
