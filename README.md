@@ -18,7 +18,7 @@ A fullstack agentic chat application with stock analysis, Prophet forecasting, a
 - **Pipeline orchestration** — 4-step pipelines (Data Refresh → Analytics → Sentiment → Piotroski), force run, DAG viz
 - **Scheduler** — cron jobs with freshness gates, CV reuse (30-day TTL), catchup on restart
 - **Data Health dashboard** — 5 health cards with async fix buttons, live progress bars, parallelized DuckDB queries (~1.4s)
-- **Insights screener** — 809 tickers with sentiment, RSI, MACD, Sharpe, tag/index filters (Nifty 50/100/500, cap sizes)
+- **Insights screener** — 809 tickers with sentiment, RSI, MACD, Sharpe, tag/index filters (Nifty 50/100/500, cap sizes), CSV export on all data tabs
 - **Live market ticker** — Nifty 50 + Sensex in header, dual-source (NSE India + Yahoo Finance), 30s refresh
 - **Dual payment gateways** — Razorpay (INR) + Stripe (USD)
 - **Docker Compose** — 5 services, single command start
@@ -380,9 +380,9 @@ Progressive compression: system prompt → tool results → context window.
 ## Testing
 
 ```bash
-python -m pytest tests/ -v              # 755 backend tests
+python -m pytest tests/ -v              # 839 backend tests
 cd frontend && npx vitest run           # 18 frontend tests
-cd e2e && npm test                      # 219 E2E tests (needs live services)
+cd e2e && npm test                      # 257 E2E tests (needs live services)
 ```
 
 ---

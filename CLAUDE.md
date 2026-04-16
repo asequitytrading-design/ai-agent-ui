@@ -468,7 +468,7 @@ cd frontend && npx eslint . --fix
 # Test
 python -m pytest tests/ -v        # all (~839 tests)
 cd frontend && npx vitest run     # frontend (18 tests)
-cd e2e && npm test                # E2E (~231 tests, needs live services)
+cd e2e && npm test                # E2E (~257 tests, needs live services)
 
 # Database migrations (PostgreSQL)
 PYTHONPATH=. alembic upgrade head              # apply all migrations

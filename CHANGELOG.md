@@ -5,6 +5,33 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.8.0] — 2026-04-16: E2E Overhaul + Model Pinning (Sprint 7)
+
+### Added
+
+- **E2E test coverage overhaul** (ASETPLTFRM-308): 43 new tests across 6 new test files — dashboard widgets, Piotroski/Recommendations/Admin tabs, visual regression baselines, CSV download + pagination
+- **CSV download on Insights tables**: `downloadCsv.ts` utility, download button on 7 tabs (screener, targets, dividends, risk, sectors, quarterly, piotroski)
+- **Per-request model pinning** (ASETPLTFRM-305): round-robin locks model after first invoke per request, `pin_reset()` before each ReAct loop
+- **Non-overlapping portfolio periods** (ASETPLTFRM-307): `_period_to_days()` helper, `bfill()` fix for 4152% return bug
+- **Scheduler delete confirmation modals**: ConfirmDialog for job + pipeline deletion (replaces immediate delete / browser confirm)
+
+### Fixed
+
+- **E2E Tier 1** (ASETPLTFRM-309): ChatPage page object rewrite, dark-mode/navigation/websocket tests aligned to current sidebar + chat panel UI
+- **E2E Tier 2** (ASETPLTFRM-310): Added 5 testids to frontend modals, fixed 34 billing/payment/subscription/portfolio/profile/session tests
+- **Piotroski blank company names** (ASETPLTFRM-312): stock_master PG fallback in read path, warning logs at write time
+- **E2E CPU usage**: reduced from >1000% to ~30% — 1 worker locally, video off, maxFailures=10, Chromium flags
+- **19 visual regression baselines** regenerated for current UI
+- **Stale selectors**: admin summary card (compressions→tokens), UserModal testids, insights statement type option, billing text matching
+
+### Changed
+
+- **Playwright config**: 1 worker locally (was 3), video off locally, maxFailures=10, `--disable-gpu` Chromium flag
+- **Portfolio CRUD tests**: moved to analytics-chromium project (general user auth)
+- **Kimi K2 → Qwen3-32B**: Groq model replacement across 22 files
+
+---
+
 ## [0.7.0] — 2026-04-13: Chat Agent Hardening + Recommendations (Sprint 6)
 
 ### Added
