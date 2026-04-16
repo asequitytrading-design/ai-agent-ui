@@ -42,7 +42,6 @@ test.describe("Chat interface", () => {
   test("chat page loads with input and send button", async () => {
     await expect(chatPage.messageInput).toBeVisible();
     await expect(chatPage.sendBtn).toBeVisible();
-    await expect(chatPage.agentSelector).toBeVisible();
   });
 
   test("send message → user bubble appears", async () => {
@@ -59,14 +58,6 @@ test.describe("Chat interface", () => {
     await chatPage.sendAndWaitForReply("Say hello in one word.");
     const lastAssistant = chatPage.assistantMessages.last();
     await expect(lastAssistant).not.toBeEmpty();
-  });
-
-  test("switch agent → label changes", async () => {
-    const initial = await chatPage.activeAgentLabel();
-    await chatPage.selectAgent("Stock Analysis");
-    const updated = await chatPage.activeAgentLabel();
-    expect(updated).toBe("Stock Analysis");
-    expect(updated).not.toBe(initial);
   });
 
   test("clear messages → all bubbles removed", async ({

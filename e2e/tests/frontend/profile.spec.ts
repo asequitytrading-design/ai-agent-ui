@@ -13,7 +13,7 @@ test.describe("Profile management", () => {
     profilePage = new ProfileModalPage(page);
     await page.goto("/dashboard");
     await expect(
-      page.getByTestId("chat-message-input"),
+      page.getByRole("button", { name: "Toggle chat panel" }),
     ).toBeVisible({ timeout: 15_000 });
   });
 

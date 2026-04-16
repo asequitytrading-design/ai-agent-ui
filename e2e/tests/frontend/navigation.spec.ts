@@ -8,7 +8,7 @@ test.describe("Navigation", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/dashboard");
     await expect(
-      page.getByTestId("chat-message-input"),
+      page.getByRole("button", { name: "Toggle chat panel" }),
     ).toBeVisible({ timeout: 15_000 });
   });
 
@@ -87,7 +87,7 @@ test.describe("Navigation", () => {
 
     // Chat input should reappear
     await expect(
-      page.getByTestId("chat-message-input"),
+      page.getByRole("button", { name: "Toggle chat panel" }),
     ).toBeVisible({ timeout: 15_000 });
   });
 

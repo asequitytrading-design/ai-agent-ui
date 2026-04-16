@@ -8,7 +8,6 @@
 import { test, expect, type Page, type WebSocket } from "@playwright/test";
 
 import { ChatPage } from "../../pages/frontend/chat.page";
-import { FE } from "../../utils/selectors";
 
 /** Wait for a WebSocket connection to /ws/chat. */
 function waitForWs(page: Page, timeout = 15_000): Promise<WebSocket> {
@@ -96,8 +95,9 @@ test.describe("WebSocket lifecycle", () => {
 
       // Status badge should be visible and indicate
       // connected state
-      const badge = page.getByTestId(FE.statusBadge);
-      await expect(badge).toBeVisible({ timeout: 10_000 });
+      await expect(chatPage.statusBadge).toBeVisible({
+        timeout: 10_000,
+      });
     },
   );
 
@@ -234,8 +234,9 @@ test.describe("WebSocket lifecycle", () => {
 
       // Verify a new WS connection is established
       // by checking the status badge recovers
-      const badge = page.getByTestId(FE.statusBadge);
-      await expect(badge).toBeVisible({ timeout: 20_000 });
+      await expect(chatPage.statusBadge).toBeVisible({
+        timeout: 20_000,
+      });
     },
   );
 });

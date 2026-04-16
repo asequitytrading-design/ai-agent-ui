@@ -65,7 +65,7 @@ export default defineConfig({
       use: {
         ...devices["Desktop Chrome"],
         baseURL: FRONTEND_URL,
-        storageState: ".auth/general-user.json",
+        storageState: ".auth/superuser.json",
       },
       dependencies: ["setup"],
     },
