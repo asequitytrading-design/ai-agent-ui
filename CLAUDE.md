@@ -102,14 +102,11 @@ ollama-profile status                       # check loaded model
 | N-1 | Ollama (local) | gpt-oss:20b | Fallback (`ollama_first=False` everywhere) |
 | N | Anthropic (paid) | claude-sonnet-4-6 | Final fallback |
 
-- `FallbackLLM` (`backend/llm_fallback.py`): per-request model
-  pinning via `_pinned_model`. First invoke selects model via
-  round-robin, subsequent iterations reuse it. `pin_reset()`
-  called before each ReAct loop in `sub_agents.py`.
 - `RoundRobinPool` (`backend/token_budget.py`): per-pool atomic
   counter, `get_token_budget()` singleton seeded from Iceberg.
-  Counter advances once per REQUEST, not per iteration.
   `ROUND_ROBIN_ENABLED=false` reverts to legacy sequential.
+  Per-request model pinning via `_pinned_model` — see LLM &
+  Chat gotchas for details.
 - `OllamaManager` (`backend/ollama_manager.py`): TTL-cached health
   probe, load/unload profiles. If unavailable, cascade skips.
 - Admin API: `GET/POST /v1/admin/ollama/{status,load,unload}`
@@ -456,6 +453,7 @@ Run `list_memories` to browse all topics. Key categories:
   credentials for full dashboard access.
 - **Superuser insights**: `_get_user_tickers()` shows all
   registry for superusers, watchlist-only for general.
+
 ---
 
 ## Quick Reference
@@ -470,7 +468,7 @@ cd frontend && npx eslint . --fix
 # Test
 python -m pytest tests/ -v        # all (~839 tests)
 cd frontend && npx vitest run     # frontend (18 tests)
-cd e2e && npm test                # E2E (~219 tests, needs live services)
+cd e2e && npm test                # E2E (~231 tests, needs live services)
 
 # Database migrations (PostgreSQL)
 PYTHONPATH=. alembic upgrade head              # apply all migrations
