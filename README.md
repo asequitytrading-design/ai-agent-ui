@@ -8,7 +8,7 @@ A fullstack agentic chat application with stock analysis, Prophet forecasting, a
 
 - **6 AI sub-agents** — Portfolio, Stock Analyst, Forecaster, Research, Sentiment, Recommendation (LangGraph supervisor routing)
 - **Memory-augmented chat** — pgvector semantic memory (768-dim), per-user facts + PG-persisted conversation context (cross-session resume)
-- **Round-robin LLM pools** — 6 Groq models (~2.3M TPD), Ollama local fallback, Anthropic paid tier
+- **Round-robin LLM pools** — 5 Groq models (~2.0M TPD), Ollama local fallback, Anthropic paid tier
 - **Prophet forecasting** — volatility-regime adaptive (stable/moderate/volatile), 11 enriched regressors, log-transform + logistic growth, post-Prophet RSI/MACD/volume bias adjustment, composite confidence score with High/Medium/Low badges on Analysis + Portfolio UIs
 - **Portfolio dashboard** — TradingView charts, sector allocation, P&L trend, news sentiment, recommendations widget
 - **Smart Funnel recommendations** — 3-stage pipeline (DuckDB pre-filter → gap analysis → LLM reasoning), market-scoped, unified quota
@@ -86,7 +86,7 @@ graph TD
     end
 
     subgraph LLM["LLM Cascade"]
-        GROQ["Groq (6 models)<br/><i>round-robin pools</i>"]
+        GROQ["Groq (5 models)<br/><i>round-robin pools</i>"]
         OLL["Ollama<br/><i>local fallback</i>"]
         ANT["Anthropic<br/><i>paid fallback</i>"]
     end

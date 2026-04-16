@@ -2,6 +2,55 @@
 
 ---
 
+## 2026-04-16 — Sprint 7 Session 2: Model Pinning, Portfolio Periods & E2E Fixes
+
+### ASETPLTFRM-306 (2 SP): Kimi K2 → Qwen3-32B
+- Groq decommissioned moonshotai/kimi-k2-instruct
+- Replaced with qwen/qwen3-32b across 22 files (config, token_budget,
+  llm_fallback, frontend, tests, docs, Serena memories)
+- tool_pool_primary: 3→2 models, synthesis_pool: qwen replaces kimi
+- Combined TPD: 2.3M→2.0M
+
+### ASETPLTFRM-203 (Done): NeuralProphet Evaluated & Dropped
+- Built full POC: `_forecast_neuralprophet.py`, ensemble wiring,
+  comparison script
+- Hard blocker: pandas 3.0 incompatible (Series.view() + groupby changes)
+- All code reverted, research report saved
+
+### ASETPLTFRM-305 (5 SP): Per-Request Model Pinning
+- Round-robin counter was incrementing per `invoke()`, not per request
+  (3 different models per chat)
+- Added `_pinned_model` to `FallbackLLM`, `pin_reset()` before ReAct loop
+- Portfolio period parsing examples added to prompt
+- Synthesis table preservation directive added
+- `skip_synthesis=True` on PORTFOLIO_CONFIG — eliminated double-synthesis
+  (6→4 LLM calls)
+
+### ASETPLTFRM-307 (2 SP): Non-Overlapping Portfolio Periods
+- `_period_to_days()` helper for arbitrary NX period strings
+- Non-overlapping windows: period2=recent, period1=preceding
+- `bfill()` fix for 4152% return bug
+
+### ASETPLTFRM-246 (5 SP): E2E Route Fix
+- Updated 9 `goto("/")` → `goto("/dashboard")` across 7 files
+- 45 of 109 failing tests unblocked
+
+### ASETPLTFRM-309 (In Progress): ChatPage Rewrite
+- Scoped all locators to chat-panel, toggle-open in `goto()`
+- Removed agent selector (no longer in UI)
+- 15/26 tests passing, 11 remaining
+
+### Files Created
+- `claudedocs/research_neuralprophet_vs_prophet_2026-04-16.md`
+- `claudedocs/research_round_robin_model_affinity_2026-04-16.md`
+- `docs/superpowers/specs/2026-04-16-per-request-model-pinning-design.md`
+- `docs/superpowers/plans/2026-04-16-per-request-model-pinning.md`
+- `tests/backend/test_model_pinning.py`
+
+### Commits: ~17
+
+---
+
 ## 2026-04-15 — Sprint 7: Forecast Enrichment & Sanity Gates
 
 ### Forecast Pipeline Overhaul

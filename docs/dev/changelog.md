@@ -4,6 +4,27 @@ Session-by-session record of what was built, changed, and fixed.
 
 ---
 
+## 2026-04-16 — Model Pinning, Portfolio Periods & E2E Fixes (Sprint 7, Session 2)
+
+### Features
+- **Kimi K2 → Qwen3-32B** (ASETPLTFRM-306): Groq decommissioned kimi-k2-instruct; replaced with qwen3-32b across 22 files. tool_pool_primary 3→2 models, combined TPD 2.3M→2.0M
+- **Per-request model pinning** (ASETPLTFRM-305): Round-robin counter was incrementing per invoke(), not per request. Added `_pinned_model` to FallbackLLM with `pin_reset()` before ReAct loop. `skip_synthesis=True` on PORTFOLIO_CONFIG eliminates double-synthesis (6→4 LLM calls)
+- **Non-overlapping portfolio periods** (ASETPLTFRM-307): `_period_to_days()` helper, non-overlapping windows (period2=recent, period1=preceding), bfill() fix for 4152% return bug
+- **NeuralProphet evaluated & dropped** (ASETPLTFRM-203): Full POC built but pandas 3.0 incompatible (Series.view() + groupby changes). All code reverted, research report saved
+
+### E2E Fixes
+- **Route fix** (ASETPLTFRM-246): 9 `goto("/")` → `goto("/dashboard")` across 7 files, 45 of 109 failing tests unblocked
+- **ChatPage rewrite** (ASETPLTFRM-309, in progress): Scoped locators to chat-panel, removed agent selector, 15/26 tests passing
+
+### New Files
+- `claudedocs/research_neuralprophet_vs_prophet_2026-04-16.md`
+- `claudedocs/research_round_robin_model_affinity_2026-04-16.md`
+- `docs/superpowers/specs/2026-04-16-per-request-model-pinning-design.md`
+- `docs/superpowers/plans/2026-04-16-per-request-model-pinning.md`
+- `tests/backend/test_model_pinning.py`
+
+---
+
 ## 2026-04-15 — Forecast Enrichment & Sanity Gates (Sprint 7)
 
 ### Features
