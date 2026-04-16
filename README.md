@@ -366,7 +366,7 @@ PYTHONPATH=.:backend python -m backend.pipeline.runner <command>
 ## LLM Cascade
 
 ```
-Tool Pool:    llama-3.3-70b → kimi-k2 → qwen3-32b  (round-robin)
+Tool Pool:    llama-3.3-70b → qwen3-32b              (round-robin)
 Quality Pool: gpt-oss-120b → gpt-oss-20b             (round-robin)
 Fast Pool:    scout-17b                               (single)
 Local:        Ollama gpt-oss:20b                      (fallback)

@@ -102,7 +102,7 @@ Key flow: guardrail → router → supervisor → sub-agent (tool loop)
 Context: PG-persisted ConversationContext (cross-session resume).
 Memory: pgvector semantic retrieval (nomic-embed-text 768-dim).
 
-LLM Cascade: Groq pools (llama-3.3-70b, kimi-k2, qwen3-32b) →
+LLM Cascade: Groq pools (llama-3.3-70b, qwen3-32b) →
 (gpt-oss-120b, gpt-oss-20b) → scout-17b → Ollama → Anthropic.
 
 ---

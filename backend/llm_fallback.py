@@ -8,7 +8,7 @@ paid fallback.
 Tier order (default)::
 
     1. llama-3.3-70b-versatile   (12K TPM, parallel tools)
-    2. kimi-k2-instruct          (10K TPM, parallel tools)
+    2. qwen3-32b                 (6K TPM, 500K TPD)
     3. gpt-oss-120b              (8K TPM, quality)
     4. llama-4-scout-17b         (30K TPM, fast)
     5. claude-sonnet-4-6         (paid, unlimited)
@@ -27,7 +27,7 @@ Typical usage::
     llm = FallbackLLM(
         groq_models=[
             "llama-3.3-70b-versatile",
-            "moonshotai/kimi-k2-instruct",
+            "qwen/qwen3-32b",
             "openai/gpt-oss-120b",
             "meta-llama/llama-4-scout-17b-16e-instruct",
         ],

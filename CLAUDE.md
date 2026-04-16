@@ -98,7 +98,7 @@ ollama-profile status                       # check loaded model
 
 | Tier | Provider | Model | When |
 |------|----------|-------|------|
-| 1-6 | Groq (free) | Round-robin pools: [70b, kimi-k2, qwen3-32b] → [gpt-oss-120b, gpt-oss-20b] → scout-17b | All (chat + batch) |
+| 1-5 | Groq (free) | Round-robin pools: [70b, qwen3-32b] → [gpt-oss-120b, gpt-oss-20b] → scout-17b | All (chat + batch) |
 | N-1 | Ollama (local) | gpt-oss:20b | Fallback (`ollama_first=False` everywhere) |
 | N | Anthropic (paid) | claude-sonnet-4-6 | Final fallback |
 
@@ -377,7 +377,7 @@ Run `list_memories` to browse all topics. Key categories:
   before Anthropic fallback.
 - **`bind_tools` model_lookup**: Must rebuild after
   `FallbackLLM.bind_tools()`.
-- **Groq TPD limits**: 6 models ~2.3M combined TPD.
+- **Groq TPD limits**: 5 models ~2.0M combined TPD.
   `TokenBudget` seeds from Iceberg on restart.
 
 ### Frontend

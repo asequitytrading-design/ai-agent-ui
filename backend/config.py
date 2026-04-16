@@ -105,7 +105,6 @@ class Settings(BaseSettings):
     # exhaustion or API error.  Comma-separated in env var.
     groq_model_tiers: str = (
         "llama-3.3-70b-versatile,"
-        "moonshotai/kimi-k2-instruct,"
         "qwen/qwen3-32b,"
         "openai/gpt-oss-120b,"
         "openai/gpt-oss-20b,"
@@ -117,13 +116,13 @@ class Settings(BaseSettings):
     synthesis_model_tiers: str = (
         "openai/gpt-oss-120b,"
         "openai/gpt-oss-20b,"
-        "moonshotai/kimi-k2-instruct"
+        "qwen/qwen3-32b"
     )
 
     # Test tiers — free models only, zero paid exposure.
     test_model_tiers: str = (
         "llama-3.3-70b-versatile,"
-        "moonshotai/kimi-k2-instruct,"
+        "qwen/qwen3-32b,"
         "meta-llama/llama-4-scout-17b-16e-instruct"
     )
 
@@ -135,7 +134,6 @@ class Settings(BaseSettings):
 
     tool_pool_primary: str = (
         "llama-3.3-70b-versatile,"
-        "moonshotai/kimi-k2-instruct,"
         "qwen/qwen3-32b"
     )
     tool_pool_secondary: str = (
@@ -149,7 +147,7 @@ class Settings(BaseSettings):
     synthesis_pool_primary: str = (
         "openai/gpt-oss-120b,"
         "openai/gpt-oss-20b,"
-        "moonshotai/kimi-k2-instruct"
+        "qwen/qwen3-32b"
     )
     synthesis_pool_secondary: str = (
         "meta-llama/"
