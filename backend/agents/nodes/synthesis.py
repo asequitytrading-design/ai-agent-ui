@@ -67,7 +67,12 @@ _SYNTHESIS_PROMPT = (
     "FORMAT: Use Markdown — **bold** for key figures, "
     "bullet points for lists, tables for comparisons, "
     "### headings for sections. Keep paragraphs short "
-    "(2-3 sentences max)."
+    "(2-3 sentences max).\n\n"
+    "TABLE PRESERVATION: When the agent response "
+    "contains markdown tables, comparison grids, or "
+    "structured data — preserve them exactly. Do not "
+    "collapse tables into prose. Add narrative context "
+    "around tables but never remove or flatten them."
 )
 
 # Minimum response length to skip synthesis.
