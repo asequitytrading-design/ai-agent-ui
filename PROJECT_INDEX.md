@@ -1,7 +1,7 @@
 # Project Index: AI Agent UI
 
 > AI-agent-optimised codebase map. For human onboarding, see `docs/`.
-> Last refreshed: 2026-04-15 (Sprint 7 — Forecast Enrichment + FinBERT Sentiment + XGBoost Features)
+> Last refreshed: 2026-04-16 (Sprint 7 — E2E Overhaul + CSV Download + Model Pinning)
 
 ---
 
@@ -49,10 +49,17 @@ ai-agent-ui/
 │   ├── components/        # 30+ components (admin, charts, insights, widgets)
 │   ├── hooks/             # 19 SWR data hooks
 │   ├── providers/         # Chat, Layout context providers
-│   └── lib/               # Types, config, apiFetch
-├── e2e/                   # 54 Playwright specs
-├── tests/                 # 96 pytest files (~755+ tests)
-├── scripts/               # 28 data/migration/seed scripts + poc_forecast_comparison.py
+│   └── lib/               # Types, config, apiFetch, downloadCsv
+├── e2e/                   # 51 Playwright specs (~257 tests)
+│   ├── tests/frontend/    # 30 spec files (auth, chat, analytics, admin, billing)
+│   ├── tests/dashboard/   # 10 spec files (legacy Dash)
+│   ├── tests/errors/      # 2 spec files
+│   ├── tests/performance/ # 1 spec file (Lighthouse)
+│   ├── pages/             # 17 page objects
+│   ├── fixtures/          # auth + portfolio fixtures
+│   └── utils/             # selectors, wait helpers, API helpers
+├── tests/                 # 97 pytest files (~839 tests)
+├── scripts/               # 28 data/migration/seed scripts
 ├── docs/                  # 56 MkDocs Material pages (15 dirs)
 └── docker-compose.yml     # 5 services (backend, frontend, PG, Redis, docs)
 ```
@@ -122,7 +129,9 @@ LLM Cascade: Groq pools (llama-3.3-70b, qwen3-32b) →
 | `stocks/repository.py` | 1 (5.2K lines) | Iceberg CRUD + DuckDB reads + PG bridge |
 | `frontend/hooks/` | 19 | SWR data fetching for all pages |
 | `frontend/components/` | 30+ | Admin, charts, insights, widgets, modals |
-| `scripts/poc_forecast_comparison.py` | 1 | POC test harness: baseline vs enriched forecast comparison |
+| `frontend/lib/downloadCsv.ts` | 1 | CSV export utility (escape, blob, browser download) |
+| `e2e/utils/selectors.ts` | 1 | Centralised data-testid constants (217 lines) |
+| `e2e/playwright.config.ts` | 1 | 6 projects, 1 worker local / 2 CI, video off local |
 
 ---
 
@@ -163,7 +172,7 @@ pipeline pickup (scheduler refreshes them daily).
 
 ## File Counts
 
-Python: 374 | TypeScript/TSX: 98 | Tests: 96+54 | Docs: 56 pages | Scripts: 28+1 POC
+Python: 374 | TypeScript/TSX: 98 | Backend tests: 97 files (~839) | E2E: 51 specs (~257) | Frontend: 18 vitest | Docs: 56 pages | Scripts: 28
 
 ---
 
