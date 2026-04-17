@@ -79,7 +79,7 @@ ollama-profile embedding                    # load nomic-embed-text (memory vect
 ollama-profile status                       # check loaded model
 ```
 
-**Key dirs**: `backend/` (agents, tools, config), `backend/pipeline/` (stock data pipeline, 19 CLI commands), `backend/jobs/` (scheduler executors, pipeline chaining, gap filler), `backend/db/` (ORM models, async engine, Alembic migrations, DuckDB layer), `backend/tools/` (forecast: `_forecast_regime.py`, `_forecast_features.py`, `_forecast_model.py`, `_forecast_ensemble.py`; sentiment: `_sentiment_finbert.py`, `_sentiment_scorer.py`), `auth/` (JWT + RBAC + OAuth PKCE), `stocks/` (Iceberg — 14 OLAP tables), `frontend/` (SPA), `e2e/` (Playwright — 257 tests, 51 specs), `hooks/` (pre-commit, pre-push).
+**Key dirs**: `backend/` (agents, tools, config), `backend/pipeline/` (stock data pipeline, 19 CLI commands), `backend/jobs/` (scheduler executors, pipeline chaining, bulk OHLCV), `backend/db/` (ORM models, async engine, Alembic migrations, DuckDB layer), `backend/insights/` (ScreenQL parser, 36-field catalog), `backend/maintenance/` (backup, compaction, retention), `backend/tools/` (forecast, sentiment, analysis), `auth/` (JWT + RBAC + OAuth PKCE), `stocks/` (Iceberg — 12 active OLAP tables), `frontend/` (SPA), `e2e/` (Playwright), `hooks/` (pre-commit, pre-push).
 
 **Docker files**: `Dockerfile.backend`, `Dockerfile.frontend`,
 `Dockerfile.docs`, `docker-compose.yml`,
@@ -159,16 +159,15 @@ append-only analytics.
 | `pipelines` | `backend/db/models/pipeline.py` | Pipeline chain definitions |
 | `pipeline_steps` | `backend/db/models/pipeline.py` | Ordered steps within pipelines |
 
-### Iceberg tables (14 — append / scoped-delete, 27 cols in forecast_runs)
+### Iceberg tables (12 active — append / scoped-delete)
 
-`audit_log`, `usage_history`, `company_info`, `dividends`, `ohlcv`,
-`analysis_summary`, `forecast_runs`, `forecasts`, `quarterly_results`,
-`llm_pricing`, `llm_usage`, `portfolio_transactions`,
-`piotroski_scores`, `sentiment_scores` (stocks ns)
-Note: `technical_indicators` exists but is empty/unused — indicators
-computed on-the-fly from OHLCV in `_analysis_shared.py`.
-Note: `scheduler_runs` and `scheduled_jobs` migrated to PG
-(ASETPLTFRM-301).
+`company_info`, `dividends`, `ohlcv` (1.5M rows),
+`analysis_summary`, `forecast_runs` (27 cols), `forecasts`,
+`quarterly_results`, `piotroski_scores`, `sentiment_scores`,
+`llm_pricing`, `llm_usage`, `portfolio_transactions`.
+Dropped: `scheduler_runs` (25GB→PG), `scheduled_jobs` (→PG),
+`technical_indicators` (unused, computed on-the-fly).
+Maintenance: `backend/maintenance/` (backup, compaction, retention).
 
 ### Key components
 
@@ -476,7 +475,7 @@ Run `list_memories` to browse all topics. Key categories:
 
 - **ScreenQL multi-line AND**: Newlines are implicit AND.
   If a line starts with `AND`/`OR`, don't add another AND.
-  Parser handles this via `_bulk_fetch_ohlcv()` smart join.
+  Parser handles this in `tokenize()` smart newline join.
 - **ScreenQL RSI field**: `rsi_14` is NOT a standalone
   column in `analysis_summary`. Extracted via
   `TRY_CAST(regexp_extract(rsi_signal, 'RSI:\\s*([\\d.]+)',
