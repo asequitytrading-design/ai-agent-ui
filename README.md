@@ -18,7 +18,12 @@ A fullstack agentic chat application with stock analysis, Prophet forecasting, a
 - **Pipeline orchestration** — 4-step pipelines (Data Refresh → Analytics → Sentiment → Piotroski), force run, DAG viz
 - **Scheduler** — cron jobs with freshness gates, CV reuse (30-day TTL), catchup on restart
 - **Data Health dashboard** — 5 health cards with async fix buttons, live progress bars, parallelized DuckDB queries (~1.4s)
+- **ScreenQL universal screener** — text-based stock query language (36 fields, 6 Iceberg tables), recursive descent parser, DuckDB SQL, 6 presets, autocomplete, dynamic columns, currency symbols
 - **Insights screener** — 809 tickers with sentiment, RSI, MACD, Sharpe, tag/index filters (Nifty 50/100/500, cap sizes), CSV export on all data tabs
+- **CSV download** — centralized utility on 10 tabs (Insights + Admin), respects current filters
+- **Iceberg maintenance** — backup (rsync + catalog.db), compaction, 11yr retention, post-pipeline snapshot expiry
+- **Backup Health panel** — readonly admin dashboard with health badge, folder browser, Redis-cached
+- **Bulk OHLCV download** — yf.download() batches of 100 (99.8% success, 58s for 804 tickers)
 - **Live market ticker** — Nifty 50 + Sensex in header, dual-source (NSE India + Yahoo Finance), 30s refresh
 - **Dual payment gateways** — Razorpay (INR) + Stripe (USD)
 - **Docker Compose** — 5 services, single command start

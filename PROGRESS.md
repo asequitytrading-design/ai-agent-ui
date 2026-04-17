@@ -2,6 +2,59 @@
 
 ---
 
+## 2026-04-16/17 — Sprint 7 Session 4: ScreenQL, CSV, Iceberg Maintenance, Bulk OHLCV
+
+### ASETPLTFRM-312 (3 SP, Done): Piotroski Fix + Delete Modals
+- stock_master PG fallback for blank company names (Piotroski + ScreenQL)
+- ConfirmDialog on scheduler delete buttons (jobs + pipelines)
+
+### ASETPLTFRM-313 (5 SP, Done): CSV Download + Transactions Refactor
+- `frontend/lib/downloadCsv.ts` — centralized CSV utility
+- InsightsTable `onDownload` prop, CSV button in footer
+- 10 tabs: 7 Insights + Users + Audit Log + Transactions
+- Transactions: custom HTML table → InsightsTable with pagination + sorting
+
+### ASETPLTFRM-314 (13 SP, Done): ScreenQL Universal Screener
+- `backend/insights/screen_parser.py` — tokenizer, recursive descent parser, SQL generator
+- 36-field catalog across 6 Iceberg tables, 7 categories
+- CTE-based DuckDB SQL with parameterized queries, dynamic JOINs
+- `query_iceberg_multi()` for cross-table Iceberg queries
+- 6 preset templates, autocomplete, dynamic columns, currency symbols (₹/$)
+- RSI extracted via regexp from rsi_signal text
+- Design spec: `docs/superpowers/specs/2026-04-16-screenql-universal-screener-design.md`
+
+### ASETPLTFRM-315 (8 SP, In Progress): Iceberg Maintenance
+- `backend/maintenance/backup.py` — rsync + catalog.db + 2-rotation
+- `backend/maintenance/iceberg_maintenance.py` — compact, expire, purge, drop_dead_tables
+- OHLCV freshness gate: `>= today` (was `>= yesterday`)
+- OHLCV upsert: scoped delete + re-append for today's rows
+- asyncio.to_thread for fix-ohlcv (was blocking event loop)
+- Warehouse cleanup: 41 GB → 14 GB (dropped 3 dead tables: 27 GB)
+- Compacted 7 active tables (company_info: 4055→1 file for 830 rows)
+- CRITICAL: never delete Iceberg metadata/parquet files directly
+
+### ASETPLTFRM-316 (5 SP, Done): Backup Health Panel
+- 3 API endpoints: /admin/backups, /admin/backups/health, /admin/backups/{date}/contents
+- BackupHealthPanel.tsx on Admin Maintenance tab
+- Redis caching: data-health 60s, backup endpoints 120s
+
+### ASETPLTFRM-317 (5 SP, Done): Bulk OHLCV Download
+- `_bulk_fetch_ohlcv()` — yf.download() batches of 100
+- 804 per-ticker → 9 batch calls, 44% → 0.2% failure rate, 280s → 58s
+- Auto-retry failed tickers in batches of 50
+
+### Bug Fixes
+- Portfolio allocation: ETF sector detection (BEES/ETF → "ETF" label)
+- ForecastTarget: nullable float fields (fixes 500 for new users)
+- KpiTooltip: viewport clamping (right-edge clip fix)
+
+### Stats
+- 6 Jira tickets, 39 story points (34 done, 5 in progress)
+- 4 new backend modules, ~3,000 lines added
+- 16 files modified across frontend + backend
+
+---
+
 ## 2026-04-16 — Sprint 7 Session 3: E2E Test Coverage Overhaul
 
 ### ASETPLTFRM-308 (8 SP, Done): E2E Coverage Overhaul (Parent)

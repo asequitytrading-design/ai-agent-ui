@@ -5,6 +5,38 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.9.0] — 2026-04-17: ScreenQL + Iceberg Maintenance + Bulk OHLCV (Sprint 7)
+
+### Added
+
+- **ScreenQL universal screener** (ASETPLTFRM-314): text-based stock query language with 36-field catalog across 6 Iceberg tables, recursive descent parser, CTE-based DuckDB SQL, 6 preset templates, autocomplete, dynamic columns, currency symbols, market filtering
+- **Centralized CSV download** (ASETPLTFRM-313): `downloadCsv.ts` utility wired into 10 tabs (7 Insights + Users + Audit Log + Transactions)
+- **Iceberg maintenance system** (ASETPLTFRM-315): backup (rsync + catalog.db + 2-rotation), compaction (overwrite), retention (11yr purge), orphan cleanup, post-pipeline snapshot expiry
+- **Backup Health panel** (ASETPLTFRM-316): readonly admin panel with health badge, backup list, expandable folder browser, Redis-cached API endpoints
+- **Bulk OHLCV download** (ASETPLTFRM-317): `yf.download()` batches of 100 replacing per-ticker `.history()` — 804→9 HTTP calls, 44%→0.2% failures, 280s→58s
+- **DuckDB `query_iceberg_multi()`**: cross-table JOIN support for ScreenQL queries
+- **Scheduler delete confirmation modals** (ASETPLTFRM-312): ConfirmDialog for jobs and pipelines
+
+### Fixed
+
+- **Piotroski blank company names**: stock_master PG fallback in Piotroski + ScreenQL endpoints
+- **OHLCV freshness gate**: `>= today` (was `>= yesterday`) — evening runs now fetch closing data
+- **OHLCV upsert**: scoped delete + re-append for today's rows — stale intraday candles corrected
+- **Event loop blocking**: `asyncio.to_thread()` for fix-ohlcv backfill_nan + backfill_missing
+- **Portfolio allocation ETF sector**: detects BEES/ETF pattern → "ETF" label (was NaN crash)
+- **ForecastTarget nullable fields**: `float | None` for target_price/pct_change/bounds (fixes 500 for new users)
+- **KpiTooltip clipping**: viewport clamping prevents right-edge overflow
+- **Data health + backup health slow loads**: Redis caching (60s/120s)
+
+### Changed
+
+- **Transactions tab**: refactored from custom HTML table to InsightsTable with pagination + sorting
+- **Iceberg warehouse**: 41 GB → 14 GB — dropped 3 dead tables (scheduler_runs 25GB, technical_indicators 2.3GB, scheduled_jobs)
+- **Compacted 7 tables**: company_info 4055→1 file (830 rows!), sentiment_scores 6673→809 files
+- **CLAUDE.md**: Hard Rule #20 (never delete Iceberg metadata), Iceberg Maintenance gotchas section
+
+---
+
 ## [0.8.0] — 2026-04-16: E2E Overhaul + Model Pinning (Sprint 7)
 
 ### Added
