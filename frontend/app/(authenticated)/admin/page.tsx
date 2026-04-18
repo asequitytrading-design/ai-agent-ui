@@ -38,6 +38,7 @@ import { RecommendationsTab } from "@/components/admin/RecommendationsTab";
 import { DataHealthPanel } from "@/components/admin/DataHealthPanel";
 import { BackupHealthPanel } from "@/components/admin/BackupHealthPanel";
 import { MyAccountTab } from "@/components/admin/MyAccountTab";
+import { MyLLMUsageTab } from "@/components/admin/MyLLMUsageTab";
 import { apiFetch } from "@/lib/apiFetch";
 import { API_URL } from "@/lib/config";
 import {
@@ -2155,9 +2156,7 @@ function AdminPageInner() {
             title="My Audit Log"
           />
         )}
-        {tab === "my_llm" && (
-          <ObservabilityTab scope="self" />
-        )}
+        {tab === "my_llm" && <MyLLMUsageTab />}
       </div>
     </div>
   );

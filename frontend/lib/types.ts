@@ -473,8 +473,60 @@ export interface CascadeStats {
 
 export interface MetricsResponse {
   timestamp: number;
+  scope?: "self" | "all";
+  // scope="all" → cascade rate bars ({tpm, rpm, tpd, rpd}).
+  // scope="self" → per-user usage rollup (see UserModelUsage).
+  // Callers branch on ``scope`` before reading fields.
   models: Record<string, ModelBudget>;
   cascade_stats: CascadeStats;
+  // Present only when scope === "self".
+  quota?: BYOQuota;
+  providers?: BYOProviderStatus[];
+  daily_trend?: DailyTrendPoint[];
+}
+
+export interface UserModelUsage {
+  requests: number;
+  requests_platform: number;
+  requests_user: number;
+  cost: number;
+  provider: string;
+  input_tokens: number;
+  output_tokens: number;
+  last_used_at: string | null;
+}
+
+export interface BYOQuota {
+  free_allowance_total: number;
+  free_allowance_used: number;
+  byo_monthly_limit: number;
+  byo_month_used: number;
+}
+
+export interface BYOProviderStatus {
+  provider: "groq" | "anthropic" | "ollama";
+  configured: boolean;
+  label?: string | null;
+  masked_key?: string | null;
+  last_used_at?: string | null;
+  request_count_30d?: number;
+  native?: boolean;
+}
+
+export interface DailyTrendPoint {
+  date: string;
+  requests: number;
+  cost: number;
+}
+
+export interface UserLLMKey {
+  provider: "groq" | "anthropic";
+  label: string | null;
+  masked_key: string;
+  last_used_at: string | null;
+  request_count_30d: number;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface TierHealth {

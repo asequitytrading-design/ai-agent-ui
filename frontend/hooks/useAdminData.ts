@@ -21,6 +21,7 @@ import type {
   AuditEvent,
   MetricsResponse,
   TierHealthResponse,
+  UserLLMKey,
 } from "@/lib/types";
 
 async function fetcher<T>(url: string): Promise<T> {
@@ -969,5 +970,121 @@ export function useAdminRecommendations():
     deleteRecommendationRun,
     forceRefresh,
     promoteRun,
+  };
+}
+
+// ---------------------------------------------------------------
+// BYO provider keys (any authenticated user)
+// ---------------------------------------------------------------
+
+export interface UseUserLLMKeysResult {
+  keys: UserLLMKey[];
+  loading: boolean;
+  error: string | null;
+  refresh: () => void;
+  saveKey: (
+    provider: "groq" | "anthropic",
+    key: string,
+    label?: string | null,
+  ) => Promise<void>;
+  deleteKey: (
+    provider: "groq" | "anthropic",
+  ) => Promise<void>;
+  updateLimit: (
+    monthlyLimit: number,
+  ) => Promise<void>;
+}
+
+export function useUserLLMKeys(): UseUserLLMKeysResult {
+  const { data, error, isLoading, mutate } = useSWR<
+    UserLLMKey[]
+  >(
+    `${API_URL}/users/me/llm-keys`,
+    fetcher,
+    { revalidateOnFocus: false, dedupingInterval: 30_000 },
+  );
+
+  const refresh = useCallback(() => {
+    mutate();
+  }, [mutate]);
+
+  const saveKey = useCallback(
+    async (
+      provider: "groq" | "anthropic",
+      key: string,
+      label?: string | null,
+    ) => {
+      const r = await apiFetch(
+        `${API_URL}/users/me/llm-keys/${provider}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            key,
+            label: label || null,
+          }),
+        },
+      );
+      if (!r.ok) {
+        let detail = `HTTP ${r.status}`;
+        try {
+          const body = await r.json();
+          detail =
+            (body as { detail?: string })?.detail || detail;
+        } catch {
+          /* ignore */
+        }
+        throw new Error(detail);
+      }
+      mutate();
+    },
+    [mutate],
+  );
+
+  const deleteKey = useCallback(
+    async (provider: "groq" | "anthropic") => {
+      const r = await apiFetch(
+        `${API_URL}/users/me/llm-keys/${provider}`,
+        { method: "DELETE" },
+      );
+      // 204 = deleted, 404 = already gone (stale UI);
+      // both resolve to the same client-side state.
+      if (!r.ok && r.status !== 204 && r.status !== 404) {
+        throw new Error(`HTTP ${r.status}`);
+      }
+      mutate();
+    },
+    [mutate],
+  );
+
+  const updateLimit = useCallback(
+    async (monthlyLimit: number) => {
+      const r = await apiFetch(
+        `${API_URL}/users/me/byo-settings`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            monthly_limit: monthlyLimit,
+          }),
+        },
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    },
+    [],
+  );
+
+  return {
+    keys: data ?? [],
+    loading: isLoading,
+    error: error
+      ? error instanceof Error
+        ? error.message
+        : "Failed to load keys"
+      : null,
+    refresh,
+    saveKey,
+    deleteKey,
+    updateLimit,
   };
 }
