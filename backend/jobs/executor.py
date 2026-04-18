@@ -976,19 +976,58 @@ def execute_run_sentiment(
         t for t in all_yf if t not in sentiment_fresh
     ]
 
-    learning = [
+    learning_full = [
         t for t in remaining
         if ticker_history_days.get(t, 0) < 10
     ]
     hot = [
         t for t in remaining
-        if t in hot_tickers and t not in learning
+        if t in hot_tickers and t not in learning_full
     ]
     cold = [
         t for t in remaining
         if t not in hot_tickers
-        and t not in learning
+        and t not in learning_full
     ]
+
+    # Cap learning at top-N by market cap. The rest
+    # slide into the market-fallback bulk insert at
+    # Step 5.  Keeps per-run HTTP traffic bounded and
+    # lets the "learning" set self-heal across ~N runs
+    # instead of stampeding yfinance / Yahoo RSS in a
+    # single shot.
+    _LEARNING_CAP = 50
+    learning_cut = []
+    if len(learning_full) > _LEARNING_CAP:
+        try:
+            mcap_by_yf: dict[str, float] = {}
+            for t, row in registry.items():
+                yf_t = yf_map.get(t, t)
+                mc = row.get("market_cap") or 0
+                try:
+                    mcap_by_yf[yf_t] = max(
+                        mcap_by_yf.get(yf_t, 0.0),
+                        float(mc),
+                    )
+                except (TypeError, ValueError):
+                    pass
+            learning_sorted = sorted(
+                learning_full,
+                key=lambda t: mcap_by_yf.get(t, 0.0),
+                reverse=True,
+            )
+            learning = learning_sorted[:_LEARNING_CAP]
+            learning_cut = learning_sorted[
+                _LEARNING_CAP:
+            ]
+        except Exception:
+            _logger.exception(
+                "[batch-sentiment] learning cap "
+                "fallback — keeping full set",
+            )
+            learning = learning_full
+    else:
+        learning = learning_full
 
     # Trickle: 15% of cold tickers sampled randomly.
     trickle_size = max(1, int(len(cold) * 0.15))
@@ -999,11 +1038,14 @@ def execute_run_sentiment(
 
     _logger.info(
         "[batch-sentiment] Classification: "
-        "%d fresh (skip), %d hot, %d learning, "
-        "%d cold (%d trickle + %d fallback)",
+        "%d fresh (skip), %d hot, %d learning "
+        "(kept=%d cut=%d), %d cold "
+        "(%d trickle + %d fallback)",
         len(to_skip),
         len(hot),
+        len(learning_full),
         len(learning),
+        len(learning_cut),
         len(cold),
         len(trickle),
         len(cold_skip),
@@ -1025,7 +1067,7 @@ def execute_run_sentiment(
         ) as pool:
             future_map = {
                 pool.submit(
-                    refresh_sentiment, t,
+                    refresh_sentiment, t, force,
                 ): t
                 for t in check_tickers
             }
@@ -1076,6 +1118,20 @@ def execute_run_sentiment(
     # nothing and refresh_sentiment didn't insert.
     if not cancelled:
         try:
+            # CRITICAL: invalidate the DuckDB metadata
+            # cache before re-querying. The thread pool
+            # inserted via PyIceberg; without this, the
+            # "scored_today" query returns a stale
+            # snapshot and every ticker looks unscored,
+            # causing ``done`` to double-count as the
+            # fallback insert re-covers them.
+            from backend.db.duckdb_engine import (
+                invalidate_metadata,
+            )
+
+            invalidate_metadata(
+                "stocks.sentiment_scores",
+            )
             scored_df = query_iceberg_df(
                 "stocks.sentiment_scores",
                 "SELECT DISTINCT ticker "
@@ -1935,59 +1991,47 @@ def execute_run_recommendations(
 ) -> None:
     """Generate LLM portfolio recommendations.
 
-    Monthly job — runs the 3-stage smart funnel for
-    every user with portfolio transactions.  Skips
-    users whose latest run for this scope is <30 days
-    old (unless ``force=True``).
+    Monthly idempotent job.  Delegates to the shared
+    ``get_or_create_monthly_run`` consolidator, so a
+    user who already has a run for this scope in the
+    current IST calendar month is short-circuited
+    (cache hit) without re-running stages 1-3.
 
-    1. Stage 1: DuckDB pre-filter (shared, cached 1h).
-    2. Stage 2: Per-user gap analysis.
-    3. Stage 3: LLM reasoning pass.
-    4. Write recommendation_run + recs to PG.
-    5. Expire prior active recs for user.
+    When *scope* is ``"all"`` the job expands into two
+    passes (``india`` then ``us``) per user.
+
+    The ``force`` kwarg is preserved for backward
+    compatibility but has no effect under the monthly
+    rule — use the admin force-refresh endpoint if a
+    user needs a test run mid-month.
 
     Errors per user are caught and logged; the batch
-    continues to the next user.
+    continues.
     """
-    import asyncio
-    import uuid
-    from datetime import date, timedelta
-
-    from backend.db.engine import get_session_factory
-    from backend.db.pg_stocks import (
-        expire_old_recommendations,
-        get_latest_recommendation_run,
-        insert_recommendation_run,
-        insert_recommendations,
-    )
     from backend.jobs.recommendation_engine import (
-        stage1_prefilter,
-        stage2_gap_analysis,
-        stage3_llm_reasoning,
+        get_or_create_monthly_run,
     )
     from db.duckdb_engine import query_iceberg_df
 
     _run_start = datetime.now(timezone.utc)
-    today = date.today()
 
-    # ── Stage 1: shared pre-filter (cached) ───────────
-    _logger.info("[recommendations] Stage 1: pre-filter")
-    candidates_df = stage1_prefilter(scope=scope)
-    if candidates_df.empty:
-        _logger.warning(
-            "[recommendations] No candidates after "
-            "pre-filter — aborting",
-        )
-        _finalize_run(
-            repo, run_id, 0, 0, [], False,
-            started_at=_run_start,
-        )
-        return
-
-    _logger.info(
-        "[recommendations] Stage 1: %d candidates",
-        len(candidates_df),
+    scopes = (
+        ["india", "us"] if scope == "all"
+        else [scope]
     )
+    for s in scopes:
+        if s not in ("india", "us"):
+            _logger.error(
+                "[recommendations] Invalid scope "
+                "'%s' — aborting",
+                s,
+            )
+            _finalize_run(
+                repo, run_id, 0, 0,
+                [f"invalid scope: {s}"], False,
+                started_at=_run_start,
+            )
+            return
 
     # ── Discover users with portfolios ────────────────
     try:
@@ -2014,10 +2058,11 @@ def execute_run_recommendations(
         )
         return
 
-    total = len(user_ids)
+    total = len(user_ids) * len(scopes)
     _logger.info(
-        "[recommendations] %d users with portfolios",
-        total,
+        "[recommendations] %d users x %d scope(s) "
+        "= %d passes",
+        len(user_ids), len(scopes), total,
     )
     repo.update_scheduler_run(
         run_id,
@@ -2025,203 +2070,60 @@ def execute_run_recommendations(
     )
 
     done = 0
+    generated = 0
+    cached = 0
+    skipped = 0
     errors: list[str] = []
     cancelled = False
-    session_factory = get_session_factory()
 
     for uid in user_ids:
         if cancel_event and cancel_event.is_set():
             cancelled = True
             break
 
-        try:
-            # ── Quota gate (5 runs / 30 days) ─────
-            if not force:
-                from jobs.recommendation_engine import (
-                    check_recommendation_quota,
+        for s in scopes:
+            if cancel_event and cancel_event.is_set():
+                cancelled = True
+                break
+            try:
+                result = get_or_create_monthly_run(
+                    uid, s,
+                    run_type="scheduled",
+                    repo=repo,
                 )
-
-                quota = check_recommendation_quota(
-                    uid, scope=scope,
-                )
-                if not quota.get("allowed"):
+                if not result.get("run_id"):
+                    skipped += 1
                     _logger.info(
-                        "[recommendations] User %s: "
-                        "quota reached (%s) — skip",
-                        uid[:8],
-                        quota.get("reason", ""),
+                        "[recommendations] %s/%s: "
+                        "skipped (%s)",
+                        uid[:8], s,
+                        result.get(
+                            "status_note", "unknown",
+                        ),
                     )
-                    done += 1
-                    repo.update_scheduler_run(
-                        run_id,
-                        {"tickers_done": done},
-                    )
-                    continue
-
-            # Stage 2: per-user gap analysis.
-            stage2 = stage2_gap_analysis(
-                uid, candidates_df, repo,
-                scope=scope,
-            )
-            portfolio = stage2.get(
-                "portfolio_summary", {},
-            )
-            if not portfolio.get("total_holdings"):
-                _logger.info(
-                    "[recommendations] User %s: "
-                    "empty portfolio, skip",
-                    uid,
+                elif result.get("was_cached"):
+                    cached += 1
+                else:
+                    generated += 1
+            except Exception as exc:
+                _logger.warning(
+                    "[recommendations] %s/%s "
+                    "failed: %s",
+                    uid[:8], s, exc,
                 )
-                done += 1
-                continue
+                errors.append(f"{uid}/{s}: {exc}")
 
-            # Stage 3: LLM reasoning.
-            stage3 = stage3_llm_reasoning(stage2)
-            recs = stage3.get(
-                "recommendations", [],
+            done += 1
+            repo.update_scheduler_run(
+                run_id,
+                {"tickers_done": done},
             )
 
-            # Write to PG via async NullPool session.
-            rec_run_id = str(uuid.uuid4())
-            run_data = {
-                "run_id": rec_run_id,
-                "user_id": uid,
-                "run_date": today,
-                "run_type": "scheduled",
-                "scope": scope,
-                "portfolio_snapshot": portfolio,
-                "health_score": stage3.get(
-                    "health_score", 0,
-                ),
-                "health_label": stage3.get(
-                    "health_label", "critical",
-                ),
-                "health_assessment": stage3.get(
-                    "portfolio_health_assessment",
-                ),
-                "candidates_scanned": len(
-                    candidates_df,
-                ),
-                "candidates_passed": len(
-                    stage2.get("candidates", []),
-                ),
-                "llm_model": stage3.get("llm_model"),
-                "llm_tokens_used": stage3.get(
-                    "llm_tokens_used", 0,
-                ),
-            }
-
-            from backend.db.models.recommendation import (
-                Recommendation as RecModel,
-                RecommendationRun as RunModel,
-            )
-            from sqlalchemy import (
-                select as sa_select,
-                update as sa_upd,
-            )
-            from sqlalchemy.ext.asyncio import (
-                AsyncSession,
-                async_sessionmaker,
-                create_async_engine,
-            )
-            from sqlalchemy.pool import NullPool
-            from config import get_settings
-
-            async def _persist_recs():
-                eng = create_async_engine(
-                    get_settings().database_url,
-                    poolclass=NullPool,
-                )
-                factory = async_sessionmaker(
-                    eng, class_=AsyncSession,
-                )
-                # Build candidate lookup for enrichment
-                cand_map = {
-                    c["ticker"]: c
-                    for c in stage2.get(
-                        "candidates", [],
-                    )
-                }
-                async with factory() as s:
-                    s.add(RunModel(**run_data))
-                    for r in recs:
-                        r["run_id"] = rec_run_id
-                        r["id"] = str(uuid.uuid4())
-                        r.setdefault(
-                            "data_signals", {},
-                        )
-                        r.setdefault("status", "active")
-                        # Enrich with price data
-                        ticker = r.get("ticker")
-                        c = cand_map.get(ticker, {})
-                        if not r.get("price_at_rec"):
-                            r["price_at_rec"] = c.get(
-                                "current_price",
-                            )
-                        if not r.get("target_price"):
-                            r["target_price"] = c.get(
-                                "target_price",
-                            )
-                        if not r.get(
-                            "expected_return_pct",
-                        ):
-                            r["expected_return_pct"] = (
-                                c.get("forecast_3m_pct")
-                            )
-                        s.add(RecModel(**r))
-                    await s.commit()
-
-                # Expire old recs
-                async with factory() as s:
-                    old_q = await s.execute(
-                        sa_select(RunModel.run_id)
-                        .where(
-                            RunModel.user_id == uid,
-                            RunModel.run_id
-                            != rec_run_id,
-                        )
-                    )
-                    old_ids = [
-                        r[0] for r in old_q.all()
-                    ]
-                    if old_ids:
-                        await s.execute(
-                            sa_upd(RecModel)
-                            .where(
-                                RecModel.run_id.in_(
-                                    old_ids,
-                                ),
-                                RecModel.status
-                                == "active",
-                            )
-                            .values(status="expired")
-                        )
-                        await s.commit()
-                await eng.dispose()
-
-            asyncio.run(_persist_recs())
-
-            _logger.info(
-                "[recommendations] User %s: "
-                "%d recs generated",
-                uid,
-                len(recs),
-            )
-        except Exception as exc:
-            _logger.warning(
-                "[recommendations] User %s "
-                "failed: %s",
-                uid,
-                exc,
-            )
-            errors.append(f"{uid}: {exc}")
-
-        done += 1
-        repo.update_scheduler_run(
-            run_id,
-            {"tickers_done": done},
-        )
-
+    _logger.info(
+        "[recommendations] done: generated=%d "
+        "cached=%d skipped=%d errors=%d",
+        generated, cached, skipped, len(errors),
+    )
     _finalize_run(
         repo, run_id, done, total,
         errors, cancelled,
