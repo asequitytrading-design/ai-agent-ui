@@ -51,3 +51,56 @@ def is_indian_market(
 ) -> bool:
     """Convenience: True when *ticker* is Indian."""
     return detect_market(ticker, registry_market) == "india"
+
+
+def safe_str(val) -> str | None:
+    """Return a clean string or ``None``.
+
+    Handles the three broken paths that bite this project:
+
+    * ``None`` → ``None``
+    * pandas/numpy ``float('nan')`` → ``None`` (NaN is
+      *truthy* in Python so ``x or fallback`` silently
+      keeps it)
+    * empty / whitespace-only string → ``None``
+
+    Use this wherever you read optional string fields from
+    Iceberg rows (sector, industry, company_name,
+    currency, ...). ETFs and indices return NaN for
+    ``company_info.sector``, and mixing NaN into labels,
+    prompts, or groupby keys corrupts downstream logic.
+    """
+    if val is None:
+        return None
+    # pandas NaN is a float. Checking isinstance(float)
+    # first avoids importing pandas for non-numeric
+    # values.
+    if isinstance(val, float):
+        import math
+
+        if math.isnan(val):
+            return None
+        return str(val)
+    if isinstance(val, str):
+        stripped = val.strip()
+        return stripped or None
+    try:
+        return str(val)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def safe_sector(
+    val,
+    fallback: str = "Other",
+) -> str:
+    """Return a non-empty sector label.
+
+    Thin wrapper around :func:`safe_str` that always
+    returns a string so it's safe to use as a dict key,
+    groupby key, or prompt token.  Pass a custom
+    *fallback* (e.g. ``"ETF"``) where that makes more
+    sense than ``"Other"``.
+    """
+    cleaned = safe_str(val)
+    return cleaned if cleaned else fallback

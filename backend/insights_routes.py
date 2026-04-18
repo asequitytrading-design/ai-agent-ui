@@ -173,7 +173,7 @@ def _sector_for_ticker(
     match = company_df[company_df["ticker"] == ticker]
     if match.empty:
         return None
-    return str(match.iloc[-1].get("sector", "")) or None
+    return _safe_str(match.iloc[-1].get("sector"))
 
 
 def _collect_sectors(

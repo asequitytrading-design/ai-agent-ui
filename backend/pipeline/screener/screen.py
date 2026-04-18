@@ -21,6 +21,7 @@ from datetime import date
 import pandas as pd
 
 from backend.db.duckdb_engine import query_iceberg_table
+from market_utils import safe_str
 from backend.pipeline.screener.piotroski import (
     compute_piotroski,
 )
@@ -288,12 +289,16 @@ async def run_screen(
                     "avg_volume": ci_row.get(
                         "avg_volume",
                     ),
-                    "sector": ci_row.get("sector"),
-                    "industry": ci_row.get(
-                        "industry",
+                    "sector": safe_str(
+                        ci_row.get("sector"),
+                    ),
+                    "industry": safe_str(
+                        ci_row.get("industry"),
                     ),
                     "company_name": (
-                        ci_row.get("company_name")
+                        safe_str(
+                            ci_row.get("company_name"),
+                        )
                         or sm_names.get(ticker, "")
                     ),
                 }

@@ -62,6 +62,8 @@ import pandas as pd
 import pyarrow as pa
 from pyiceberg.exceptions import CommitFailedException
 
+from market_utils import safe_str
+
 _logger = logging.getLogger(__name__)
 
 _NAMESPACE = "stocks"
@@ -1317,22 +1319,35 @@ class StockRepository:
                 " failed for %s",
                 ticker,
             )
+        # Sanitise strings so NaN / whitespace never
+        # lands in the Iceberg company_info table. NaN
+        # is truthy in Python; downstream consumers that
+        # do ``row.get("sector") or "Other"`` would keep
+        # the NaN and corrupt prompts / groupby keys.
         row = pa.table(
             {
                 "info_id": pa.array([str(uuid.uuid4())], pa.string()),
                 "ticker": pa.array([ticker], pa.string()),
                 "company_name": pa.array(
                     [
-                        str(
-                            info.get("company_name")
-                            or info.get("longName")
-                            or ""
+                        safe_str(
+                            info.get("company_name"),
                         )
+                        or safe_str(
+                            info.get("longName"),
+                        )
+                        or ticker
                     ],
                     pa.string(),
                 ),
-                "sector": pa.array([info.get("sector")], pa.string()),
-                "industry": pa.array([info.get("industry")], pa.string()),
+                "sector": pa.array(
+                    [safe_str(info.get("sector"))],
+                    pa.string(),
+                ),
+                "industry": pa.array(
+                    [safe_str(info.get("industry"))],
+                    pa.string(),
+                ),
                 "market_cap": pa.array(
                     [
                         _safe_int(
@@ -3027,11 +3042,17 @@ class StockRepository:
                     pa.int64(),
                 ),
                 "sector": pa.array(
-                    [s.get("sector") for s in scores],
+                    [
+                        safe_str(s.get("sector"))
+                        for s in scores
+                    ],
                     pa.string(),
                 ),
                 "industry": pa.array(
-                    [s.get("industry") for s in scores],
+                    [
+                        safe_str(s.get("industry"))
+                        for s in scores
+                    ],
                     pa.string(),
                 ),
                 "company_name": pa.array(
@@ -4946,6 +4967,9 @@ class StockRepository:
                 ),
                 "ticker_type": str(
                     row.get("ticker_type", "stock"),
+                ),
+                "is_tradeable": bool(
+                    row.get("is_tradeable", True),
                 ),
                 "file_path": str(
                     Path(__file__).parent.parent

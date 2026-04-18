@@ -1935,7 +1935,10 @@ def create_dashboard_router() -> APIRouter:
             qty = float(h.get("quantity", 0))
             avg = float(h.get("avg_price", 0))
             info = info_map.get(ticker, {})
-            sector = info.get("sector") or "Unknown"
+            from market_utils import safe_sector
+            sector = safe_sector(
+                info.get("sector"), fallback="Unknown",
+            )
 
             cur = 0.0
             t_df = (

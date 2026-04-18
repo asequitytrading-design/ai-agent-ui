@@ -31,6 +31,8 @@ import pandas as pd
 import pyarrow as pa
 import yfinance as yf
 
+from market_utils import safe_str
+
 _logger = logging.getLogger(__name__)
 
 
@@ -999,11 +1001,19 @@ def batch_data_refresh(
                             pa.string(),
                         ),
                         "sector": pa.array(
-                            [info.get("sector")],
+                            [
+                                safe_str(
+                                    info.get("sector"),
+                                )
+                            ],
                             pa.string(),
                         ),
                         "industry": pa.array(
-                            [info.get("industry")],
+                            [
+                                safe_str(
+                                    info.get("industry"),
+                                )
+                            ],
                             pa.string(),
                         ),
                         "market_cap": pa.array(
