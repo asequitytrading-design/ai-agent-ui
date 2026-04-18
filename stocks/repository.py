@@ -3461,6 +3461,13 @@ class StockRepository:
                 [e.get("error_code") for e in events],
                 type=pa.string(),
             ),
+            "key_source": pa.array(
+                [
+                    e.get("key_source", "platform")
+                    for e in events
+                ],
+                type=pa.string(),
+            ),
         }
         self._append_rows(self._LLM_USAGE, pa.table(arrays))
 
@@ -3765,11 +3772,31 @@ class StockRepository:
             if math.isnan(avg_latency):
                 avg_latency = 0.0
 
-            # Per-model breakdown (include provider).
+            # Per-model breakdown (include provider + tokens).
             per_model: dict = {}
             has_provider = "provider" in df.columns
-            if "model" in df.columns:
-                for model, grp in df.groupby("model"):
+            has_input = "prompt_tokens" in df.columns
+            has_output = "completion_tokens" in df.columns
+            # Iceberg column is ``timestamp``; keep the
+            # old name as a fallback for any legacy caller.
+            if "timestamp" in df.columns:
+                ts_col = "timestamp"
+            elif "request_timestamp" in df.columns:
+                ts_col = "request_timestamp"
+            else:
+                ts_col = None
+            has_source = "key_source" in df.columns
+            # Drop non-request bookkeeping events (cascade,
+            # compression) from the per-model rollup —
+            # they're stamped with model="n/a" and would
+            # otherwise surface as a row on the usage table.
+            req_df = df
+            if "event_type" in df.columns:
+                req_df = df[
+                    df["event_type"] == "request"
+                ]
+            if "model" in req_df.columns:
+                for model, grp in req_df.groupby("model"):
                     prov = ""
                     if has_provider:
                         prov = (
@@ -3777,12 +3804,64 @@ class StockRepository:
                             if not grp["provider"].dropna().empty
                             else ""
                         )
+                    last_used = None
+                    if ts_col and not grp[
+                        ts_col
+                    ].dropna().empty:
+                        # Emit ISO 8601 UTC with the ``Z``
+                        # suffix so the frontend's
+                        # ``new Date()`` parses it as UTC
+                        # rather than local time (which
+                        # otherwise produced a ~5.5h drift
+                        # in IST).
+                        _ts = grp[ts_col].max()
+                        try:
+                            last_used = (
+                                _ts.tz_localize("UTC")
+                                .isoformat()
+                                .replace("+00:00", "Z")
+                            )
+                        except (TypeError, AttributeError):
+                            last_used = (
+                                f"{_ts}Z"
+                                if "Z" not in str(_ts)
+                                else str(_ts)
+                            )
+                    # Split requests by key source. Legacy
+                    # rows (no column or null) count as
+                    # "platform" so existing data still
+                    # sums to the total.
+                    requests_platform = 0
+                    requests_user = 0
+                    if has_source:
+                        src = grp["key_source"].fillna(
+                            "platform",
+                        )
+                        requests_platform = int(
+                            (src != "user").sum(),
+                        )
+                        requests_user = int(
+                            (src == "user").sum(),
+                        )
+                    else:
+                        requests_platform = len(grp)
                     per_model[str(model)] = {
                         "requests": len(grp),
+                        "requests_platform": requests_platform,
+                        "requests_user": requests_user,
                         "cost": float(
                             grp["estimated_cost_usd"].sum(skipna=True)
                         ),
                         "provider": str(prov),
+                        "input_tokens": int(
+                            grp["prompt_tokens"].sum(skipna=True)
+                        ) if has_input else 0,
+                        "output_tokens": int(
+                            grp[
+                                "completion_tokens"
+                            ].sum(skipna=True)
+                        ) if has_output else 0,
+                        "last_used_at": last_used,
                     }
 
             # Daily trend (last N days)
