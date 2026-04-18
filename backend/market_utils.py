@@ -15,6 +15,13 @@ _INDIAN_INDEX_TICKERS = frozenset((
     "^INDIAVIX",  # India VIX
 ))
 
+# Stringified NaN/null sentinels that pandas, json.dumps,
+# and repr()-round-trips can produce from a float NaN.
+# ``safe_str`` treats these as missing.
+_MISSING_SENTINELS = frozenset((
+    "nan", "none", "null", "n/a", "na", "nat",
+))
+
 
 def detect_market(
     ticker: str,
@@ -83,7 +90,17 @@ def safe_str(val) -> str | None:
         return str(val)
     if isinstance(val, str):
         stripped = val.strip()
-        return stripped or None
+        if not stripped:
+            return None
+        # Reject sentinel tokens that pandas / repr() / JSON
+        # round-trips often produce when a float NaN is
+        # stringified somewhere up the pipeline.  Without
+        # this, ``safe_sector`` would preserve the literal
+        # "NaN" and leak it into LLM prompts, groupby keys,
+        # and the Sectors tab.
+        if stripped.lower() in _MISSING_SENTINELS:
+            return None
+        return stripped
     try:
         return str(val)
     except Exception:  # noqa: BLE001

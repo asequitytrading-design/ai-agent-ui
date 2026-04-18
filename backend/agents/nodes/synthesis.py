@@ -72,7 +72,16 @@ _SYNTHESIS_PROMPT = (
     "contains markdown tables, comparison grids, or "
     "structured data — preserve them exactly. Do not "
     "collapse tables into prose. Add narrative context "
-    "around tables but never remove or flatten them."
+    "around tables but never remove or flatten them.\n\n"
+    "NO HALLUCINATION ON TRUNCATION: If any tool output "
+    "or prior message ends with a literal marker like "
+    "`[truncated N chars]`, you MUST NOT invent, "
+    "enumerate, or claim items beyond what is visible. "
+    "Do not write phrases like 'truncated in display' "
+    "or 'confirmed in memory context'. Instead, list "
+    "only what is shown and say 'some rows were trimmed "
+    "to fit token limits — ask me to narrow the query "
+    "to see the rest.'"
 )
 
 # Minimum response length to skip synthesis.
