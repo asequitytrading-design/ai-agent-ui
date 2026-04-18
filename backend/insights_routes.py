@@ -5,10 +5,11 @@ Screener, Risk Metrics, Sectors, Price Targets, Dividends,
 Correlation, Quarterly, Piotroski F-Score, and ScreenQL.
 
 Ticker visibility is scoped per tab via ``_scoped_tickers``:
-- Discovery (Screener, ScreenQL): full platform universe for
-  pro + superuser; watchlist ∪ holdings for general.
-- Watchlist (Risk, Sectors, Targets, Dividends, Piotroski):
-  user's watchlist ∪ current holdings for all roles.
+- Discovery (Screener, ScreenQL, Sectors, Piotroski): full
+  platform universe for pro + superuser; watchlist ∪ holdings
+  for general.
+- Watchlist (Risk, Targets, Dividends): user's watchlist ∪
+  current holdings for all roles.
 - Portfolio (Correlation, Quarterly): current holdings only.
 
 Responses are cached in Redis with 300 s TTL. Cache keys use
@@ -817,7 +818,7 @@ def create_insights_router() -> APIRouter:
             )
 
         stock_repo = _get_stock_repo()
-        tickers = await _scoped_tickers(user, "watchlist")
+        tickers = await _scoped_tickers(user, "discovery")
         if not tickers:
             return SectorsResponse()
 
@@ -1231,10 +1232,11 @@ def create_insights_router() -> APIRouter:
         if df.empty:
             return PiotroskiResponse()
 
-        # Scope to user's watchlist ∪ portfolio.
+        # Scope: pro + superuser see full universe; others get
+        # their watchlist ∪ portfolio.
         scoped = set(
             t.upper() for t in await _scoped_tickers(
-                user, "watchlist",
+                user, "discovery",
             )
         )
         if not scoped:
