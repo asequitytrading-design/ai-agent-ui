@@ -38,6 +38,9 @@ Volatility-regime adaptive forecasts with confidence scoring
 Native portfolio dashboard with TradingView lightweight-charts +
 react-plotly.js. Memory-augmented chat with pgvector semantic
 retrieval. Dual payment gateways (Razorpay INR + Stripe USD).
+Chat agent supports BYO provider keys (Groq / Anthropic) for
+non-superuser users past a 10-turn free allowance — see
+`docs/backend/byom.md`.
 All pages fully migrated from Dash to Next.js.
 
 | Service | Port | Entry point | Stack |
@@ -959,7 +962,7 @@ flake8 backend/ auth/ stocks/ scripts/
 cd frontend && npx eslint . --fix
 
 # Test
-python -m pytest tests/ -v        # all (~839 tests)
+python -m pytest tests/ -v        # all (~902 tests)
 cd frontend && npx vitest run     # frontend (18 tests)
 cd e2e && npm test                # E2E (~257 tests, needs live services)
 
@@ -978,6 +981,13 @@ PYTHONPATH=backend python scripts/migrate_iceberg_to_pg.py  # one-time data migr
 PYTHONPATH=backend python scripts/seed_demo_data.py
 # Docker seed (when running via Docker Compose)
 docker compose exec backend python scripts/seed_demo_data.py
+
+# BYOM local setup (first-time, requires .env write)
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"  # add as BYO_SECRET_KEY
+docker compose up -d --force-recreate backend       # re-read .env (restart alone won't)
+
+# Alembic: clear stale bytecode after migration file rename
+docker compose exec backend rm -f /app/backend/db/migrations/versions/__pycache__/*.pyc
 
 # One-shot maintenance scripts (destructive — confirm first)
 docker compose exec backend python3 scripts/truncate_recommendations.py --yes   # wipe all recommendation_runs + cascade
