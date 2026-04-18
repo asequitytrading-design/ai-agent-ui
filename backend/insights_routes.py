@@ -31,7 +31,10 @@ import auth.endpoints.helpers as _helpers
 from auth.dependencies import get_current_user
 from auth.models import UserContext
 from cache import get_cache, TTL_STABLE
-from market_utils import detect_market as _market
+from market_utils import (
+    detect_market as _market,
+    safe_str,
+)
 from insights_models import (
     CorrelationResponse,
     DividendRow,
@@ -874,8 +877,15 @@ def create_insights_router() -> APIRouter:
         )
         sector_map = company_df.set_index("ticker")["sector"].to_dict()
 
-        # Join sector onto analysis.
-        analysis_df["sector"] = analysis_df["ticker"].map(sector_map)
+        # Join sector onto analysis. ``safe_str`` collapses
+        # NaN / None / "None" / empty / whitespace to None so
+        # dropna removes all of them — stops ETFs and legacy
+        # empty-string rows from forming an unnamed sector bucket.
+        analysis_df["sector"] = (
+            analysis_df["ticker"]
+            .map(sector_map)
+            .map(safe_str)
+        )
         analysis_df = analysis_df.dropna(
             subset=["sector"],
         )
