@@ -2,6 +2,46 @@
 
 ---
 
+## 2026-04-23 / 24 — Sprint 8: Perf Infra + Bundle + LCP/FCP/CLS (ASETPLTFRM-330, 331)
+
+**Scope**: containerize Lighthouse audit (34 routes) and eliminate the systemic FCP/LCP outliers surfaced after Sprint 7 shipped.
+
+### ASETPLTFRM-330 — Containerize Lighthouse + 34 routes (8 SP)
+
+- `Dockerfile.perf` (Playwright v1.48 + Lighthouse 12, local install in `/app/node_modules` for predictable require resolution) + `perf` + `frontend-perf` services in `docker-compose.override.yml` (profile: perf). `frontend-perf` builds with `NEXT_PUBLIC_BACKEND_URL=""` (sentinel → relative `API_URL=/v1`) and `BACKEND_URL=http://backend:8181` so the Next.js `/v1/*` rewrite proxies to the docker-network backend. Zero CORS; the existing `frontend` dev service is untouched.
+- Rewrite added in `next.config.ts`; rewrite destination is serialized into `routes-manifest.json` at build time so `BACKEND_URL` flows as a build ARG (not runtime env) — learned the hard way after the first run proxied to `localhost:8181` inside the container.
+- Runner (`scripts/perf-lighthouse-all-routes.js`): 9 base + 25 tab variants = 34 audit points. Dynamic `import()` for lighthouse (ESM-only, throws `ERR_REQUIRE_ESM` under `require()`). Page rotation every 12 audits + process-level `unhandledRejection`/`uncaughtException` handlers + retry-on-crash so Lighthouse's detached-promise protocol errors (specifically on `/admin?tab=my_account`) no longer kill the run. `crypto.randomUUID` polyfill via `context.addInitScript` — `http://frontend-perf:3000` is not a "secure context", so the API is undefined and app JS threw on every authenticated route, leaving Lighthouse to report identical stalled numbers.
+- `scripts/perf/auth.js` `fill()` → `pressSequentially()` — React `onChange` doesn't fire for bulk-set on prod builds, keeping the submit button disabled.
+- `lighthouserc.js` drops the legacy `/analytics/marketplace` URL.
+- `npm run perf:container` alias in `frontend/package.json`; docs at `docs/frontend/perf-audit.md`.
+
+### ASETPLTFRM-331 — Bundle + LCP + FCP + CLS (8 SP)
+
+- **FCP floor collapse (3 450 ms → 1 515 ms, −56%)**: SSR fallback in `(authenticated)/layout.tsx` was a pure-CSS border-spinner — no text/image, so Lighthouse's FCP heuristic ignored it and waited for the full React shell to hydrate. Replaced with a sidebar-shaped skeleton + "AI Agent UI" brand text + "Loading…" label; FCP now uniform ~1 515 ms across every authenticated route.
+- **Chart lazy-loading (6 widgets → `next/dynamic`)**: Dashboard widgets (ForecastChartWidget, SectorAllocationWidget, AssetPerformanceWidget, PLTrendWidget) + Insights charts (PlotlyChart, CorrelationHeatmap). Each with `ssr: false` + height-matched skeleton fallback to preserve CLS ≤ 0.02.
+- **StockChart type-leak fix**: `analytics/analysis/page.tsx` imported `DEFAULT_INDICATORS` (a runtime const) from `StockChart.tsx`, which dragged `lightweight-charts` (150 KB) into the initial bundle even though `StockChart` was already `dynamic`. Split types + constant into new `StockChart.types.ts`; analysis initial chunk 292 KB → 127 KB.
+- **ECharts BarChart migration** (new `components/charts/SimpleBarChart.tsx`): sectors + quarterly tabs were the only consumers of `plotly.js-basic-dist` (1 MB). Swapped to tree-shaken echarts BarChart (~50 KB incremental on top of already-loaded `echarts/core`). LCP `insights?tab=sectors` 8 523 → 4 622 ms (−46%); `insights?tab=quarterly` 8 593 → 3 486 ms (−59%). After a follow-up dead-code sweep, `plotly.js-basic-dist` + `react-plotly.js` can come out of `package.json`.
+- **CLS fixes**: height-matched skeletons (`ChartSkeleton h="h-[480–700px]"`) on StockChart/ForecastChart/PortfolioChart/PortfolioForecastChart dynamic imports + `min-h-[760px]` wrapper on the `portfolio-forecast-chart` card. `analysis?tab=portfolio-forecast` CLS 0.129 → 0.001 (−99%).
+
+### Measured results (containerized Lighthouse, 34/34 routes, 2026-04-24)
+
+| Metric | Before | After |
+|---|---:|---:|
+| FCP (auth routes) | ~3 450 ms | ~1 515 ms |
+| LCP `/analytics/analysis` | 18 439 | 6 850 |
+| LCP `/insights?tab=sectors` | 8 523 | 4 622 |
+| LCP `/insights?tab=quarterly` | 8 593 | 3 486 |
+| CLS `/analysis?tab=portfolio-forecast` | 0.129 | 0.001 |
+| Routes with LCP > 8 s | 2 | 0 |
+
+### Follow-ups (documented in `docs/frontend/bundle-analysis.md`)
+
+- Drop plotly deps + `chartBuilders.ts` / `PlotlyChart.tsx` (dead code after SectorsTab + QuarterlyTab migration).
+- `react-markdown` (105 KB) still eager in Admin's ObservabilityTab → LCP 5.7 s.
+- Smaller CLS creep (0.02–0.12) on admin scheduler/observability/maintenance/recommendations and the login page — same playbook (reserved-height container on async table rows).
+
+---
+
 ## 2026-04-21 / 22 / 23 — Sprint 7 Closure: Sentiment Hardening + Iceberg Pipeline Integration + Portfolio Transparency
 
 **Sprint 7 closed at 75/75 SP (100%)**. ASETPLTFRM-324 (BYOM) and ASETPLTFRM-323 (Pro role) transitioned to Done after final verification. ~30 SP of follow-up work landed as comments on parent tickets (320, 315, 316, 319).

@@ -7,6 +7,7 @@
  */
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import dynamic from "next/dynamic";
 import { usePreferences } from "@/hooks/usePreferences";
 import { usePortfolioActions } from "@/providers/PortfolioActionsProvider";
 import type { UserProfile } from "@/hooks/useEditProfile";
@@ -29,12 +30,42 @@ import { HeroSection } from "@/components/widgets/HeroSection";
 import { WatchlistWidget } from "@/components/widgets/WatchlistWidget";
 import { AnalysisSignalsWidget } from "@/components/widgets/AnalysisSignalsWidget";
 import { LLMUsageWidget } from "@/components/widgets/LLMUsageWidget";
-import { ForecastChartWidget } from "@/components/widgets/ForecastChartWidget";
-import { SectorAllocationWidget } from "@/components/widgets/SectorAllocationWidget";
-import { AssetPerformanceWidget } from "@/components/widgets/AssetPerformanceWidget";
-import { PLTrendWidget } from "@/components/widgets/PLTrendWidget";
+import { WidgetSkeleton } from "@/components/widgets/WidgetSkeleton";
 import { NewsWidget } from "@/components/widgets/NewsWidget";
 import { RecommendationsWidget } from "@/components/widgets/RecommendationsWidget";
+
+// Chart-heavy widgets are dynamic-imported with ssr:false so
+// echarts/plotly/zrender (~1.5 MB combined) never ship in the
+// initial dashboard bundle. Skeletons preserve layout so the
+// ≤ 0.02 CLS baseline from Sprint 7 holds.
+const ForecastChartWidget = dynamic(
+  () =>
+    import("@/components/widgets/ForecastChartWidget").then(
+      (m) => m.ForecastChartWidget,
+    ),
+  { ssr: false, loading: () => <WidgetSkeleton className="h-96" /> },
+);
+const SectorAllocationWidget = dynamic(
+  () =>
+    import("@/components/widgets/SectorAllocationWidget").then(
+      (m) => m.SectorAllocationWidget,
+    ),
+  { ssr: false, loading: () => <WidgetSkeleton className="h-72" /> },
+);
+const AssetPerformanceWidget = dynamic(
+  () =>
+    import("@/components/widgets/AssetPerformanceWidget").then(
+      (m) => m.AssetPerformanceWidget,
+    ),
+  { ssr: false, loading: () => <WidgetSkeleton className="h-72" /> },
+);
+const PLTrendWidget = dynamic(
+  () =>
+    import("@/components/widgets/PLTrendWidget").then(
+      (m) => m.PLTrendWidget,
+    ),
+  { ssr: false, loading: () => <WidgetSkeleton className="h-72" /> },
+);
 
 export type MarketFilter = "india" | "us";
 
