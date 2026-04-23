@@ -18,7 +18,10 @@ from backend.insights.screen_parser import (
     generate_sql,
     parse_query,
 )
-from backend.insights_routes import _compute_peg
+from backend.insights_routes import (
+    _compute_peg,
+    _peg_ttm_from_quarters,
+)
 
 
 class TestFieldCatalog:
@@ -123,3 +126,74 @@ class TestComputePeg:
             f"PEG {got} out of {expected_range} "
             f"for pe={pe} growth={growth}"
         )
+
+
+class TestPegTtmFromQuarters:
+    """``_peg_ttm_from_quarters`` — PEG from our own
+    quarterly_results filings (TTM EPS + single-Q YoY).
+    """
+
+    def test_happy_path(self):
+        # 5 quarters, growing: [Q0, Q1, Q2, Q3, Q4]
+        # most recent first. TTM = 4.4, Q0/Q4 = 2.0 →
+        # growth = 1.0 (100%). PE = 100 / 4.4 ≈ 22.7.
+        # PEG ≈ 22.7 / 100 = 0.227.
+        got = _peg_ttm_from_quarters(
+            [1.2, 1.1, 1.1, 1.0, 0.6], 100.0,
+        )
+        assert got is not None
+        assert 0.22 < got < 0.24
+
+    def test_insufficient_quarters(self):
+        # <5 quarters — can't do YoY comparison.
+        assert _peg_ttm_from_quarters(
+            [1.0, 0.9, 0.8, 0.7], 100.0,
+        ) is None
+        assert _peg_ttm_from_quarters([], 100.0) is None
+
+    def test_negative_ttm(self):
+        # Sum of last 4 quarters ≤ 0 — loss-maker.
+        assert _peg_ttm_from_quarters(
+            [0.5, -1.0, -1.0, -1.0, 0.8], 100.0,
+        ) is None
+
+    def test_negative_current_quarter(self):
+        # Q0 ≤ 0 even with positive TTM — growth base
+        # would be weird, skip to stay conservative.
+        assert _peg_ttm_from_quarters(
+            [-0.1, 1.0, 1.0, 1.0, 0.6], 100.0,
+        ) is None
+
+    def test_negative_year_ago_quarter(self):
+        # Q4 ≤ 0 — growth ratio is garbage.
+        assert _peg_ttm_from_quarters(
+            [1.0, 0.9, 0.8, 0.7, -0.2], 100.0,
+        ) is None
+
+    def test_flat_growth(self):
+        # Q0 == Q4 (no growth) — PEG undefined.
+        assert _peg_ttm_from_quarters(
+            [1.0, 1.0, 1.0, 1.0, 1.0], 100.0,
+        ) is None
+
+    def test_declining_growth(self):
+        # Q0 < Q4 — negative growth, return None.
+        assert _peg_ttm_from_quarters(
+            [0.5, 0.6, 0.7, 0.8, 1.0], 100.0,
+        ) is None
+
+    def test_missing_close(self):
+        eps = [1.2, 1.1, 1.1, 1.0, 0.6]
+        assert _peg_ttm_from_quarters(eps, None) is None
+        assert _peg_ttm_from_quarters(eps, 0.0) is None
+        assert _peg_ttm_from_quarters(eps, -5.0) is None
+
+    def test_real_world_example(self):
+        # Fictitious mid-cap: current quarter EPS 2.5,
+        # TTM EPS 9.0, year-ago quarter EPS 2.0,
+        # price ₹450. PE=50, growth=25%, PEG=2.0.
+        got = _peg_ttm_from_quarters(
+            [2.5, 2.3, 2.2, 2.0, 2.0], 450.0,
+        )
+        assert got is not None
+        assert 1.99 < got < 2.01

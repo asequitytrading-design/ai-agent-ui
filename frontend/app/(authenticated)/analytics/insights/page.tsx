@@ -326,6 +326,12 @@ const screenerCols: Column<ScreenerRow>[] = [
     render: (r) => fmtNum(r.peg_ratio_yf),
   },
   {
+    key: "peg_ratio_ttm",
+    label: "PEG (Q)",
+    numeric: true,
+    render: (r) => fmtNum(r.peg_ratio_ttm),
+  },
+  {
     key: "action",
     label: "Action",
     sortable: false,
@@ -743,6 +749,7 @@ const screenerCsvCols: CsvColumn<ScreenerRow>[] = [
   { key: "sharpe_ratio", header: "Sharpe" },
   { key: "peg_ratio", header: "PEG (trailing)" },
   { key: "peg_ratio_yf", header: "PEG (yfinance)" },
+  { key: "peg_ratio_ttm", header: "PEG (quarterly TTM)" },
   { key: "sector", header: "Sector" },
 ];
 

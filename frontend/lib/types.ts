@@ -312,6 +312,7 @@ export interface ScreenerRow {
   sharpe_ratio: number | null;
   peg_ratio: number | null;
   peg_ratio_yf: number | null;
+  peg_ratio_ttm: number | null;
   sector: string | null;
   market: string;
   tags: string[];

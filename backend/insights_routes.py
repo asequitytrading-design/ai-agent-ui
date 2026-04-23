@@ -282,6 +282,114 @@ def _peg_for_ticker(
     return (_compute_peg(pe, eg), yf_val)
 
 
+def _peg_ttm_from_quarters(
+    eps_desc: list[float],
+    latest_close: float | None,
+) -> float | None:
+    """Pure PEG-from-quarterly computation.
+
+    Inputs:
+      eps_desc: quarterly ``eps_diluted`` values, most
+        recent first. Need ≥5 items for single-quarter
+        YoY growth.
+      latest_close: price driving the P/E numerator.
+
+    Guards: ≥5 quarters, positive TTM EPS, positive
+    year-ago quarter, positive growth, positive close.
+    Returns ``None`` when any guard fails (matches the
+    other PEG variants' "undefined for declining /
+    loss-making" convention).
+    """
+    if latest_close is None or latest_close <= 0:
+        return None
+    if len(eps_desc) < 5:
+        return None
+    ttm_eps = sum(eps_desc[:4])
+    q_latest = eps_desc[0]
+    q_year_ago = eps_desc[4]
+    if ttm_eps <= 0 or q_latest <= 0:
+        return None
+    if q_year_ago <= 0:
+        return None
+    growth = (q_latest / q_year_ago) - 1.0
+    if growth <= 0:
+        return None
+    pe = float(latest_close) / ttm_eps
+    if pe <= 0:
+        return None
+    return round(pe / (growth * 100.0), 3)
+
+
+def _compute_peg_ttm_batch(
+    tickers: list[str],
+    price_map: dict[str, float | None],
+) -> dict[str, float | None]:
+    """PEG computed from our own quarterly filings.
+
+    TTM EPS (sum of last 4 quarterly ``eps_diluted``)
+    drives the P/E numerator. Growth is the quarter-vs-
+    year-earlier-quarter YoY change in ``eps_diluted``
+    — the closest proxy we can compute given that our
+    ``quarterly_results`` table currently caps at ~5
+    quarters per ticker (not enough for TTM-vs-prior-
+    TTM growth). When quarterly history deepens to 8+
+    quarters, swap the single-quarter YoY for proper
+    TTM-vs-prior-TTM growth without changing callers.
+
+    Guards: requires ≥5 quarters, positive TTM EPS,
+    positive year-ago quarter EPS, positive growth, and
+    a latest close price. Returns a ticker→peg dict;
+    unqualified tickers are omitted (callers coerce
+    missing entries to ``None``).
+    """
+    if not tickers:
+        return {}
+    try:
+        from backend.db.duckdb_engine import (
+            query_iceberg_df,
+        )
+    except Exception:
+        return {}
+
+    placeholders = ",".join(f"'{t}'" for t in tickers)
+    try:
+        qr_df = query_iceberg_df(
+            "stocks.quarterly_results",
+            "SELECT ticker, quarter_end, eps_diluted "
+            "FROM quarterly_results "
+            f"WHERE ticker IN ({placeholders}) "
+            "  AND statement_type = 'income' "
+            "  AND eps_diluted IS NOT NULL",
+        )
+    except Exception as exc:
+        _logger.warning(
+            "peg_ttm quarterly_results read failed: %s",
+            exc,
+        )
+        return {}
+
+    if qr_df.empty:
+        return {}
+
+    result: dict[str, float | None] = {}
+    for ticker, group in qr_df.groupby("ticker"):
+        g = group.sort_values(
+            "quarter_end", ascending=False,
+        ).reset_index(drop=True)
+        try:
+            eps_desc = [
+                float(v) for v in g["eps_diluted"]
+            ]
+        except Exception:
+            continue
+        peg = _peg_ttm_from_quarters(
+            eps_desc, price_map.get(str(ticker)),
+        )
+        if peg is not None:
+            result[str(ticker)] = peg
+    return result
+
+
 def _collect_sectors(
     company_df: pd.DataFrame,
     tickers: list[str],
@@ -479,6 +587,13 @@ def create_insights_router() -> APIRouter:
                 exc_info=True,
             )
 
+        # Batch-compute ground-truth TTM PEG from
+        # quarterly_results filings. Single DuckDB read;
+        # returns a sparse dict keyed by ticker.
+        peg_ttm_map = _compute_peg_ttm_batch(
+            tickers, price_map,
+        )
+
         rows: list[ScreenerRow] = []
         for _, row in df.iterrows():
             t = str(row["ticker"])
@@ -512,6 +627,7 @@ def create_insights_router() -> APIRouter:
                             ),
                         ),
                     ),
+                    peg_ratio_ttm=peg_ttm_map.get(t),
                     sector=_sector_for_ticker(
                         t,
                         company_df,
