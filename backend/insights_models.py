@@ -28,6 +28,24 @@ class ScreenerRow(BaseModel):
     annualized_return_pct: float | None = None
     annualized_volatility_pct: float | None = None
     sharpe_ratio: float | None = None
+    # PEG (Price/Earnings-to-Growth). Three sources:
+    # - `peg_ratio` — P/E ÷ (earnings_growth × 100)
+    #   using yfinance-sourced pe_ratio +
+    #   earningsGrowth on company_info (trailing YoY).
+    # - `peg_ratio_yf` — raw from yfinance's pegRatio
+    #   (forward-looking, analyst-consensus growth).
+    #   Sparse for Indian equities.
+    # - `peg_ratio_ttm` — ground-truth PEG computed
+    #   from our own quarterly_results filings. TTM EPS
+    #   drives P/E, single-quarter YoY growth drives
+    #   the denominator. Requires ≥5 quarters of
+    #   income-statement history.
+    # All null when earnings are negative or growth
+    # ≤ 0 (standard PEG convention — can't value a
+    # decline).
+    peg_ratio: float | None = None
+    peg_ratio_yf: float | None = None
+    peg_ratio_ttm: float | None = None
     sector: str | None = None
     market: str = "us"
     tags: list[str] = Field(default_factory=list)
