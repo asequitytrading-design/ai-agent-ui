@@ -63,7 +63,7 @@ ollama-profile coding|reasoning|embedding|status|unload
 **Key dirs**: `backend/` (agents, tools), `backend/pipeline/` (19
 CLI cmds), `backend/jobs/` (scheduler, pipeline chain, bulk OHLCV),
 `backend/db/` (ORM, async engine, Alembic, DuckDB),
-`backend/insights/` (ScreenQL parser, 36-field catalog),
+`backend/insights/` (ScreenQL parser, 39-field catalog),
 `backend/maintenance/` (backup, compact, retain), `backend/tools/`
 (forecast, sentiment, analysis), `auth/` (JWT + RBAC + OAuth),
 `stocks/` (Iceberg, 12 OLAP tables), `frontend/`,
@@ -220,6 +220,12 @@ analytics.
 26. Jira story points — set BOTH `customfield_10016` (estimate)
     AND `customfield_10036` (board display). `_10036` works on
     Stories but not Tasks.
+26a. **PR merge strategy on `dev`: squash only.** Branch protection
+    blocks merge-commit (`Merge commits are not allowed`) and
+    rebase (`This branch can't be rebased`). Use
+    `gh pr merge <n> --squash`. Sprint-level commit history is
+    preserved on the source branch (not on `dev`) — don't delete
+    the feature branch until history is no longer needed.
 
 ### Infra & Config
 
@@ -382,6 +388,13 @@ analytics.
   parquets within a week → reads 5+s, `Clean NaN Rows` 5+ min.
 - **Post-pipeline expiry**: `pipeline_executor.py` calls
   `expire_snapshots()` (currently logs only — PyIceberg API fragile).
+- **Schema evolution + backend restart**: after
+  `tbl.update_schema().add_column()`, backend worker's
+  in-process DuckDB connection caches the old schema.
+  `invalidate_metadata()` + Redis FLUSHALL are NOT
+  enough — must `docker compose restart backend`.
+  Apply to every deploy env (dev/qa/release/main)
+  after running an `evolve_*` function.
 - **torch CPU-only**: install via
   `pip install torch --index-url .../whl/cpu`. Do NOT add to
   requirements.txt. Add `transformers>=4.40` separately.
@@ -658,6 +671,14 @@ analytics.
   before queries, else fix results don't show until restart.
 - **`<div>` in `<p>`**: use `<span>` for inline (e.g. confidence
   badge) — `<div>` causes hydration error.
+- **Screener column selector**: 39-column catalog in
+  `SCREENER_COL_CATALOG` in `insights/page.tsx`; user
+  selection persists via `localStorage` through
+  `useColumnSelection` hook. ScreenQL equivalent via
+  `display_columns` on `/screen` request body. Adding
+  a new Screener field = edit `ScreenerRow` (backend
+  Pydantic + frontend TS) + `screenerCols` + catalog
+  entry + CSV entry (same file).
 - **PortfolioActionsProvider**: Add/Edit/Delete/**Transactions**
   portfolio modals mounted ONCE at
   `frontend/app/(authenticated)/layout.tsx`. Pages use
@@ -778,7 +799,7 @@ flake8 backend/ auth/ stocks/ scripts/
 cd frontend && npx eslint . --fix
 
 # Test
-python -m pytest tests/ -v               # ~902 tests
+python -m pytest tests/ -v               # ~925 tests
 cd frontend && npx vitest run            # 18 frontend tests
 cd e2e && npm test                       # ~257 E2E (live services)
 

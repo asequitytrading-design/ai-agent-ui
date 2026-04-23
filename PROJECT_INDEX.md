@@ -1,7 +1,7 @@
 # Project Index: AI Agent UI
 
 > AI-agent-optimised codebase map. For human onboarding, see `docs/`.
-> Last refreshed: 2026-04-23 (Sprint 7 closed at 75/75 SP — sentiment hardening, daily Iceberg compaction in pipeline, portfolio P&L NaN-truncation defenses, transparency chips, container TZ=IST)
+> Last refreshed: 2026-04-23 (Sprint 8 in-progress — 15/39 SP Done: PEG ratio 3-variant (T/YF/Q) in Screener + ScreenQL [332], user-pickable column selector with 39 fields across 7 categories [333], TS build-break fixes unblocking `next build` [329]. Sprint 7 closed 75/75 SP — sentiment hardening, daily Iceberg compaction, NaN-truncation defenses, transparency chips, TZ=IST.)
 
 ---
 
@@ -25,7 +25,7 @@ ai-agent-ui/
 │   │   ├── jobs/          # ohlcv, fundamentals, fill_gaps, seed
 │   │   └── screener/      # Piotroski F-Score
 │   ├── insights/          # ScreenQL query engine
-│   │   ├── screen_parser.py # Tokenizer, parser, SQL generator, 36-field catalog
+│   │   ├── screen_parser.py # Tokenizer, parser, SQL generator, 39-field catalog
 │   │   └── __init__.py
 │   ├── maintenance/       # Iceberg ops + backup
 │   │   ├── iceberg_maintenance.py # Compact, expire, purge, drop_dead_tables
@@ -248,7 +248,8 @@ LLM Cascade: Groq pools (llama-3.3-70b, qwen3-32b) →
 | `backend/db/models/sentiment_dormant.py` | 1 | Per-ticker dormancy state — capped expo cooldown 2/4/8/16/30d, 5% probe |
 | `backend/jobs/executor.py::execute_iceberg_maintenance` | 1 | Daily pipeline step 6 — backup (fail-closed) then compact 4 hot tables |
 | `backend/market_routes.py` | 1 | Yahoo Sensex `^BSESN` stale-feed detection + Google Finance fallback |
-| `backend/insights/screen_parser.py` | 1 | ScreenQL: tokenizer, parser, SQL gen, 36-field catalog |
+| `backend/insights/screen_parser.py` | 1 | ScreenQL: tokenizer, parser, SQL gen, 39-field catalog (incl. 3 PEG variants), `display_columns` param for user-pickable result columns |
+| `backend/insights_routes.py` | 1 | Screener endpoint: batched DuckDB reads (piotroski / forecast_runs / quarterly_results / company_info) populate 41-field `ScreenerRow`; `_compute_peg*` helpers for T/YF/Q variants |
 | `backend/maintenance/` | 3 | Backup (rsync), compaction, retention, dead table cleanup |
 | `backend/jobs/` | 8 | Executor registry, pipeline chaining, batch refresh (bulk OHLCV), recs |
 | `backend/pipeline/` | 21 | CLI: download, seed, bulk-download, analytics, forecast, screen |
@@ -258,6 +259,8 @@ LLM Cascade: Groq pools (llama-3.3-70b, qwen3-32b) →
 | `frontend/components/` | 30+ | Admin, charts, insights, widgets, modals |
 | `frontend/lib/downloadCsv.ts` | 1 | CSV export utility (escape, blob, browser download) |
 | `frontend/components/common/DownloadCsvButton.tsx` | 1 | Shared CSV button (icon + loading state) — used by all exports |
+| `frontend/lib/useColumnSelection.ts` | 1 | localStorage-backed column selection hook — tolerant to catalog evolution, two-phase SSR/client hydration |
+| `frontend/components/insights/ColumnSelector.tsx` | 1 | Grouped-by-category column picker popover (search, per-category toggle, locked keys, reset) — used on Screener + ScreenQL |
 | `frontend/providers/PortfolioActionsProvider.tsx` | 1 | Layout-level Add/Edit/Delete/**Transactions** modals via `usePortfolioActions()` |
 | `frontend/components/widgets/PortfolioTransactionsModal.tsx` | 1 | Eye-icon modal — date-sorted txns + per-row edit + summary footer |
 | `frontend/components/widgets/PLTrendWidget.tsx::StaleTickerChip` | 1 | Amber chip — "N holdings using previous close" w/ tooltip |
@@ -320,8 +323,8 @@ pipeline pickup.
 
 ## File Counts
 
-Backend Python: 173 modules | Frontend TS/TSX: 131 |
-Tests: ~153 (97 pytest + 51 e2e + 18 vitest) |
+Backend Python: 173 modules | Frontend TS/TSX: 133 |
+Tests: ~154 (98 pytest / ~925 cases + 51 e2e + 18 vitest) |
 Docs: 60+ pages | Scripts: 30 |
 Alembic migrations: 13 (`a9c1b3d5e7f2_add_sentiment_dormant` latest)
 
