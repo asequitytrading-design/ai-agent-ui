@@ -915,7 +915,36 @@ def execute_run_sentiment(
     # Pre-query: freshness + hot/cold classification.
     sentiment_fresh: set[str] = set()
     hot_tickers: set[str] = set()
+    dormant_tickers: set[str] = set()
     ticker_history_days: dict[str, int] = {}
+
+    # Dormant tickers — those whose news-source fetches
+    # have returned 0 headlines for K consecutive runs.
+    # Skip per-ticker fetching entirely; they fall
+    # straight through to Step-5 market_fallback. A
+    # small slice is sampled back into the trickle each
+    # run so newly-trending tickers self-recover.
+    try:
+        from stocks.repository import (
+            _pg_session,
+            _run_pg,
+        )
+        from backend.db.pg_stocks import (
+            get_dormant_tickers,
+            get_dormant_eligible_for_probe,
+        )
+
+        async def _dormant_call():
+            async with _pg_session() as s:
+                return await get_dormant_tickers(s)
+
+        dormant_tickers = _run_pg(_dormant_call) or set()
+    except Exception:
+        _logger.warning(
+            "[batch-sentiment] dormant lookup failed "
+            "— treating all tickers as eligible",
+            exc_info=True,
+        )
 
     try:
         # Tickers scored today (skip entirely).
@@ -938,13 +967,16 @@ def execute_run_sentiment(
                         )
 
         # Hot tickers: had real headlines in last 10d.
+        # Source filter accepts both finbert (current
+        # default) and llm (legacy + fallback) so the
+        # bucket actually populates post-FinBERT cutover.
         hot_df = query_iceberg_df(
             "stocks.sentiment_scores",
             "SELECT DISTINCT ticker "
             "FROM sentiment_scores "
             "WHERE score_date >= CURRENT_DATE - 10 "
             "AND headline_count > 0 "
-            "AND source = 'llm'",
+            "AND source IN ('finbert', 'llm')",
         )
         if not hot_df.empty:
             hot_tickers = set(hot_df["ticker"].tolist())
@@ -972,22 +1004,72 @@ def execute_run_sentiment(
     # Build ticker lists.
     all_yf = [yf_map.get(t, t) for t in tickers]
     to_skip = [t for t in all_yf if t in sentiment_fresh]
+
+    # Pull dormant tickers out of the active pool but
+    # keep a small re-discovery probe (5%) — sampled
+    # by oldest last_checked_at — so news that starts
+    # appearing is detected without a manual reset.
+    # `force=True` runs ignore dormancy entirely so an
+    # operator can re-test everything on demand.
+    in_scope_dormant = [
+        t for t in all_yf
+        if t in dormant_tickers and t not in sentiment_fresh
+    ]
+    dormant_skip: list[str] = []
+    dormant_probe: list[str] = []
+    if in_scope_dormant and not force:
+        try:
+            probe_n = max(
+                1, int(len(in_scope_dormant) * 0.05),
+            )
+
+            async def _probe_call():
+                async with _pg_session() as s:
+                    return await (
+                        get_dormant_eligible_for_probe(
+                            s, limit=probe_n,
+                        )
+                    )
+
+            ordered = _run_pg(_probe_call) or []
+            in_scope_set = set(in_scope_dormant)
+            dormant_probe = [
+                t for t in ordered if t in in_scope_set
+            ][:probe_n]
+        except Exception:
+            _logger.debug(
+                "[batch-sentiment] dormant probe "
+                "selection failed",
+                exc_info=True,
+            )
+            dormant_probe = []
+        dormant_skip = [
+            t for t in in_scope_dormant
+            if t not in dormant_probe
+        ]
+
     remaining = [
-        t for t in all_yf if t not in sentiment_fresh
+        t for t in all_yf
+        if t not in sentiment_fresh
+        and t not in dormant_skip
     ]
 
     learning_full = [
         t for t in remaining
         if ticker_history_days.get(t, 0) < 10
+        and t not in dormant_probe
     ]
     hot = [
         t for t in remaining
-        if t in hot_tickers and t not in learning_full
+        if t in hot_tickers
+        and t not in learning_full
+        and t not in dormant_probe
     ]
     cold = [
         t for t in remaining
         if t not in hot_tickers
         and t not in learning_full
+        and t not in dormant_probe
     ]
 
     # Cap learning at top-N by market cap. The rest
@@ -1000,17 +1082,38 @@ def execute_run_sentiment(
     learning_cut = []
     if len(learning_full) > _LEARNING_CAP:
         try:
+            # market_cap lives in company_info (Iceberg),
+            # NOT in stock_registry (PG). Pulling from
+            # registry alone gave 0 for every ticker, so
+            # the "top-N by market cap" sort collapsed to
+            # alphabetical order — picking obscure
+            # A-prefixed small-caps with no news. Read
+            # directly from company_info instead.
             mcap_by_yf: dict[str, float] = {}
-            for t, row in registry.items():
-                yf_t = yf_map.get(t, t)
-                mc = row.get("market_cap") or 0
-                try:
-                    mcap_by_yf[yf_t] = max(
-                        mcap_by_yf.get(yf_t, 0.0),
-                        float(mc),
-                    )
-                except (TypeError, ValueError):
-                    pass
+            try:
+                mcap_df = query_iceberg_df(
+                    "stocks.company_info",
+                    "SELECT ticker, market_cap "
+                    "FROM company_info "
+                    "WHERE market_cap IS NOT NULL "
+                    "AND market_cap > 0",
+                )
+                if not mcap_df.empty:
+                    for _, r in mcap_df.iterrows():
+                        try:
+                            mcap_by_yf[
+                                str(r["ticker"])
+                            ] = float(r["market_cap"])
+                        except (TypeError, ValueError):
+                            pass
+            except Exception:
+                _logger.warning(
+                    "[batch-sentiment] market_cap "
+                    "lookup failed — alphabetical "
+                    "fallback",
+                    exc_info=True,
+                )
+
             learning_sorted = sorted(
                 learning_full,
                 key=lambda t: mcap_by_yf.get(t, 0.0),
@@ -1040,7 +1143,8 @@ def execute_run_sentiment(
         "[batch-sentiment] Classification: "
         "%d fresh (skip), %d hot, %d learning "
         "(kept=%d cut=%d), %d cold "
-        "(%d trickle + %d fallback)",
+        "(%d trickle + %d fallback), "
+        "%d dormant (%d skip + %d probe)",
         len(to_skip),
         len(hot),
         len(learning_full),
@@ -1049,21 +1153,25 @@ def execute_run_sentiment(
         len(cold),
         len(trickle),
         len(cold_skip),
+        len(in_scope_dormant),
+        len(dormant_skip),
+        len(dormant_probe),
     )
 
-    # ── Step 3: Score hot + learning + trickle ────────
-    # 15 workers — headline fetch is I/O bound (3 HTTP
-    # calls per ticker). No per-ticker PG progress
-    # updates (single update at the end).
+    # ── Step 3: Score hot + learning + trickle + probe
+    # 5 workers — headline fetch is I/O bound but Yahoo
+    # / Google rate-limit aggressively above ~5 parallel
+    # connections. Combined with dormancy reducing total
+    # per-ticker calls, throughput is unchanged.
     t_start = time.monotonic()
-    check_tickers = hot + learning + trickle
+    check_tickers = hot + learning + trickle + dormant_probe
     done = len(to_skip)  # Already scored today.
     errors: list[str] = []
     cancelled = False
 
     if check_tickers:
         with ThreadPoolExecutor(
-            max_workers=15,
+            max_workers=5,
         ) as pool:
             future_map = {
                 pool.submit(
@@ -1118,30 +1226,47 @@ def execute_run_sentiment(
     # nothing and refresh_sentiment didn't insert.
     if not cancelled:
         try:
-            # CRITICAL: invalidate the DuckDB metadata
-            # cache before re-querying. The thread pool
-            # inserted via PyIceberg; without this, the
-            # "scored_today" query returns a stale
-            # snapshot and every ticker looks unscored,
-            # causing ``done`` to double-count as the
-            # fallback insert re-covers them.
-            from backend.db.duckdb_engine import (
-                invalidate_metadata,
+            # Re-query "scored today" directly via
+            # PyIceberg + SQLite catalog rather than
+            # DuckDB. DuckDB resolves the latest
+            # snapshot via filesystem glob, which under
+            # concurrent commits can return a path whose
+            # referenced manifests aren't yet visible —
+            # producing an empty result and wiping the
+            # finbert rows the workers JUST wrote. The
+            # SQLite catalog is atomically updated per
+            # commit, so it always reflects truth.
+            from pyiceberg.expressions import (
+                EqualTo,
             )
 
-            invalidate_metadata(
+            tbl = stock_repo._load_table(
                 "stocks.sentiment_scores",
             )
-            scored_df = query_iceberg_df(
-                "stocks.sentiment_scores",
-                "SELECT DISTINCT ticker "
-                "FROM sentiment_scores "
-                "WHERE score_date = CURRENT_DATE",
+            tbl.refresh()
+            scored_df = (
+                tbl.scan(
+                    row_filter=EqualTo(
+                        "score_date", today,
+                    ),
+                    selected_fields=("ticker",),
+                )
+                .to_pandas()
             )
             scored_today = (
                 set(scored_df["ticker"].tolist())
                 if not scored_df.empty
                 else set()
+            )
+
+            # Also invalidate DuckDB cache so any LATER
+            # readers (dashboards, other tools) see the
+            # fresh snapshot.
+            from backend.db.duckdb_engine import (
+                invalidate_metadata,
+            )
+            invalidate_metadata(
+                "stocks.sentiment_scores",
             )
             unscored = [
                 t for t in all_yf
@@ -1191,8 +1316,12 @@ def execute_run_sentiment(
                         ),
                     }
                 )
-                # Upsert: delete old rows for these
-                # tickers on today, then bulk append.
+                # Upsert: delete old fallback/none rows
+                # for these tickers on today, then bulk
+                # append. The source filter is critical
+                # — without it a force-run that re-batches
+                # selections clobbers real finbert/llm
+                # rows from earlier today.
                 from pyiceberg.expressions import (
                     And,
                     EqualTo,
@@ -1211,6 +1340,11 @@ def execute_run_sentiment(
                             EqualTo(
                                 "score_date",
                                 today,
+                            ),
+                            In(
+                                "source",
+                                ["market_fallback",
+                                 "none"],
                             ),
                         ),
                     )
@@ -2437,6 +2571,167 @@ def execute_run_recommendation_outcomes(
                 exc,
             )
             errors.append(str(exc)[:200])
+
+    _finalize_run(
+        repo, run_id, done, total,
+        errors, cancelled,
+        started_at=_run_start,
+    )
+
+
+# ──────────────────────────────────────────────────────
+# Iceberg maintenance — daily compaction
+# ──────────────────────────────────────────────────────
+
+
+# Tables that grow rapidly through per-ticker writes
+# and benefit most from daily compaction.
+_HOT_ICEBERG_TABLES = (
+    "stocks.ohlcv",
+    "stocks.sentiment_scores",
+    "stocks.company_info",
+    "stocks.analysis_summary",
+)
+
+
+@register_job("iceberg_maintenance")
+def execute_iceberg_maintenance(
+    scope: str,
+    run_id: str,
+    repo,
+    cancel_event=None,
+    force: bool = False,
+) -> None:
+    """Compact hot Iceberg tables to keep parquet
+    file count bounded.
+
+    Per-ticker writes (especially OHLCV daily refresh
+    and sentiment per-ticker upserts) create one tiny
+    parquet per (ticker, write). Without compaction
+    this balloons to 10k+ files within weeks, slowing
+    every read and making delete operations
+    pathologically slow (16K-file scan to find NaN
+    rows took the ``Clean NaN Rows`` button several
+    minutes).
+
+    Each ``compact_table`` call reads the table via
+    DuckDB then ``overwrite()`` writes back as one
+    file per partition. Reads stay fast; old parquets
+    become orphans cleaned up by ``cleanup_orphans``.
+
+    Idempotent — re-running on a freshly-compacted
+    table is a near-no-op (still rewrites, but the
+    output has the same shape).
+    """
+    from backend.maintenance.backup import run_backup
+    from backend.maintenance.iceberg_maintenance import (
+        cleanup_orphans,
+        compact_table,
+        expire_snapshots,
+    )
+
+    _run_start = datetime.now(timezone.utc)
+    # +1 for the backup step counted in `total`/`done`.
+    total = len(_HOT_ICEBERG_TABLES) + 1
+    done = 0
+    errors: list[str] = []
+    cancelled = False
+
+    _logger.info(
+        "[maint] Starting daily Iceberg maintenance "
+        "(backup + %d hot tables)",
+        len(_HOT_ICEBERG_TABLES),
+    )
+
+    # Step 0: backup BEFORE any maintenance writes.
+    # CLAUDE.md hard rule: "Always run_backup() before
+    # compaction or retention purge." run_backup()
+    # rotates to MAX_BACKUPS=2 automatically and
+    # shells to rsync (now installed in the image).
+    # Fail-closed: if backup fails we skip compaction
+    # and report the error rather than risk an
+    # unrecoverable rewrite.
+    try:
+        backup_path = run_backup()
+        _logger.info(
+            "[maint] Backup complete: %s",
+            backup_path,
+        )
+        done += 1
+        try:
+            repo.update_scheduler_run(
+                run_id, {"tickers_done": done},
+            )
+        except Exception:
+            pass
+    except Exception as exc:
+        _logger.error(
+            "[maint] Backup failed — aborting "
+            "maintenance to preserve recoverability",
+            exc_info=True,
+        )
+        errors.append(f"backup: {str(exc)[:200]}")
+        _finalize_run(
+            repo, run_id, done, total,
+            errors, cancelled,
+            started_at=_run_start,
+        )
+        return
+
+    for tbl in _HOT_ICEBERG_TABLES:
+        if cancel_event and cancel_event.is_set():
+            cancelled = True
+            break
+        try:
+            r = compact_table(tbl)
+            if "error" in r:
+                errors.append(
+                    f"{tbl}: {r['error']}",
+                )
+            else:
+                _logger.info(
+                    "[maint] %s: %d → %d files (%d "
+                    "rows, %.1fs)",
+                    tbl,
+                    r.get("before", 0),
+                    r.get("after", 0),
+                    r.get("rows", 0),
+                    r.get("elapsed_s", 0.0),
+                )
+        except Exception as exc:
+            _logger.warning(
+                "[maint] compact %s failed: %s",
+                tbl, exc,
+            )
+            errors.append(
+                f"{tbl} compact: {str(exc)[:100]}",
+            )
+
+        # Best-effort housekeeping; failures here are
+        # logged but don't fail the run.
+        try:
+            expire_snapshots(tbl)
+        except Exception:
+            _logger.debug(
+                "[maint] expire_snapshots %s failed",
+                tbl, exc_info=True,
+            )
+        try:
+            cleanup_orphans(tbl)
+        except Exception:
+            _logger.debug(
+                "[maint] cleanup_orphans %s failed",
+                tbl, exc_info=True,
+            )
+
+        done += 1
+        try:
+            repo.update_scheduler_run(
+                run_id,
+                {"tickers_done": done},
+            )
+        except Exception:
+            pass
 
     _finalize_run(
         repo, run_id, done, total,

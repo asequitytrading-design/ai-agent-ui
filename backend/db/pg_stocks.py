@@ -15,6 +15,9 @@ from backend.db.models.pipeline import (
 from backend.db.models.registry import StockRegistry
 from backend.db.models.scheduler import ScheduledJob
 from backend.db.models.scheduler_run import SchedulerRun
+from backend.db.models.sentiment_dormant import (
+    SentimentDormant,
+)
 
 log = logging.getLogger(__name__)
 
@@ -74,6 +77,129 @@ async def upsert_registry(
 
     await session.commit()
     log.info("Upserted registry: %s", ticker)
+
+
+# ── Sentiment dormancy ──────────────────────────────────
+
+
+# Capped exponential cooldown (days). Index = number of
+# consecutive empty fetches; floor 1 → 2 days, cap at 30.
+_DORMANT_COOLDOWN_DAYS = (2, 4, 8, 16, 30)
+
+
+def _compute_next_retry(
+    consecutive_empty: int,
+    *,
+    now: datetime | None = None,
+) -> datetime:
+    """Return next retry timestamp for a given streak."""
+    streak = max(1, consecutive_empty)
+    idx = min(streak - 1, len(_DORMANT_COOLDOWN_DAYS) - 1)
+    days = _DORMANT_COOLDOWN_DAYS[idx]
+    base = now or datetime.now(timezone.utc)
+    return base + timedelta(days=days)
+
+
+async def get_dormant_tickers(
+    session: AsyncSession,
+) -> set[str]:
+    """Return tickers whose retry window hasn't lifted.
+
+    Used by ``execute_run_sentiment`` to skip per-ticker
+    headline fetches for tickers known to return zero
+    headlines.
+    """
+    now = datetime.now(timezone.utc)
+    result = await session.execute(
+        select(SentimentDormant.ticker).where(
+            SentimentDormant.next_retry_at.isnot(None),
+            SentimentDormant.next_retry_at > now,
+        )
+    )
+    return {r[0] for r in result.all()}
+
+
+async def get_dormant_eligible_for_probe(
+    session: AsyncSession,
+    limit: int | None = None,
+) -> list[str]:
+    """Dormant tickers ordered by oldest last_checked_at.
+
+    Used for the periodic re-discovery probe. Limit caps
+    the sample size; ``None`` returns all.
+    """
+    stmt = (
+        select(SentimentDormant.ticker)
+        .where(
+            SentimentDormant.next_retry_at.isnot(None),
+        )
+        .order_by(SentimentDormant.last_checked_at.asc())
+    )
+    if limit is not None and limit > 0:
+        stmt = stmt.limit(limit)
+    result = await session.execute(stmt)
+    return [r[0] for r in result.all()]
+
+
+async def record_empty_fetch(
+    session: AsyncSession,
+    ticker: str,
+) -> None:
+    """Bump consecutive_empty + reschedule next retry."""
+    now = datetime.now(timezone.utc)
+    result = await session.execute(
+        select(SentimentDormant).where(
+            SentimentDormant.ticker == ticker,
+        )
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        new_count = 1
+        row = SentimentDormant(
+            ticker=ticker,
+            consecutive_empty=new_count,
+            last_checked_at=now,
+            next_retry_at=_compute_next_retry(
+                new_count, now=now,
+            ),
+            last_headline_count=0,
+        )
+        session.add(row)
+    else:
+        row.consecutive_empty = (
+            row.consecutive_empty + 1
+        )
+        row.last_checked_at = now
+        row.next_retry_at = _compute_next_retry(
+            row.consecutive_empty, now=now,
+        )
+    await session.commit()
+
+
+async def record_successful_fetch(
+    session: AsyncSession,
+    ticker: str,
+    headline_count: int,
+) -> None:
+    """Clear dormancy state on a successful fetch."""
+    now = datetime.now(timezone.utc)
+    result = await session.execute(
+        select(SentimentDormant).where(
+            SentimentDormant.ticker == ticker,
+        )
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        # Nothing to clear; only insert if the row would
+        # carry useful diagnostics. Skip to keep table
+        # tight (we only persist when there's dormancy).
+        return
+    row.consecutive_empty = 0
+    row.last_checked_at = now
+    row.next_retry_at = None
+    row.last_headline_count = headline_count
+    row.last_seen_headlines_at = now
+    await session.commit()
 
 
 async def get_scheduled_jobs(

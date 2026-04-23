@@ -13,6 +13,7 @@ from backend.db.models.recommendation import (
 from backend.db.models.registry import StockRegistry
 from backend.db.models.scheduler import ScheduledJob
 from backend.db.models.scheduler_run import SchedulerRun
+from backend.db.models.sentiment_dormant import SentimentDormant
 from backend.db.models.stock_master import StockMaster
 from backend.db.models.stock_tag import StockTag
 from backend.db.models.user import User
@@ -31,6 +32,7 @@ __all__ = [
     "RecommendationRun",
     "ScheduledJob",
     "SchedulerRun",
+    "SentimentDormant",
     "StockMaster",
     "StockRegistry",
     "StockTag",

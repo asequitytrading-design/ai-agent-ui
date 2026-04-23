@@ -263,7 +263,54 @@ def refresh_ticker_sentiment(
             "No headlines for %s, skipping",
             ticker,
         )
+        # Persist dormancy state so the next batch can
+        # skip this ticker until its retry window lifts.
+        # Best-effort: never block scoring on a PG hiccup.
+        try:
+            from stocks.repository import (
+                _pg_session,
+                _run_pg,
+            )
+            from backend.db.pg_stocks import (
+                record_empty_fetch,
+            )
+
+            async def _empty_call():
+                async with _pg_session() as s:
+                    await record_empty_fetch(s, ticker)
+
+            _run_pg(_empty_call)
+        except Exception:
+            _logger.debug(
+                "record_empty_fetch failed for %s",
+                ticker, exc_info=True,
+            )
         return None
+
+    # Headlines came in — clear any prior dormancy. Best-
+    # effort; do this BEFORE scoring so dormancy is
+    # cleared even if scoring fails downstream.
+    try:
+        from stocks.repository import (
+            _pg_session,
+            _run_pg,
+        )
+        from backend.db.pg_stocks import (
+            record_successful_fetch,
+        )
+
+        async def _ok_call():
+            async with _pg_session() as s:
+                await record_successful_fetch(
+                    s, ticker, len(headlines),
+                )
+
+        _run_pg(_ok_call)
+    except Exception:
+        _logger.debug(
+            "record_successful_fetch failed for %s",
+            ticker, exc_info=True,
+        )
 
     # Score with provenance (finbert / llm / none).
     avg, score_source = score_headlines_with_source(
