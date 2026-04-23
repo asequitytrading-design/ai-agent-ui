@@ -266,10 +266,17 @@ export interface PortfolioMetrics {
   worst_day_date: string;
 }
 
+export interface StalePriceTicker {
+  ticker: string;
+  last_valid_close_date: string;
+  days_stale: number;
+}
+
 export interface PortfolioPerformanceResponse {
   data: PortfolioDailyPoint[];
   metrics: PortfolioMetrics | null;
   currency: string;
+  stale_tickers: StalePriceTicker[];
 }
 
 export interface PortfolioForecastPoint {
@@ -582,6 +589,7 @@ export interface PortfolioNewsResponse {
   portfolio_sentiment_label: string;
   market_sentiment: number;
   market_sentiment_label: string;
+  unanalyzed_tickers: string[];
 }
 
 export interface Recommendation {

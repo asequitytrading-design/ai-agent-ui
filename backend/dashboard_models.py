@@ -287,12 +287,29 @@ class PortfolioMetrics(BaseModel):
     worst_day_date: str
 
 
+class StalePriceTicker(BaseModel):
+    """A held ticker whose latest valid close is older
+    than the portfolio series' last date.
+
+    Surfaced to the UI so users know which holdings are
+    being valued at their previous close rather than
+    today's settled price.
+    """
+
+    ticker: str
+    last_valid_close_date: str
+    days_stale: int
+
+
 class PortfolioPerformanceResponse(BaseModel):
     data: list[PortfolioDailyPoint] = Field(
         default_factory=list,
     )
     metrics: PortfolioMetrics | None = None
     currency: str = "USD"
+    stale_tickers: list[StalePriceTicker] = Field(
+        default_factory=list,
+    )
 
 
 # ----------------------------------------------------------
@@ -333,6 +350,14 @@ class PortfolioNewsResponse(BaseModel):
     portfolio_sentiment_label: str = "Neutral"
     market_sentiment: float = 0.0
     market_sentiment_label: str = "Neutral"
+    # Tickers whose latest sentiment row is the
+    # market-wide fallback (no per-ticker headlines
+    # were scored). Surfaced as a transparency chip
+    # so users see when the aggregate is being
+    # dominated by an undifferentiated proxy score.
+    unanalyzed_tickers: list[str] = Field(
+        default_factory=list,
+    )
 
 
 class Recommendation(BaseModel):
