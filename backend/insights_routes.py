@@ -243,6 +243,45 @@ def _sector_for_ticker(
     return _safe_str(match.iloc[-1].get("sector"))
 
 
+def _compute_peg(
+    pe: float | None,
+    earnings_growth: float | None,
+) -> float | None:
+    """Compute trailing PEG from PE and TTM YoY growth.
+
+    Undefined for loss-makers (PE<=0) or declining
+    earnings (growth<=0) — returns None in those cases
+    rather than a misleading negative or huge number.
+    """
+    if pe is None or pe <= 0:
+        return None
+    if earnings_growth is None or earnings_growth <= 0:
+        return None
+    return round(pe / (earnings_growth * 100.0), 3)
+
+
+def _peg_for_ticker(
+    ticker: str,
+    company_df: pd.DataFrame,
+) -> tuple[float | None, float | None]:
+    """Return (peg_ratio_computed, peg_ratio_yf)."""
+    if company_df.empty or "ticker" not in company_df:
+        return (None, None)
+    match = company_df[company_df["ticker"] == ticker]
+    if match.empty:
+        return (None, None)
+    row = match.iloc[-1]
+    pe = _safe(row.get("pe_ratio"))
+    eg = _safe(row.get("earnings_growth"))
+    # peg_ratio_yf only present post schema evolution —
+    # returns None for legacy rows via DataFrame.get()
+    # guard.
+    yf_val = None
+    if "peg_ratio_yf" in match.columns:
+        yf_val = _safe(row.get("peg_ratio_yf"))
+    return (_compute_peg(pe, eg), yf_val)
+
+
 def _collect_sectors(
     company_df: pd.DataFrame,
     tickers: list[str],
@@ -465,6 +504,14 @@ def create_insights_router() -> APIRouter:
                         row.get("annualized_volatility_pct")
                     ),
                     sharpe_ratio=_safe(row.get("sharpe_ratio")),
+                    **dict(
+                        zip(
+                            ("peg_ratio", "peg_ratio_yf"),
+                            _peg_for_ticker(
+                                t, company_df,
+                            ),
+                        ),
+                    ),
                     sector=_sector_for_ticker(
                         t,
                         company_df,

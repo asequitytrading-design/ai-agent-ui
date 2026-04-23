@@ -95,6 +95,14 @@ FIELD_CATALOG: dict[str, FieldDef] = {
         "ci", "pe_ratio", FieldType.NUMBER,
         "P/E Ratio", "Valuation",
     ),
+    "peg_ratio": FieldDef(
+        "ci", "peg_ratio", FieldType.NUMBER,
+        "PEG (trailing)", "Valuation",
+    ),
+    "peg_ratio_yf": FieldDef(
+        "ci", "peg_ratio_yf", FieldType.NUMBER,
+        "PEG (yfinance)", "Valuation",
+    ),
     "price_to_book": FieldDef(
         "ci", "price_to_book", FieldType.NUMBER,
         "Price/Book", "Valuation",
@@ -589,6 +597,20 @@ _CTE_TEMPLATES: dict[str, str] = {
         "      OR ticker LIKE '%.BO'\n"
         "      THEN 'india' ELSE 'us'\n"
         "    END AS market,\n"
+        # PEG = P/E divided by growth%. Undefined for
+        # loss-makers (pe_ratio<=0) or declining-
+        # earnings stocks (earnings_growth<=0) — they
+        # return NULL rather than a garbage value.
+        "    CASE\n"
+        "      WHEN pe_ratio IS NULL\n"
+        "        OR pe_ratio <= 0\n"
+        "        THEN NULL\n"
+        "      WHEN earnings_growth IS NULL\n"
+        "        OR earnings_growth <= 0\n"
+        "        THEN NULL\n"
+        "      ELSE pe_ratio\n"
+        "        / (earnings_growth * 100.0)\n"
+        "    END AS peg_ratio,\n"
         "    ROW_NUMBER() OVER (\n"
         "      PARTITION BY ticker\n"
         "      ORDER BY fetched_at DESC\n"

@@ -28,6 +28,14 @@ class ScreenerRow(BaseModel):
     annualized_return_pct: float | None = None
     annualized_volatility_pct: float | None = None
     sharpe_ratio: float | None = None
+    # PEG (Price/Earnings-to-Growth). Two sources:
+    # `peg_ratio` is computed from our own pe_ratio /
+    # earnings_growth; `peg_ratio_yf` is captured raw
+    # from yfinance's `pegRatio` (forward-looking,
+    # analyst-consensus-driven). Both null when
+    # earnings are negative or growth is <= 0.
+    peg_ratio: float | None = None
+    peg_ratio_yf: float | None = None
     sector: str | None = None
     market: str = "us"
     tags: list[str] = Field(default_factory=list)

@@ -310,6 +310,8 @@ export interface ScreenerRow {
   annualized_return_pct: number | null;
   annualized_volatility_pct: number | null;
   sharpe_ratio: number | null;
+  peg_ratio: number | null;
+  peg_ratio_yf: number | null;
   sector: string | null;
   market: string;
   tags: string[];

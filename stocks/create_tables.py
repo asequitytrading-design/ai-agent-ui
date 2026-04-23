@@ -1845,6 +1845,34 @@ def evolve_quarterly_results_schema() -> None:
     )
 
 
+def evolve_company_info_peg_yf() -> None:
+    """Add ``peg_ratio_yf`` to ``company_info`` if missing.
+
+    Captures yfinance's own ``pegRatio`` (or
+    ``trailingPegRatio``) — forward-looking, analyst-
+    consensus-driven — alongside our trailing PEG
+    computed from ``pe_ratio / earnings_growth``.
+    Idempotent: no-op when the column already exists.
+    """
+    catalog = _get_catalog()
+    tbl = catalog.load_table(_COMPANY_INFO_TABLE)
+    existing = {f.name for f in tbl.schema().fields}
+    if "peg_ratio_yf" in existing:
+        _logger.info(
+            "company_info already has peg_ratio_yf — "
+            "skipping evolution."
+        )
+        return
+    with tbl.update_schema() as update:
+        update.add_column(
+            path="peg_ratio_yf",
+            field_type=DoubleType(),
+        )
+    _logger.info(
+        "Evolved company_info schema: added peg_ratio_yf"
+    )
+
+
 if __name__ == "__main__":
     import os
 
