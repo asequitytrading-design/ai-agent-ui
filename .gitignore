@@ -86,3 +86,6 @@ backend/data/
 .lighthouseci/
 .playwright-mcp/
 .superpowers/
+
+# Playwright default artifact dir (screenshots, videos, traces)
+test-results/
