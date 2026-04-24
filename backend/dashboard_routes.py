@@ -305,6 +305,48 @@ def create_dashboard_router() -> APIRouter:
         if df.empty:
             return ForecastsResponse()
 
+        # Batch-fetch latest non-NaN close per ticker so
+        # the widget can show today's price alongside the
+        # forecast-time anchor (`current_price_at_run`).
+        # One DuckDB query beats N per-ticker Iceberg
+        # reads (CLAUDE.md hard rule #1).
+        latest_close_map: dict[str, float] = {}
+        try:
+            from backend.db.duckdb_engine import (
+                query_iceberg_df,
+            )
+
+            run_tickers = [
+                str(t) for t in df["ticker"].unique()
+            ]
+            ph = ",".join(
+                f"'{t}'" for t in run_tickers
+            )
+            if ph:
+                close_df = query_iceberg_df(
+                    "stocks.ohlcv",
+                    "SELECT ticker, close "
+                    "FROM ohlcv "
+                    f"WHERE ticker IN ({ph}) "
+                    "AND close IS NOT NULL "
+                    "AND NOT isnan(close) "
+                    "QUALIFY ROW_NUMBER() OVER ("
+                    "PARTITION BY ticker "
+                    "ORDER BY date DESC) = 1",
+                )
+                if not close_df.empty:
+                    latest_close_map = {
+                        str(r["ticker"]): float(
+                            r["close"]
+                        )
+                        for _, r in close_df.iterrows()
+                    }
+        except Exception:
+            _logger.debug(
+                "latest_close batch fetch failed",
+                exc_info=True,
+            )
+
         forecasts: list[TickerForecast] = []
         for _, row in df.iterrows():
             targets: list[ForecastTarget] = []
@@ -356,6 +398,9 @@ def create_dashboard_router() -> APIRouter:
                     ticker=str(row["ticker"]),
                     run_date=str(row.get("run_date", "")),
                     current_price=float(row.get("current_price_at_run", 0)),
+                    latest_close=latest_close_map.get(
+                        str(row["ticker"]),
+                    ),
                     sentiment=str(row.get("sentiment", "")) or None,
                     targets=targets,
                     mae=_safe(row.get("mae")),

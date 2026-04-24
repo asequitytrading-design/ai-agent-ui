@@ -45,6 +45,7 @@ export interface TickerForecast {
   ticker: string;
   run_date: string;
   current_price: number;
+  latest_close: number | null;
   sentiment: string | null;
   targets: ForecastTarget[];
   mae: number | null;
