@@ -2028,16 +2028,31 @@ function ScreenQLTab() {
   const textareaRef =
     useRef<HTMLTextAreaElement>(null);
 
-  // Fetch field catalog once
+  // Fetch field catalog once — uses apiFetch for
+  // consistency with the sibling /screen POST below
+  // and in case this endpoint is ever put behind auth
+  // (CLAUDE.md Rule 14: apiFetch, not fetch).
   useEffect(() => {
-    const url = `${
-      process.env.NEXT_PUBLIC_BACKEND_URL ??
-      "http://localhost:8181"
-    }/v1/insights/screen/fields`;
-    fetch(url)
-      .then((r) => r.json())
-      .then((d) => setFields(d.fields ?? []))
-      .catch(() => {});
+    (async () => {
+      try {
+        const { apiFetch } = await import(
+          "@/lib/apiFetch"
+        );
+        const API_URL = `${
+          process.env.NEXT_PUBLIC_BACKEND_URL ??
+          "http://localhost:8181"
+        }/v1`;
+        const res = await apiFetch(
+          `${API_URL}/insights/screen/fields`,
+        );
+        if (!res.ok) return;
+        const d = await res.json();
+        setFields(d.fields ?? []);
+      } catch {
+        // Swallow — catalog is optional enrichment;
+        // screener still works without it.
+      }
+    })();
   }, []);
 
   // Auto-run if URL has ?q= param
