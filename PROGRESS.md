@@ -2,6 +2,35 @@
 
 ---
 
+## 2026-04-25 — Sprint 8 ASETPLTFRM-338 phase 1-3: orphan-parquet sweep impl + tests + analysis_summary swept
+
+**Scope**: implement the safe orphan-parquet sweep designed in `shared/architecture/iceberg-orphan-sweep-design`; ship clean impl + 17 tests; sweep `stocks.analysis_summary` end-to-end as the lowest-risk validation.
+
+### ASETPLTFRM-338 (5 SP, in progress) — `cleanup_orphans_v2()`
+
+- New `cleanup_orphans_v2()` in `backend/maintenance/iceberg_maintenance.py` (210 lines): 9-step algorithm — fail-closed backup → real `tbl.maintenance.expire_snapshots().by_ids(...).commit()` (PyIceberg 0.11.1) → referenced-set union of `inspect.all_files()` + `inspect.all_manifests()` + `snapshot.manifest_list` for every retained snapshot + catalog `metadata_location` pointer + last (N+5) `*.metadata.json` chain → walk parquet/avro/metadata.json → mtime grace filter → paranoid catalog-pointer assertion → unlink → read-verify scan.
+- `_normalize_uri()` + `_read_catalog_metadata_location()` helpers. Catalog DB read directly from `~/.ai-agent-ui/data/iceberg/catalog.db` (sqlite). `DEFAULT_CATALOG_DB` constant patchable for tests.
+- Existing `cleanup_orphans()` and `expire_snapshots()` left as no-op fallbacks (acceptance criteria — backwards-compat). Old expire's dead `keep_ids` removed (was flake8 F841).
+- 17 unit tests in `tests/backend/test_iceberg_orphan_sweep.py`: backup-fail-closed, referenced-files-survive, dry-run-no-unlink, mtime-grace, expire-with-oldest-ids, no-expire-under-threshold, read-verify-fail-recorded, no-catalog-pointer-refuses, invalid-retain-input, metadata-chain-kept, **snapshot.manifest_list-kept** (regression — see below), helper unit tests for `_normalize_uri` (3) + `_read_catalog_metadata_location` (2).
+- **Bug found in flight + captured as regression**: `inspect.all_manifests()` returns data manifests (`{uuid}-m0.avro`) but NOT per-snapshot manifest LIST files (`snap-{snapshot_id}-{seq}-{uuid}.avro`). The latter is referenced by `snapshot.manifest_list` and is the FIRST file `tbl.scan()` opens. First sweep pass left the table unreadable until backup restore. Fix: explicit loop over `tbl.metadata.snapshots` to reference `snap.manifest_list`. New test `test_snapshot_manifest_list_files_kept_in_referenced` locks the behaviour. Recovery time: ~30s (rsync from same-day backup).
+
+### Phase 3 results — `stocks.analysis_summary`
+
+- Pre-sweep: 938 MB, 7964 files, 1631 retained snapshots
+- Post-sweep: **3.5 MB, 25 files, 5 snapshots** (−99.6% disk, −99.7% files)
+- Backup duration: 78s (rsync incremental)
+- Sweep duration: 24.8s end-to-end (incl. backup)
+- 7939 orphans deleted, 964 MB reclaimed
+- PyIceberg scan + DuckDB count + dashboard endpoints all 200/sub-2ms after
+
+### Phase 4-5 (deferred to next batch)
+
+- Phase 4: rollout to `company_info` → `sentiment_scores` → `ohlcv` (size order). Each gets a fresh backup. ~10-12 GB reclaim total expected (96-100% orphan ratio per design memory baseline).
+- Phase 5: weekly `iceberg_orphan_sweep` job in `public.scheduled_jobs` (Sun 03:00 IST), gated on day's `iceberg_maintenance` success.
+- Phase 6: docs + CLAUDE.md Rule 20 amendment + Jira closure.
+
+---
+
 ## 2026-04-24 / 25 — Sprint 8 closure push: 325-328, 334, 335, 336, 337
 
 **Scope**: drain the Sprint-7 follow-up debt (325-328), ship the LCP <2s story (334), fix two production observations the user spotted while reviewing data (335 forecast widget, 336 NIFTYBEES gap, 337 backup TZ).
