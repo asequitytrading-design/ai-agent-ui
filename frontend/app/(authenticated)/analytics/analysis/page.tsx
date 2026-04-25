@@ -754,6 +754,15 @@ function ForecastTab({
             ))}
           </div>
         </div>
+        {/* Suspense boundary so the chart's hydration
+            cost (Plotly init + dataset processing,
+            historically 6-7s on this tab) doesn't
+            block hydration of the rest of the route.
+            React 19 streams the surrounding tree in;
+            the chart resolves into the boundary as
+            its dynamic chunk arrives. (ASETPLTFRM-334
+            phase B) */}
+        <Suspense fallback={<ChartSkeleton h="h-[550px]" />}>
         <ForecastChart
           historicalDates={
             ohlcv?.data.map((d) => d.date) ?? []
@@ -795,6 +804,7 @@ function ForecastTab({
           height={550}
           onCrosshairMove={handleFcMove}
         />
+        </Suspense>
       </div>
 
       {/* Forecast target cards */}
@@ -1758,6 +1768,9 @@ function PortfolioForecastTab({
             </div>
           </div>
         </div>
+        {/* See ForecastChart Suspense above —
+            same rationale (ASETPLTFRM-334 phase B). */}
+        <Suspense fallback={<ChartSkeleton h="h-[480px]" />}>
         <PortfolioForecastChart
           perfData={perf?.data ?? []}
           forecastData={truncated.data}
@@ -1770,6 +1783,7 @@ function PortfolioForecastTab({
           )}
           onCrosshairMove={handleFcCrosshair}
         />
+        </Suspense>
       </div>
 
       {/* Summary cards — 4 with explainability */}
