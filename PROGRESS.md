@@ -56,6 +56,42 @@ Pre-A.4 dashboard LCP baseline: **4744 ms**. Local SSR timing post-A.4: dev serv
 ### ASETPLTFRM-341 (3 SP, planned) — Sprint 9 candidate from 328 follow-up (compaction)
 - Iceberg orphan-parquet sweep. `compact_table` correctly writes a new snapshot referencing ~817 live files, but `tbl.overwrite()` leaves the prior parquets on disk. Today's count: ohlcv 20 241 parquets vs 817 referenced (96% orphans). `cleanup_orphans` only removes empty dirs by design. Implement a real sweep: list every `*.parquet` under the warehouse, compare to the union of files referenced by the last N retained snapshots, `unlink` the rest. Backup-before, fail-closed.
 
+### Late-session additions (2026-04-25 evening)
+
+**ASETPLTFRM-334 hotfix — proxy.ts legacy-session compat (`e33172d`)**
+
+Phase A.2 proxy checked only the new `access_token` cookie — pre-A.1 sessions only had `refresh_token` + localStorage access token. Loop: `/dashboard` → proxy: no access_token → `/login`; React reads localStorage → `/dashboard`; repeat. Fix: proxy treats *either* cookie as authenticated; first XHR refreshes and lands the new access cookie automatically. Verified all 4 cookie permutations (none, refresh-only legacy, refresh-only on /login, both).
+
+**Dead Iceberg-table cleanup (`c0447dc`)**
+
+Three tables dropped from the catalog via the ASETPLTFRM-328-hardened `drop_dead_tables()`:
+- `stocks.scheduler_runs` — migrated to PG in Sprint 4, Iceberg shell catalog-only
+- `stocks.scheduled_jobs` — same
+- `stocks.technical_indicators` — scaffolded for persisted RSI/MACD/SMA but design moved to compute-on-demand via `tools/_analysis_indicators.py`. 86 orphan metadata.json files cleaned up.
+
+The `technical_indicators` `_create_table` block also removed from `stocks/create_tables.py` so `_ensure_iceberg_tables()` doesn't resurrect it on backend startup. PG `public.scheduler_runs` (104 kB) + `public.scheduled_jobs` (8 kB) untouched. Active Iceberg tables: 19 → 16. Backup-before via `run_backup()` (fail-closed) preserved.
+
+**ASETPLTFRM-338 filed for next session (5 SP)**
+
+Iceberg orphan-parquet sweep, due 2026-04-29. Investigation findings:
+- PyIceberg 0.11.1 has a real `tbl.maintenance.expire_snapshots()` API (the `iceberg_maintenance.py` "no-op" comment is **outdated**)
+- `tbl.inspect.all_files()` is the authoritative referenced-set across retained snapshots
+- Past failure mode (CLAUDE.md Rule 20): `rm` of the catalog's `metadata_location` (absolute path in SQLite) — not all metadata files
+
+Safe algorithm: backup → `expire_snapshots().by_ids(old).commit()` → compute referenced set (`all_files()` ∪ `all_manifests()` ∪ catalog pointer ∪ last K metadata.json) → walk on-disk → mtime grace 30 min → paranoid catalog-pointer assertion → unlink → `tbl.scan(limit=1)` verify. Phased rollout: synthetic tests → `analysis_summary` dry-run → `company_info` → `sentiment_scores` → `ohlcv` → weekly schedule. Estimated reclaim: ~10-12 GB / ~50K orphan files. Full design in `shared/architecture/iceberg-orphan-sweep-design`.
+
+**Stragglers transitioned to Done**
+
+ASETPLTFRM-330 (containerized Lighthouse) and ASETPLTFRM-331 (bundle + LCP/FCP/CLS fixes) had been left In Progress yesterday despite shipping — closed today with full shipping-comments referencing commits + audit numbers + serena memories.
+
+**End-of-session checkpoint (`fde31dc`, `57f6853`)**
+
+- `project_sprint8_in_progress` (auto-memory) rewritten as closure-state
+- `shared/architecture/cookie-auth-rsc-pattern` — Phase A four-piece pattern documented
+- `shared/architecture/iceberg-orphan-sweep-design` — ASETPLTFRM-338 design with PyIceberg API surface
+- 3 perf debugging shared memories from today's investigation
+- `MEMORY.md` index updated
+
 ---
 
 ## 2026-04-23 / 24 — Sprint 8: Perf Infra + Bundle + LCP/FCP/CLS (ASETPLTFRM-330, 331)

@@ -1,7 +1,7 @@
 # Project Index: AI Agent UI
 
 > AI-agent-optimised codebase map. For human onboarding, see `docs/`.
-> Last refreshed: 2026-04-23 (Sprint 8 in-progress — 15/39 SP Done: PEG ratio 3-variant (T/YF/Q) in Screener + ScreenQL [332], user-pickable column selector with 39 fields across 7 categories [333], TS build-break fixes unblocking `next build` [329]. Sprint 7 closed 75/75 SP — sentiment hardening, daily Iceberg compaction, NaN-truncation defenses, transparency chips, TZ=IST.)
+> Last refreshed: 2026-04-25 (Sprint 8 closure-state — 57 SP Done across 10 stories, 5 SP open in ASETPLTFRM-338 (Iceberg orphan-parquet sweep, due 2026-04-29). LCP <2s push (334) shipped via React Server Components + cookie-auth + Suspense — 10/34 routes hit target, 24 chart-heavy/admin routes filed for Sprint 9. Three dead Iceberg tables dropped (scheduler_runs, scheduled_jobs, technical_indicators). 25 commits ahead of origin on `feature/sprint8`.)
 
 ---
 

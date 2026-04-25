@@ -5,6 +5,72 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.13.0] — 2026-04-25: Sprint 8 — LCP <2s push, RSC + cookie auth, perf infra
+
+Sprint 8: 57 SP shipped (10 stories Done), 5 SP open (ASETPLTFRM-338 — Iceberg orphan-parquet sweep). 25 commits ahead of origin on `feature/sprint8`.
+
+### Added
+
+- **React Server Component pattern** for authenticated routes (ASETPLTFRM-334 phase A) — four-piece architecture: HttpOnly `access_token` cookie on `/v1/auth/login` (additive, JSON body unchanged) → `frontend/proxy.ts` (Next.js 16 rename of `middleware.ts`) checks cookie *presence* and gates protected routes → `frontend/lib/serverApi.ts` reads the cookie via `next/headers` and forwards as Bearer to the backend → `app/(authenticated)/dashboard/page.tsx` is now a Server Component that pre-fetches `/v1/dashboard/home` and seeds the result as `initialData` to the existing client tree (`DashboardClient.tsx`), which forwards it to SWR's `fallbackData`. First render paints with real data, no skeleton step. Pattern documented in `docs/frontend/ssr-patterns.md` (290 lines).
+- **Containerized Lighthouse 34-route audit** (ASETPLTFRM-330): `Dockerfile.perf` + `frontend-perf` service in compose `perf` profile. Playwright login → 9 base + 25 tab variants per run. `pw-lh-summary.json` aggregate output. ESM-only Lighthouse 12 dynamic-imported, page-rotation every 12 audits, `crypto.randomUUID` polyfill for the insecure-context container origin. Run: `docker compose --profile perf run --rm perf`. Docs: `docs/frontend/perf-audit.md`.
+- **`<Suspense>` boundaries** around `ForecastChart` + `PortfolioForecastChart` (ASETPLTFRM-334 phase B) — chart hydration cost no longer blocks route hydration. The `?tab=portfolio` and `?tab=portfolio-forecast` tabs hit **1515 ms LCP** (down from 3500 ms).
+- **Atomic Redis counter primitives** on `CacheService` (ASETPLTFRM-327): `incr(key, by=1, ttl=None)` and `decr(key)` via Redis pipeline `INCRBY` + `EXPIRE` as one round-trip. Replaces the GET → check → SET race in `_check_and_increment_byo_counter`. New `test_parallel_requests_never_exceed_limit` runs 200 concurrent asyncio tasks against limit=50 — exactly 50 successes, 150 × 429, final counter == 50.
+- **Backup `completed_at` field** (ASETPLTFRM-337) — `list_backups()` now stamps each entry with the directory's mtime as ISO 8601 UTC (`Z` suffix), and the admin endpoints surface it. `BackupHealthPanel.tsx` shows the IST-formatted absolute time as a tooltip on the relative-age string. Replaces the prior "hours since folder-name midnight in container TZ" age calculation that produced "9h ago" for an 18-minute-old backup.
+- **TickerForecast `latest_close` field** (ASETPLTFRM-335) — backend's `/v1/dashboard/forecasts/summary` now includes today's live close (batched DuckDB `QUALIFY ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) = 1` query, single round-trip per request). Forecast widget displays it as the primary "Current Price" with the forecast-time anchor footnoted only when they differ.
+- **`<link rel="preconnect">` + `dns-prefetch`** for the backend URL in `frontend/app/layout.tsx` (ASETPLTFRM-334 phase E) — saves ~100-200 ms TLS handshake on the first authenticated route load.
+- **`SimpleBarChart`** ECharts component (ASETPLTFRM-331): replaces `plotly.js-basic-dist` (1 MB) on Insights `?tab=sectors` (LCP 8523 → 4622 ms, −46%) and `?tab=quarterly` (8593 → 3486 ms, −59%).
+- **Bundle analysis** (ASETPLTFRM-331): `docs/frontend/bundle-analysis.md` documents top contributors and per-route LCP before/after metrics. Re-audit results from ASETPLTFRM-334 H appended.
+- **`docs/frontend/ssr-patterns.md`** (ASETPLTFRM-334 phase G) — Client vs Server Component decision tree, cookie-auth flow, edge proxy, `<Suspense>` placement, preconnect guidelines, PPR ramp. Reference table of all 9 phase commits for traceability.
+- **PEG ratio 3-variant** in Screener + ScreenQL (ASETPLTFRM-332): trailing PEG (`pe_ratio / earnings_growth`), yfinance raw PEG, quarterly PEG. Three new fields. Merged via PR #123.
+- **Per-user column selector** on Screener + ScreenQL (ASETPLTFRM-333): user-pickable display columns across 39 Screener fields + 37 ScreenQL fields. `useColumnSelection` hook persists choice in `localStorage`.
+
+### Changed
+
+- **`/dashboard/home` parallelizes its 4 sub-calls** via `asyncio.gather()` (ASETPLTFRM-334 phase D). Cold-cache cost is now bounded by `max(...)` not `sum(...)`. Wrapper TTL dropped from `VOLATILE` (60 s) to a new `TTL_HERO` (10 s).
+- **Admin endpoint caching** (ASETPLTFRM-334 phase C): `/admin/usage-stats` now caches in Redis for 30 s (was uncached, 500-1500 ms cold). `/admin/audit-log` tightened from 60 s → 30 s for consistency. Verified: usage-stats 100 ms cold → 52 ms warm; audit-log 2000 ms cold → **2.5 ms warm**.
+- **`MarkdownContent` lazy-loaded** in `MessageBubble` (ASETPLTFRM-334 phase C) — defers the ~105 KB `react-markdown` + `remark-gfm` chunk from the initial dashboard bundle.
+- **Admin tab content `min-h`** bumped 400 → 600 px (ASETPLTFRM-334 phase C) — keeps CLS ≤ 0.02 when rows fill in.
+- **`drop_dead_tables` hardened** (ASETPLTFRM-328): now runs `run_backup()` fail-closed at function entry, gates per-table `shutil.rmtree` on the catalog drop succeeding, treats `NoSuchTableError` as idempotent. Three new tests covering backup-fail abort, partial-failure dir preservation, and idempotent re-run.
+- **ScreenQL CTE market derivation** (ASETPLTFRM-326): now reads `company_info.exchange` (Yahoo's internal codes — `NSI` for NSE, `BSE`, etc.) with a `.NS`/`.BO` suffix fallback for the 13 NULL-exchange rows + Indian indices fallback for `^NSEI`/`^BSESN`/`^INDIAVIX`. Validated 866 india + 15 us, 0 misclassifications on live data. Six new tests covering each CASE branch.
+- **`apiFetch` for `/v1/insights/screen/fields`** in ScreenQL tab (ASETPLTFRM-325) — was bare `fetch()`, now uses the apiFetch wrapper for consistency. CLAUDE.md Rule 14 conformance.
+- **`next.config.ts`** — `cacheComponents: false` flag scaffolded (Next.js 16 renamed `experimental.ppr` to top-level `cacheComponents`). Currently off pending Suspense audit of remaining `new Date()`/`useTheme()` Client Components in `/dashboard`, `/analytics`, `/admin`. Activation gated by Sprint-9 candidate TBD-D.
+- **`AuthenticatedLayout` SSR unlock** (ASETPLTFRM-331, commit `8c2d1b8`) — removed the `mounted` state gate that returned a loading shell early. Single-line change dropped **10 routes** under the 2 s LCP target. Documented as `shared/architecture/auth-layout-ssr-unlock`.
+- **FCP floor collapse** (ASETPLTFRM-331) — SSR fallback in `(authenticated)/layout.tsx` was a pure-CSS border-spinner with no text/image, so Lighthouse's FCP heuristic ignored it. Replaced with a sidebar-shaped skeleton + brand text + "Loading…" label. FCP now uniform ~1515 ms across every authenticated route (was ~3450 ms — −56%).
+- **`StockChart` type-leak fix** — `analytics/analysis/page.tsx` imported a runtime const (`DEFAULT_INDICATORS`) from `StockChart.tsx`, dragging `lightweight-charts` (150 KB) into the initial bundle even though `StockChart` was already `dynamic`. Split types + constant into new `StockChart.types.ts`. Initial chunk: 292 KB → 127 KB.
+
+### Fixed
+
+- **NIFTYBEES.NS 22-Apr-2026 OHLCV gap** (ASETPLTFRM-336): the scheduled bulk fetch missed it; the delta-fetch cursor advanced past 22-Apr because yfinance returned 23-Apr as the "latest." Direct `yf.Ticker().history(start='2026-04-22', end='2026-04-23')` confirmed the vendor *does* have 22-Apr data — inserted via `repo.insert_ohlcv()`. Coverage now 817/817 tickers, 0 NaN. Operational fix only; the systemic delta-fetch gap-detection is filed as a Sprint-9 candidate.
+- **Backup health "9h ago" for an 18-min-old backup** (ASETPLTFRM-337) — see `completed_at` Added entry.
+- **Forecast widget "Current Price"** showing forecast-run snapshot (₹817 from 9 days ago) labelled as live (ASETPLTFRM-335) — backend now also returns `latest_close`; widget prefers it.
+- **Infinite redirect loop on legacy sessions** (ASETPLTFRM-334 hotfix `e33172d`) — Phase A.2 proxy.ts checked only the new `access_token` cookie, but pre-A.1 sessions only had the `refresh_token` cookie + a localStorage access token. Loop: `/dashboard` → proxy: no access_token → `/login`; `/login` → React reads localStorage → `/dashboard`; repeat. Fix: proxy now treats *either* `access_token` OR `refresh_token` cookie as authenticated. The first authenticated XHR refreshes and lands the new access_token cookie automatically.
+- **TS build-break fixes** (ASETPLTFRM-329, 6 files): unblocks `next build` across all environments.
+
+### Removed
+
+- **Three dead Iceberg tables** dropped from the catalog (commit `c0447dc`): `stocks.scheduler_runs` and `stocks.scheduled_jobs` were migrated to PostgreSQL in Sprint 4 — their Iceberg shells were catalog-only. `stocks.technical_indicators` was scaffolded for persisted RSI/MACD/SMA but the design moved to compute-on-demand from OHLCV via `backend/tools/_analysis_indicators.py` — empty Iceberg table with 86 metadata.json files accumulated from snapshot bookkeeping. Drop ran via the ASETPLTFRM-328-hardened `drop_dead_tables()` (backup-before, per-table gating, idempotent re-run safe). PG `public.scheduler_runs` (104 kB) and `public.scheduled_jobs` (8 kB) untouched. Active Iceberg tables: 19 → 16.
+- **Iceberg `technical_indicators` creation block** removed from `stocks/create_tables.py` so `_ensure_iceberg_tables()` no longer resurrects it on backend startup. The `_technical_indicators_schema()` helper is left in place for the unlikely scenario of reviving persisted indicators.
+- **Legacy `middleware.ts`** at `frontend/middleware.ts` — Next.js 16 deprecated the `middleware` file convention in favour of `proxy.ts`. Functionality preserved + extended (cookie-auth gate added).
+
+### Acceptance metric for ASETPLTFRM-334
+
+The 13 SP scope explicitly migrated only the dashboard hero to RSC. Re-audit (containerized Lighthouse, 34/34 routes, 2026-04-25):
+
+| Metric | Target | Result | Status |
+|---|---|---|:---:|
+| LCP < 2 000 ms | 34/34 | **10/34** | partial |
+| FCP ≤ 1 500 ms | 34/34 | **32/34** | mostly ✓ |
+| CLS ≤ 0.02 | 34/34 | **28/34** | partial |
+| TBT ≤ 200 ms | 34/34 | **34/34** | ✅ |
+
+10 routes hitting LCP target are all tabular pages where `FCP === LCP`. Chart-heavy and admin routes still 4-7 s — same root cause: chart hydration is the LCP element, not the hero. Five Sprint-9 follow-up candidates (TBD-A through E) itemized in `docs/frontend/bundle-analysis.md`: chart-route RSC, admin-tab RSC, sector widget RSC on `/dashboard`, `cacheComponents` activation, Prophet forecast chart re-implementation.
+
+### Open carry-over to next session
+
+- **ASETPLTFRM-338** (5 SP, Story, due 2026-04-29) — Iceberg orphan-parquet sweep. Current state: 96-100% of on-disk parquets are orphans (live snapshot references 817 / 22 722 for ohlcv). PyIceberg 0.11.1 verified to ship `tbl.maintenance.expire_snapshots()` (the current "no-op" comment in code is outdated). Safe algorithm + risk matrix in ticket description and `shared/architecture/iceberg-orphan-sweep-design`. Phased rollout: synthetic tests → `analysis_summary` dry-run → `company_info` → `sentiment_scores` → `ohlcv` → weekly schedule. Estimated reclaim: 10-12 GB disk + ~50K orphan files.
+
+---
+
 ## [0.12.0] — 2026-04-23: Sprint 7 Closure — Sentiment Hardening, Iceberg Pipeline Integration, Portfolio Transparency
 
 Sprint 7 closed at **75/75 SP (100%)**. ASETPLTFRM-324 (BYOM) + ASETPLTFRM-323 (Pro role) marked Done. ~30 SP of follow-up work landed as comments on parent tickets (320, 315, 316, 319).
