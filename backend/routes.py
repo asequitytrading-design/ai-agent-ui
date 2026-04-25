@@ -3342,30 +3342,37 @@ def create_app(
             from pathlib import Path
 
             bp = Path(b["path"])
-            # Suffix-tolerant date parsing — backup
-            # dirs may carry custom suffixes like
-            # `backup-2026-04-22-pre-dedupe` from
-            # manual maintenance ops. Try ISO date
-            # parse on the first 10 chars; fall back
-            # to the directory mtime if that fails so
-            # a non-standard name never 500s the API.
-            dt = None
-            try:
-                dt = datetime.fromisoformat(
-                    b["date"][:10],
-                )
-            except Exception:
-                pass
-            if dt is None:
+            # Age is computed from the directory's
+            # actual completion time (mtime), not from
+            # the date-folder name's midnight — naive
+            # parsing of "2026-04-25" interpreted in
+            # local TZ caused "9h ago" at 09:00 IST
+            # for a backup taken 1.5h earlier.
+            # `list_backups` exposes mtime as the UTC
+            # ISO string `completed_at`; fall back to
+            # a fresh stat() if the upstream caller
+            # didn't populate it.
+            completed_iso = b.get("completed_at")
+            completed_epoch = None
+            if completed_iso:
                 try:
-                    dt = datetime.fromtimestamp(
-                        bp.stat().st_mtime,
+                    completed_epoch = (
+                        datetime.fromisoformat(
+                            completed_iso.replace(
+                                "Z", "+00:00",
+                            ),
+                        ).timestamp()
                     )
                 except Exception:
-                    dt = datetime.fromtimestamp(now)
-            age_h = (
-                now - dt.timestamp()
-            ) / 3600
+                    pass
+            if completed_epoch is None:
+                try:
+                    completed_epoch = (
+                        bp.stat().st_mtime
+                    )
+                except Exception:
+                    completed_epoch = now
+            age_h = (now - completed_epoch) / 3600
             b["age_hours"] = round(age_h, 1)
             b["has_catalog"] = (
                 bp / "catalog.db"
@@ -3410,24 +3417,32 @@ def create_app(
 
         bp = Path(latest["path"])
         now_ = __import__("time").time()
-        # Same suffix-tolerant parsing as
-        # _admin_backups_list — fall back to dir mtime
-        # if the suffix breaks fromisoformat.
-        dt = None
-        try:
-            dt = datetime.fromisoformat(
-                latest["date"][:10],
-            )
-        except Exception:
-            pass
-        if dt is None:
+        # Pull the actual mtime-based completion time
+        # from list_backups — the prior implementation
+        # parsed the folder-name date as naive midnight
+        # which gave "9h ago" at 09:00 IST for a backup
+        # taken 1.5h earlier (ASETPLTFRM-337).
+        completed_iso = latest.get("completed_at")
+        completed_epoch = None
+        if completed_iso:
             try:
-                dt = datetime.fromtimestamp(
-                    bp.stat().st_mtime,
+                completed_epoch = (
+                    datetime.fromisoformat(
+                        completed_iso.replace(
+                            "Z", "+00:00",
+                        ),
+                    ).timestamp()
                 )
             except Exception:
-                dt = datetime.fromtimestamp(now_)
-        age_h = (now_ - dt.timestamp()) / 3600
+                pass
+        if completed_epoch is None:
+            try:
+                completed_epoch = (
+                    bp.stat().st_mtime
+                )
+            except Exception:
+                completed_epoch = now_
+        age_h = (now_ - completed_epoch) / 3600
         has_cat = (bp / "catalog.db").exists()
 
         if age_h < 24:
@@ -3440,6 +3455,7 @@ def create_app(
         result = {
             "status": status,
             "latest_date": latest["date"],
+            "completed_at": completed_iso,
             "age_hours": round(age_h, 1),
             "backup_count": len(backups),
             "has_catalog": has_cat,
