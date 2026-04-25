@@ -1788,9 +1788,8 @@ function MaintenanceTab() {
 
 function TransactionsTab() {
   const m = useAdminMaintenance();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [txns, setTxns] = useState<
-    Record<string, any>[]
+    Record<string, unknown>[]
   >([]);
   const [loading, setLoading] = useState(false);
   const [gwFilter, setGwFilter] =
@@ -1968,7 +1967,7 @@ function TransactionsTab() {
       {loading && <WidgetSkeleton />}
 
       {!loading && (
-        <InsightsTable<Record<string, any>>
+        <InsightsTable<Record<string, unknown>>
           columns={txnCols}
           rows={txns}
           defaultSort={{
