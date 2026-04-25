@@ -2,6 +2,62 @@
 
 ---
 
+## 2026-04-24 / 25 — Sprint 8 closure push: 325-328, 334, 335, 336, 337
+
+**Scope**: drain the Sprint-7 follow-up debt (325-328), ship the LCP <2s story (334), fix two production observations the user spotted while reviewing data (335 forecast widget, 336 NIFTYBEES gap, 337 backup TZ).
+
+### ASETPLTFRM-325 (1 SP) — apiFetch in ScreenQL tab
+- `frontend/app/(authenticated)/analytics/insights/page.tsx` ScreenQL field-catalog `useEffect` swapped from bare `fetch` to `apiFetch`. CLAUDE.md Rule 14 conformance; current endpoint is unauthenticated so no observable behaviour change.
+
+### ASETPLTFRM-326 (3 SP) — ScreenQL market via company_info.exchange
+- Replaced `CASE ticker LIKE '%.NS' …` in the ci CTE with an exchange-code-based mapping (`NSI`/`BSE` → india, fallback to suffix for the 13 NULL-exchange rows). Validated against live data: 866 india + 15 us, 0 misclassifications. 6 new tests (`test_screen_parser_market.py`). Option-2 (materialise `market` column at write time) deferred to Sprint 9.
+
+### ASETPLTFRM-327 (2 SP) — BYO counter atomic INCR
+- TOCTOU race on `_check_and_increment_byo_counter` (GET → check → SET). New `CacheService.incr/decr` primitives wrap Redis pipeline INCRBY+EXPIRE atomically. Counter incs first, rolls back DECR + raises 429 if over limit — persisted value always bounded by limit. New `test_parallel_requests_never_exceed_limit`: 200 concurrent asyncio tasks against limit=50 → exactly 50 successes, 150 × 429, final counter == 50.
+
+### ASETPLTFRM-328 (2 SP) — drop_dead_tables safety guard
+- `iceberg_maintenance.drop_dead_tables` ran loop 2 (`shutil.rmtree`) for every dead table even if loop 1's `catalog.drop_table` failed — partial failure could wipe on-disk files for catalog-referenced tables. Added per-table `dropped_ok` set, gate rmtree on it. Plus fail-closed `run_backup()` at function entry. `NoSuchTableError` is treated as "already dropped" (idempotent re-run safe). 3 new tests in `test_iceberg_drop_dead_tables.py`.
+
+### ASETPLTFRM-335 (2 SP, new) — Forecast widget live close
+- Backend `dashboard_routes.py::get_forecasts_summary` exposed only `current_price = current_price_at_run` (snapshot at forecast time). For AHLUCONT.NS that meant the widget showed ₹817.35 from 9-Apr while the actual close was ₹886.25. Added `latest_close: float | None` populated via a single batched DuckDB `QUALIFY ROW_NUMBER()` query over `ohlcv` (no N per-ticker reads — CLAUDE.md hard rule #1). Frontend prefers `latest_close`, footnotes the forecast anchor `(anchored at ₹X on DATE)` only when they differ. Chart math unchanged.
+
+### ASETPLTFRM-336 (1 SP, new) — NIFTYBEES.NS 22-Apr OHLCV gap-fill
+- Operational: NIFTYBEES.NS missing 2026-04-22. Investigation showed yfinance *does* have the bar but the scheduled bulk fetch missed it and the delta-fetch cursor advanced past 22-Apr (only 23-Apr returned on auto-refresh). Direct `yf.Ticker().history(start='2026-04-22', end='2026-04-23')` pulled it; inserted via `repo.insert_ohlcv()`. Post-fix: 817/817 tickers, 0 NaN. Systemic delta-fetch gap-detection scoped out as a Sprint-9 candidate.
+
+### ASETPLTFRM-337 (2 SP, new) — Backup health TZ bug
+- `_admin_backups_health` parsed the date-folder name `"2026-04-25"` as naive midnight via `datetime.fromisoformat()`. `dt.timestamp()` then interpreted naive as container-local TZ (`Asia/Kolkata`), giving the epoch for "midnight 2026-04-25 IST" — so at 08:34 IST, age was ~8.6h ("9h ago") for a backup completed 18 minutes earlier. Fix: `list_backups()` now stamps `completed_at` (ISO 8601 UTC with `Z`) from directory mtime; routes consume that instead. Frontend `BackupHealthPanel` shows IST tooltip (`Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata" })`) on the relative-age string. 4 new tests.
+
+### ASETPLTFRM-334 (13 SP) — LCP <2s on 34/34 routes (RSC + cookie auth + Suspense)
+
+The big perf story. 9 commits across 8 phases:
+
+| Phase | Commit    | Scope                                                            |
+|------:|-----------|------------------------------------------------------------------|
+| E     | `3402f8f` | `<link rel="preconnect">` + dns-prefetch backend in root layout. |
+| D     | `bf74143` | `/dashboard/home` — 4 sub-calls now via `asyncio.gather` (cold bound by max not sum); wrapper TTL `VOLATILE`(60 s) → new `TTL_HERO`(10 s). |
+| B     | `4d11168` | `<Suspense>` boundaries around ForecastChart + PortfolioForecastChart on `/analytics/analysis`. |
+| C     | `269ef3f` | (1) `MessageBubble` defers `MarkdownContent` (~105 KB react-markdown chunk) via `next/dynamic`. (2) `/admin/usage-stats` 30 s Redis cache; `/admin/audit-log` tightened from 60 s → 30 s. (3) Admin tab content `min-h` 400 → 600 px. |
+| F     | `bd0aa9c` | `next.config.ts` — `experimental.ppr` was deprecated in Next 16; renamed to top-level `cacheComponents` (scaffolded `false` until phase A's RSC migration adds the streaming boundaries). |
+| A.1   | `d97e39c` | Backend sets HttpOnly `access_token` cookie on `/v1/auth/login` alongside the JSON body (additive, no breaking change). Wired into login + refresh + logout. |
+| A.2   | `b446b9e` | `frontend/middleware.ts` → `frontend/proxy.ts` (Next 16 deprecated `middleware`). Cookie-presence auth gate: `/` → `/dashboard`, protected route + no cookie → 302 `/login?next=…`, `/login` + cookie → 302 `/dashboard`. Presence-only check (no JWT verify in edge runtime) — backend re-authenticates every API call. |
+| A.3   | `2606531` | `frontend/lib/serverApi.ts` — `serverApi<T>(path)` and `serverApiOrNull<T>(path)`. Reads `access_token` cookie via `next/headers`, forwards Bearer to backend. `BACKEND_URL` env (compose) for docker-network resolution; `cache: "no-store"` default. |
+| A.4   | `2170e48` | `app/(authenticated)/dashboard/page.tsx` is now a Server Component that pre-fetches `/dashboard/home` and seeds it as `initialData` to `DashboardClient.tsx` (renamed from old `page.tsx`). `useDashboardHome(initialData)` forwards to SWR `fallbackData` — first render paints with real data, no skeleton step. Streamed HTML carries 29 `current_price`, 13 `run_date`, 13 `sentiment` fields per the verification grep. |
+| G     | `af3badb` | `docs/frontend/ssr-patterns.md` — client-vs-server decision tree, cookie-auth flow, edge-proxy, Suspense placement, preconnect, PPR ramp. Includes a reference-commit table for traceability. |
+| H     | (running) | 34-route Lighthouse re-audit via `docker compose --profile perf run --rm perf` against the rebuilt `frontend-perf`. Results land in `docs/frontend/bundle-analysis.md`. |
+
+Pre-A.4 dashboard LCP baseline: **4744 ms**. Local SSR timing post-A.4: dev server returns `/dashboard` in 33-50 ms warm with the API payload baked into the streamed HTML — Lighthouse-throttled measurement to follow.
+
+### ASETPLTFRM-339 (2 SP, planned) — Sprint 9 candidate from 326 follow-up
+- Materialise `market` column on `company_info` at write time via `detect_market()`. Schema evolution + backfill + multi-env restart per CLAUDE.md gotcha. CTE simplifies to `SELECT market FROM company_info`.
+
+### ASETPLTFRM-340 (2 SP, planned) — Sprint 9 candidate from 336 follow-up
+- Delta-fetch trading-day gap detection. `tools.stock_data_tool.fetch_stock_data` should compute "missing trading days since last row" (NSE calendar) and either re-pull the window from yfinance or fall through to jugaad-data. Today any single-day vendor miss creates a permanent hole until manual backfill.
+
+### ASETPLTFRM-341 (3 SP, planned) — Sprint 9 candidate from 328 follow-up (compaction)
+- Iceberg orphan-parquet sweep. `compact_table` correctly writes a new snapshot referencing ~817 live files, but `tbl.overwrite()` leaves the prior parquets on disk. Today's count: ohlcv 20 241 parquets vs 817 referenced (96% orphans). `cleanup_orphans` only removes empty dirs by design. Implement a real sweep: list every `*.parquet` under the warehouse, compare to the union of files referenced by the last N retained snapshots, `unlink` the rest. Backup-before, fail-closed.
+
+---
+
 ## 2026-04-23 / 24 — Sprint 8: Perf Infra + Bundle + LCP/FCP/CLS (ASETPLTFRM-330, 331)
 
 **Scope**: containerize Lighthouse audit (34 routes) and eliminate the systemic FCP/LCP outliers surfaced after Sprint 7 shipped.
