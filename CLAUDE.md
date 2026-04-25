@@ -147,12 +147,19 @@ analytics.
 | `sentiment_dormant` | `db/models/sentiment_dormant.py` | Per-ticker headline-fetch dormancy (capped expo cooldown 2/4/8/16/30d, 5% probe re-test) |
 | `pipelines` / `pipeline_steps` | `db/models/pipeline.py` | Chain definitions + steps |
 
-### Iceberg tables (12 active — append / scoped-delete)
+### Iceberg tables (16 active — append / scoped-delete)
 
-`company_info`, `dividends`, `ohlcv` (1.5M rows), `analysis_summary`,
-`forecast_runs` (27 cols), `forecasts`, `quarterly_results`,
-`piotroski_scores`, `sentiment_scores`, `llm_pricing`, `llm_usage`,
-`portfolio_transactions`. Maintenance: `backend/maintenance/`.
+Hot (compacted daily): `ohlcv` (1.5M rows), `sentiment_scores`,
+`company_info`, `analysis_summary`.
+
+Other production: `dividends`, `forecast_runs` (27 cols),
+`forecasts`, `quarterly_results`, `piotroski_scores`,
+`llm_pricing`, `llm_usage`, `portfolio_transactions`.
+
+Logging / audit: `chat_audit_log`, `query_log`, `data_gaps`.
+
+Catalog-shell only (also live in PG): `registry`. Maintenance:
+`backend/maintenance/`.
 
 ### Key components
 
@@ -877,4 +884,10 @@ npm run perf:check       # LHCI on /login (pre-PR gate)
 npm run perf:audit       # Playwright 10-route quick
 npm run perf:full        # Full 42-point audit
 npm run analyze          # Bundle treemap
+
+# Performance — containerized 34-route Lighthouse (Sprint 8+)
+docker compose --profile perf build frontend-perf  # rebuild after code change
+docker compose --profile perf up -d postgres redis backend frontend-perf
+docker compose --profile perf run --rm perf       # ~15-20 min
+# Output: frontend/.lighthouseci/pw-lh-summary.json
 ```
