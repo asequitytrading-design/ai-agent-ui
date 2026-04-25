@@ -30,6 +30,7 @@ from functools import lru_cache
 _logger = logging.getLogger(__name__)
 
 # Default TTLs (seconds) grouped by volatility.
+TTL_HERO = 10  # /dashboard/home aggregate — keep tight
 TTL_VOLATILE = 60  # watchlist, llm-usage
 TTL_STABLE = 300  # charts, insights, registry
 TTL_ADMIN = 30  # tier-health, metrics

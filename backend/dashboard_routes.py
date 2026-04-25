@@ -10,11 +10,17 @@ TTL.  Cache keys use the ``cache:dash:`` prefix and are
 invalidated by :mod:`stocks.repository` on Iceberg writes.
 """
 
+import asyncio
 import logging
 import os
 import threading
 
-from cache import TTL_STABLE, TTL_VOLATILE, get_cache
+from cache import (
+    TTL_HERO,
+    TTL_STABLE,
+    TTL_VOLATILE,
+    get_cache,
+)
 from dashboard_models import (
     AnalysisResponse,
     CompareMetric,
@@ -1000,6 +1006,21 @@ def create_dashboard_router() -> APIRouter:
         Returns watchlist, forecasts, analysis, and
         LLM usage so the frontend can render the
         entire dashboard with a single network call.
+
+        Cold-cache cost on this aggregate dominates
+        dashboard LCP (ASETPLTFRM-334 phase D). Two
+        knobs:
+
+        * Sub-calls run via ``asyncio.gather`` so the
+          worst-case latency is ``max(...)`` not
+          ``sum(...)``. Each sub-call has its own
+          cache layer, so a partial cache hit only
+          recomputes what's actually stale.
+        * Wrapper TTL dropped from ``VOLATILE`` (60 s)
+          to ``HERO`` (10 s) — short enough that no
+          stale state lingers between page loads, but
+          long enough to absorb a burst of refreshes
+          on a single dashboard tab.
         """
         cache = get_cache()
         cache_key = f"cache:dash:home:{user.user_id}"
@@ -1012,10 +1033,15 @@ def create_dashboard_router() -> APIRouter:
 
         # Reuse existing endpoint functions — they
         # each check their own cache internally.
-        wl = await get_watchlist(user)
-        fc = await get_forecasts_summary(user, ticker=None)
-        an = await get_analysis_latest(user)
-        lu = await get_llm_usage(user)
+        # Parallelise the four awaits so the cold
+        # cost is bounded by the slowest sub-call,
+        # not the sum (was 500–2000 ms sequential).
+        wl, fc, an, lu = await asyncio.gather(
+            get_watchlist(user),
+            get_forecasts_summary(user, ticker=None),
+            get_analysis_latest(user),
+            get_llm_usage(user),
+        )
 
         # If the sub-call returned a raw Response
         # (cache hit), parse it back to the model.
@@ -1047,7 +1073,7 @@ def create_dashboard_router() -> APIRouter:
         cache.set(
             cache_key,
             result.model_dump_json(),
-            TTL_VOLATILE,
+            TTL_HERO,
         )
         return result
 
