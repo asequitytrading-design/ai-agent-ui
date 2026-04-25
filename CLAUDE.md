@@ -156,10 +156,9 @@ These encode "the one true way" for recurring problems. Deviating creates rework
 - **SSR safety**: localStorage in `useEffect`; `crypto.randomUUID` guarded by `typeof window`; `toLocaleString("en-US")` with explicit locale.
 - **Inline content**: `<span>` not `<div>` inside `<p>` (hydration).
 - **Loading shells need text**: Lighthouse FCP doesn't fire on pure-CSS divs. Include text/img/svg. `→ lighthouse-fcp-text-heuristic`
-- **Don't gate static text behind a single SWR loading state**: a top-level `if (X.loading) return <Skeleton/>` over a hero/header that displays *prop-driven* text (greeting, portfolio total) hides the LCP candidate until SWR resolves (5s LCP on what should be 1.5s). Render structure always; use `?? 0` placeholders or inline mini-skeletons on the data-bound bits only. Diagnostic signature: `Render Delay = 100% of LCP`, FCP healthy. `→ loading-gate-lcp-anti-pattern`
-- **…but KEEP the inner loading gate when the body has** *(a)* charts that render conditionally on data (`{rows.length > 0 && <Chart/>}`) — chart pops in mid-page → CLS 0.254; *(b)* table cells whose text width dominates the static h1 fallback (long stock names) — cell becomes LCP, paints later than the h1; *(c)* heatmap / large canvases — same; *(d)* many empty-stat cards re-painting when data arrives — CLS regression. Page-level `<Suspense fallback>` already supplies SSR LCP; the inner gate keeps data-bound elements out of the LCP/CLS window. Tabs that MUST keep gates today (per 04-25 iter4 audit): Sectors, Quarterly, Piotroski, Correlation, Observability.
-- **`<Suspense fallback={null}>` over `useSearchParams` blanks SSR**: Next 16 forces `useSearchParams`-using subtrees client-only, so the *fallback* is what SSR ships. `null` fallback → empty initial HTML → 3.5s of post-hydration LCP on every tab variant. Replace with a static `<h1>` + `min-h-[Npx]` reserve that **mirrors the inner wrapper outer dimensions exactly** (same `space-y-*`, same `p-*`, same `min-h-*`) so the fallback→real swap doesn't shift layout. Verify SSR ships text: `curl -s -b $JAR http://localhost:3000/admin | grep -oE '<h1[^>]*>[^<]+'`. `→ suspense-fallback-null-ssr-hole`
-- **Sign Out MUST POST `/v1/auth/logout` before `clearTokens()`**: `proxy.ts` edge gate accepts EITHER `access_token` OR `refresh_token` cookie (legacy-session hotfix `e33172d`). A localStorage-only sign-out leaves cookies set, proxy bounces `/login` back to `/dashboard`. `AppHeader.handleSignOut` + `ChatHeader.handleSignOut` are the canonical call sites. Wrap in try/catch — fall through to local cleanup on server hiccup.
+- **Loading-gate LCP anti-pattern**: top-level `if (X.loading) return <Skeleton/>` over prop-driven hero text hides the LCP candidate (Render Delay = 100% of LCP, FCP healthy). Render structure always with `?? 0` placeholders. **BUT keep the inner gate** when body has conditional charts (`rows.length > 0`), wide cells > h1 fallback (Piotroski stock names), heatmap canvases, or many empty-stat cards re-painting — page-level `<Suspense>` provides SSR LCP, inner gate keeps data-bound elements out of the LCP/CLS window. Today's keep-gated tabs: Sectors, Quarterly, Piotroski, Correlation, Observability. `→ loading-gate-lcp-anti-pattern`
+- **Suspense `fallback={null}` blanks SSR** when subtree calls `useSearchParams`. Replace with a static `<h1>` + `min-h-[Npx]` reserve that mirrors the inner wrapper outer dimensions exactly (otherwise CLS spikes on swap). Verify with `curl -s -b $JAR /admin | grep -oE '<h1[^>]*>[^<]+'`. `→ suspense-fallback-null-ssr-hole`
+- **Sign Out MUST POST `/v1/auth/logout` before `clearTokens()`** — proxy.ts edge gate accepts either cookie (hotfix `e33172d`); localStorage-only sign-out bounces `/login` back to `/dashboard`. Canonical call sites: `AppHeader.handleSignOut`, `ChatHeader.handleSignOut`. Wrap in try/catch.
 
 ### 5.4 ★ Tabular page pattern (Insights, Admin)
 
@@ -274,7 +273,7 @@ EVERY new interactive element MUST have `data-testid`. EVERY new page test MUST 
 
 - **Testid registry**: all selectors in `e2e/utils/selectors.ts` `FE` object. Pattern `component-element`. NEVER hardcode in spec files.
 - **Page Object Model**: pages extend `BasePage` (`e2e/pages/frontend/`). Use `this.tid(FE.selectorName)`.
-- **Auth fixtures**: import from `fixtures/portfolio.fixture` etc. Storage state pre-loaded for `general-user` and `superuser`. NEVER call `/auth/login` in spec (rate-limit). `auth.setup.ts` MUST capture Set-Cookie response headers + rewrite domain to frontend host or proxy.ts edge gate redirect-loops the entire suite. Storage-state JSON's `cookies[]` array must contain `access_token` + `refresh_token` with `domain: "localhost"`. `→ playwright-cookie-fixture`
+- **Auth fixtures**: import from `fixtures/portfolio.fixture` etc. Storage state pre-loaded for `general-user` and `superuser`. NEVER call `/auth/login` in spec (rate-limit). `auth.setup.ts` MUST capture Set-Cookie + rewrite domain to frontend host; `e2e/.auth/*.json` `cookies[]` must contain access + refresh tokens with `domain: "localhost"`. `→ playwright-cookie-fixture`
 - **Locator scoping**: chat tests use `[data-testid="chat-panel"]` scope; never globals that could match side panel + main content.
 - **Never `networkidle`** — dashboard polls 30s + WebSocket. Use explicit element waits.
 - **Below-fold widgets**: `waitFor({ state: "attached" })` then `scrollIntoViewIfNeeded()`.
@@ -287,7 +286,7 @@ EVERY new interactive element MUST have `data-testid`. EVERY new page test MUST 
 
 Pre-PR `npm run perf:check` (LHCI on /login) is a soft gate; full audit via containerized 34-route Lighthouse (§8) before any major frontend ship.
 
-**Iterating on LCP fixes**: save `pw-lh-summary.json` per cycle (`cp .lighthouseci/pw-lh-summary.json .lighthouseci/pw-lh-summary-iter{N}.json`); diff LCP **and** CLS per route — every loading-gate removal MUST also verify CLS held (≤ 0.02 budget). Iter2 of 04-25 dropped mean LCP -36% but introduced 0.254 CLS regressions on Sectors/Quarterly that iter4 had to revert (see §5.3 "KEEP the inner loading gate"). Phase 0 always: read the LCP element + phase breakdown from the per-route Lighthouse JSON before assuming a fix — `Render Delay = 100% of LCP` ≠ `chart paints late`. `→ loading-gate-lcp-anti-pattern`, `suspense-fallback-null-ssr-hole`
+**Iterating on LCP fixes**: save `pw-lh-summary.json` per cycle, diff LCP **and** CLS per route (every gate removal can spike CLS — verify ≤ 0.02 held). Phase 0 always: read the LCP element + phase breakdown from the per-route JSON before fixing; `Render Delay = 100% of LCP` ≠ `chart paints late`. `→ loading-gate-lcp-anti-pattern`, `suspense-fallback-null-ssr-hole`
 
 | Route bucket | Perf | LCP | TBT | CLS |
 |---|---:|---:|---:|---:|
@@ -358,9 +357,8 @@ After restart, sleep 5s before auth-dependent calls (asyncpg shutdown race). `�
 - `<div>` in `<p>` → hydration error. Use `<span>` for inline badges.
 - Lighthouse FCP only fires on text/img/svg, not pure-CSS divs. Loading shells MUST include text.
 - Mount-gate kills SSR — `if (!mounted) return <Spinner />` in layout floors LCP at hydration. Audit providers for SSR safety, then remove. `→ auth-layout-ssr-unlock`
-- **Loading-gate kills LCP** — top-level `if (X.loading) return <Skeleton/>` over prop-driven hero text hides LCP candidate. Diagnostic: phase-breakdown `Render Delay = 100% of LCP` with FCP healthy. `→ loading-gate-lcp-anti-pattern`
-- **Suspense `fallback={null}` blanks SSR** — when wrapped subtree calls `useSearchParams`, the fallback IS the SSR content. Use a static h1 + dimension-matched `min-h-*` reserve. `→ suspense-fallback-null-ssr-hole`
-- **Sign Out redirects back to dashboard** — frontend isn't calling `/v1/auth/logout`; proxy.ts sees the leftover `refresh_token` cookie. `→ §5.3 Sign Out rule`
+- **LCP regression** — Render Delay = 100% of LCP w/ FCP healthy → loading-gate hiding hero text; or empty SSR HTML → `<Suspense fallback={null}>` over `useSearchParams`. `→ loading-gate-lcp-anti-pattern`, `suspense-fallback-null-ssr-hole`
+- **Sign Out bounces to /dashboard** — frontend not calling `/v1/auth/logout`; cookies persist. See §5.3.
 - Modal z-index opened from slideovers MUST be `z-[70]` (slideover is `z-[60]`).
 
 ### 6.7 Sync→async migration footguns
@@ -495,4 +493,4 @@ When you're about to do X, read pattern Y first.
 | Debug ECharts theme | 5.3 | `echarts-theme-hydration` |
 | Debug `bind_tools` empty payload | 5.2 | `bind-tools-model-lookup` |
 
-All paths are `shared/<category>/<name>`. `list_memories` browses all 156 memories (~70 architecture · ~23 conventions · ~37 debugging · 3 onboarding · 25 dated session checkpoints — incl. 2026-04-25-sprint8-lcp-improvements + 3 new pattern memories from that session).
+All paths are `shared/<category>/<name>`. `list_memories` browses 158 memories (~70 architecture · 23 conventions · 37 debugging · 3 onboarding · 25 dated session checkpoints).
