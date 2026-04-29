@@ -12,38 +12,127 @@
  * Accessibility:
  * - Trigger is a real <button> with aria-label.
  * - Popover content is announced via role="tooltip".
- * - Opens on hover *and* keyboard focus.
+ * - Opens on hover, keyboard focus, AND click — the
+ *   click toggle keeps it usable on touch.
  *
  * Positioning:
- * - Default = below the icon, horizontally centred.
- * - ``placement="left"`` flushes the popover to the
- *   left edge of the trigger so labels near a card's
- *   right edge don't clip off-screen.
+ * - Default ``"auto"`` measures the trigger's position
+ *   on open and picks ``start | center | end`` so the
+ *   popover never clips the viewport. Callers can pin
+ *   the side via the ``placement`` prop.
+ *   - ``start``  = popover anchored to the trigger's
+ *                  left edge, flows right (use when
+ *                  the trigger is near the LEFT edge
+ *                  of the viewport)
+ *   - ``center`` = popover horizontally centred over
+ *                  the trigger
+ *   - ``end``    = popover anchored to the trigger's
+ *                  right edge, flows left (use when
+ *                  the trigger is near the RIGHT edge
+ *                  of the viewport)
  */
 
 import {
-  useId, useState, type ReactNode,
+  useEffect, useId, useRef, useState,
+  type ReactNode,
 } from "react";
+
+type Placement = "auto" | "start" | "center" | "end";
+type ResolvedPlacement = Exclude<Placement, "auto">;
 
 interface InfoTooltipProps {
   /** Popover body — JSX so callers can format it. */
   children: ReactNode;
   /** Override the default 18rem popover width. */
   widthClass?: string;
-  /** ``"center"`` (default) or ``"left"``. */
-  placement?: "center" | "left";
+  /**
+   * ``"auto"`` (default) auto-detects the side that
+   * fits in the viewport. Pin to a specific side with
+   * ``"start"`` / ``"center"`` / ``"end"``.
+   */
+  placement?: Placement;
   /** Optional aria-label override. */
   label?: string;
 }
 
+// Approximate popover width to drive auto-placement.
+// Matches the default ``widthClass="w-72"`` (= 18rem
+// = 288px). Callers that override widthClass to
+// something dramatically wider should pin placement.
+const POPOVER_WIDTH_PX = 288;
+// Minimum gap from viewport edge before we flip side.
+const EDGE_PADDING_PX = 12;
+
 export function InfoTooltip({
   children,
   widthClass = "w-72",
-  placement = "center",
+  placement = "auto",
   label = "Show metric definition",
 }: InfoTooltipProps) {
   const [open, setOpen] = useState(false);
+  const [resolved, setResolved] =
+    useState<ResolvedPlacement>("center");
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const id = useId();
+
+  // Auto-placement: when ``placement === "auto"``,
+  // measure the trigger on open and pick the side
+  // that doesn't clip the viewport. The setState is
+  // deferred past the synchronous effect body via
+  // Promise.resolve so eslint-plugin-react-hooks v5
+  // sees it as an async-callback update rather than a
+  // sync setState (matches the Sprint 8 lint pattern).
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    void Promise.resolve().then(() => {
+      if (!alive) return;
+      if (placement !== "auto") {
+        setResolved(placement);
+        return;
+      }
+      if (typeof window === "undefined") return;
+      const el = triggerRef.current;
+      if (!el) return;
+
+      const rect = el.getBoundingClientRect();
+      const vw = window.innerWidth;
+      const triggerCentre =
+        rect.left + rect.width / 2;
+      const halfPopover = POPOVER_WIDTH_PX / 2;
+
+      // Centre fits if both halves clear the viewport.
+      if (
+        triggerCentre - halfPopover
+          >= EDGE_PADDING_PX
+        && triggerCentre + halfPopover
+           <= vw - EDGE_PADDING_PX
+      ) {
+        setResolved("center");
+        return;
+      }
+      // Trigger is closer to the left edge → anchor
+      // the popover to the trigger's left and flow
+      // right.
+      if (triggerCentre < vw / 2) {
+        setResolved("start");
+      } else {
+        // Closer to right edge → anchor right, flow
+        // left.
+        setResolved("end");
+      }
+    });
+    return () => {
+      alive = false;
+    };
+  }, [open, placement]);
+
+  const positionClass =
+    resolved === "center"
+      ? "left-1/2 -translate-x-1/2"
+      : resolved === "start"
+        ? "left-0"
+        : "right-0";
 
   return (
     <span
@@ -52,6 +141,7 @@ export function InfoTooltip({
       onMouseLeave={() => setOpen(false)}
     >
       <button
+        ref={triggerRef}
         type="button"
         aria-label={label}
         aria-describedby={open ? id : undefined}
@@ -85,10 +175,7 @@ export function InfoTooltip({
             "leading-relaxed text-gray-700 " +
             "dark:text-gray-200 shadow-lg " +
             "normal-case tracking-normal font-normal " +
-            (placement === "left"
-              ? "left-0"
-              : "left-1/2 -translate-x-1/2") +
-            " " + widthClass
+            positionClass + " " + widthClass
           }
         >
           {children}

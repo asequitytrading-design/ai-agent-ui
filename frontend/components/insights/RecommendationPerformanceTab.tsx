@@ -160,11 +160,7 @@ function KpiTile({
         }
       >
         {label}
-        {info && (
-          <InfoTooltip placement="left">
-            {info}
-          </InfoTooltip>
-        )}
+        {info && <InfoTooltip>{info}</InfoTooltip>}
       </div>
       <div
         className={
