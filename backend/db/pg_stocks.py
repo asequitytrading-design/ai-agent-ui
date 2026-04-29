@@ -918,7 +918,8 @@ WITH bucketed AS (
         r.id   AS rec_id,
         r.acted_on_date,
         (
-            (NOW() - r.created_at) < INTERVAL '30 days'
+            (NOW() - r.created_at)
+            < (INTERVAL '1 day' * :pending_days)
         ) AS is_pending
     FROM stocks.recommendations r
     JOIN stocks.recommendation_runs run
@@ -937,6 +938,11 @@ WITH bucketed AS (
           OR r.acted_on_date IS NOT NULL
       )
 ),
+-- Threshold for a rec to count as "pending":
+-- younger than the primary horizon for the chosen
+-- granularity. Weekly = 7d, monthly = 30d,
+-- quarterly = 90d. Aligned with the horizon the
+-- frontend emphasises in the chart.
 totals AS (
     SELECT
         bucket_start,
@@ -967,7 +973,7 @@ outcomes_by_horizon AS (
     FROM bucketed b
     JOIN stocks.recommendation_outcomes o
       ON o.recommendation_id = b.rec_id
-    WHERE o.days_elapsed IN (30, 60, 90)
+    WHERE o.days_elapsed IN (7, 30, 60, 90)
     GROUP BY b.bucket_start, o.days_elapsed
 )
 SELECT
@@ -975,6 +981,9 @@ SELECT
     t.total_recs,
     t.acted_on_count,
     t.pending_count,
+    o7.avg_return   AS avg_return_7d,
+    o7.avg_excess   AS avg_excess_7d,
+    o7.hit_rate     AS hit_rate_7d,
     o30.avg_return  AS avg_return_30d,
     o30.avg_excess  AS avg_excess_30d,
     o30.hit_rate    AS hit_rate_30d,
@@ -985,6 +994,9 @@ SELECT
     o90.avg_excess  AS avg_excess_90d,
     o90.hit_rate    AS hit_rate_90d
 FROM totals t
+LEFT JOIN outcomes_by_horizon o7
+       ON o7.bucket_start = t.bucket_start
+      AND o7.days_elapsed = 7
 LEFT JOIN outcomes_by_horizon o30
        ON o30.bucket_start = t.bucket_start
       AND o30.days_elapsed = 30
@@ -1060,6 +1072,17 @@ async def get_recommendation_performance_buckets(
     if scope is not None and scope not in ("india", "us"):
         scope = None
 
+    # pending_count threshold matches the primary
+    # horizon the frontend emphasises for the chosen
+    # granularity. A rec younger than this is "pending"
+    # — its outcome at the primary horizon hasn't been
+    # computed yet.
+    pending_days = {
+        "week": 7,
+        "month": 30,
+        "quarter": 90,
+    }[granularity]
+
     result = await session.execute(
         text(_PERF_BUCKET_SQL),
         {
@@ -1068,6 +1091,7 @@ async def get_recommendation_performance_buckets(
             "months_back": months_back,
             "scope": scope,
             "acted_on_only": acted_on_only,
+            "pending_days": pending_days,
         },
     )
     rows = result.mappings().all()
@@ -1094,6 +1118,11 @@ async def get_recommendation_performance_buckets(
             "pending_count": int(
                 r["pending_count"] or 0,
             ),
+            "hit_rate_7d": (
+                round(float(r["hit_rate_7d"]), 1)
+                if r["hit_rate_7d"] is not None
+                else None
+            ),
             "hit_rate_30d": (
                 round(float(r["hit_rate_30d"]), 1)
                 if r["hit_rate_30d"] is not None
@@ -1109,6 +1138,11 @@ async def get_recommendation_performance_buckets(
                 if r["hit_rate_90d"] is not None
                 else None
             ),
+            "avg_return_7d": (
+                round(float(r["avg_return_7d"]), 2)
+                if r["avg_return_7d"] is not None
+                else None
+            ),
             "avg_return_30d": (
                 round(float(r["avg_return_30d"]), 2)
                 if r["avg_return_30d"] is not None
@@ -1122,6 +1156,11 @@ async def get_recommendation_performance_buckets(
             "avg_return_90d": (
                 round(float(r["avg_return_90d"]), 2)
                 if r["avg_return_90d"] is not None
+                else None
+            ),
+            "avg_excess_7d": (
+                round(float(r["avg_excess_7d"]), 2)
+                if r["avg_excess_7d"] is not None
                 else None
             ),
             "avg_excess_30d": (
@@ -1150,9 +1189,16 @@ async def get_recommendation_performance_buckets(
         "pending_count": s_pending,
         # Roll-up hit-rate / return / excess across all
         # buckets must be re-aggregated from raw outcomes.
+        "hit_rate_7d": None,
         "hit_rate_30d": None,
         "hit_rate_60d": None,
         "hit_rate_90d": None,
+        "avg_return_7d": None,
+        "avg_excess_7d": None,
+        "avg_return_30d": None,
+        "avg_excess_30d": None,
+        "avg_return_60d": None,
+        "avg_excess_60d": None,
         "avg_return_90d": None,
         "avg_excess_90d": None,
     }
@@ -1208,7 +1254,7 @@ async def get_recommendation_performance_buckets(
                 FROM bucketed b
                 JOIN stocks.recommendation_outcomes o
                   ON o.recommendation_id = b.rec_id
-                WHERE o.days_elapsed IN (30, 60, 90)
+                WHERE o.days_elapsed IN (7, 30, 60, 90)
                 GROUP BY o.days_elapsed
                 """,
             ),
@@ -1226,15 +1272,14 @@ async def get_recommendation_performance_buckets(
                 summary[f"hit_rate_{d}d"] = round(
                     float(hr), 1,
                 )
-            if d == 90:
-                if r["avg_return"] is not None:
-                    summary["avg_return_90d"] = round(
-                        float(r["avg_return"]), 2,
-                    )
-                if r["avg_excess"] is not None:
-                    summary["avg_excess_90d"] = round(
-                        float(r["avg_excess"]), 2,
-                    )
+            if r["avg_return"] is not None:
+                summary[f"avg_return_{d}d"] = round(
+                    float(r["avg_return"]), 2,
+                )
+            if r["avg_excess"] is not None:
+                summary[f"avg_excess_{d}d"] = round(
+                    float(r["avg_excess"]), 2,
+                )
 
     return {"buckets": buckets, "summary": summary}
 

@@ -102,7 +102,7 @@ class PerfBucket(BaseModel):
     they were issued (``recommendations.created_at``
     truncated to week / month / quarter, IST). Outcome
     metrics attached to the bucket are computed from
-    the 30 / 60 / 90-day post-issuance checks already
+    the 7 / 30 / 60 / 90-day post-issuance checks already
     persisted in ``recommendation_outcomes``.
     """
 
@@ -110,13 +110,21 @@ class PerfBucket(BaseModel):
     bucket_label: str  # human label, e.g. "2026-W17", "Apr 2026", "Q2 2026"
     total_recs: int = 0
     acted_on_count: int = 0
-    pending_count: int = 0  # recs <30d old, no outcomes yet
+    # ``pending_count`` is granularity-aware: recs
+    # younger than the primary horizon for the chosen
+    # granularity (7d weekly / 30d monthly / 90d
+    # quarterly) — outcomes at that horizon haven't
+    # been computed yet.
+    pending_count: int = 0
+    hit_rate_7d: float | None = None
     hit_rate_30d: float | None = None
     hit_rate_60d: float | None = None
     hit_rate_90d: float | None = None
+    avg_return_7d: float | None = None
     avg_return_30d: float | None = None
     avg_return_60d: float | None = None
     avg_return_90d: float | None = None
+    avg_excess_7d: float | None = None
     avg_excess_30d: float | None = None
     avg_excess_60d: float | None = None
     avg_excess_90d: float | None = None
@@ -128,10 +136,17 @@ class PerfSummary(BaseModel):
     total_recs: int = 0
     acted_on_count: int = 0
     pending_count: int = 0
+    hit_rate_7d: float | None = None
     hit_rate_30d: float | None = None
     hit_rate_60d: float | None = None
     hit_rate_90d: float | None = None
+    avg_return_7d: float | None = None
+    avg_return_30d: float | None = None
+    avg_return_60d: float | None = None
     avg_return_90d: float | None = None
+    avg_excess_7d: float | None = None
+    avg_excess_30d: float | None = None
+    avg_excess_60d: float | None = None
     avg_excess_90d: float | None = None
 
 
