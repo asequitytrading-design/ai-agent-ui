@@ -14,8 +14,8 @@ import {
 } from "next/navigation";
 import Link from "next/link";
 import { CompareContent } from "../compare/page";
-import { RecommendationHistoryTab } from
-  "@/components/insights/RecommendationHistoryTab";
+import { RecommendationsPanel } from
+  "@/components/insights/RecommendationsPanel";
 import { apiFetch } from "@/lib/apiFetch";
 import { useTheme } from "@/hooks/useTheme";
 import { API_URL } from "@/lib/config";
@@ -2362,7 +2362,7 @@ function AnalysisPageInner() {
       )}
       {activeTab === "compare" && <CompareTab />}
       {activeTab === "recommendations" && (
-        <RecommendationHistoryTab />
+        <RecommendationsPanel />
       )}
       {activeTab === "portfolio" && (
         <PortfolioTab
