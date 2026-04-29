@@ -6,11 +6,21 @@
  *
  * A *cohort* bucket groups recommendations by when
  * they were issued (week / month / quarter, IST).
- * Each bucket carries 30/60/90-day outcome metrics
- * already computed by the daily recommendation_outcomes
- * job. Latest run still surfaces via the dashboard
- * widget — this tab is for "how have past cohorts
- * actually performed".
+ * Granularity choice drives both bucket size AND the
+ * primary outcome horizon emphasised in the chart:
+ *
+ *   Weekly    → buckets weekly, metrics at 7-day  outcome
+ *   Monthly   → buckets monthly, metrics at 30-day outcome
+ *   Quarterly → buckets quarterly, metrics at 90-day outcome
+ *
+ * That mapping keeps "weekly performance" actually
+ * weekly. The recommendation_outcomes job persists
+ * outcomes at all four horizons {7, 30, 60, 90} so a
+ * user switching from Weekly to Monthly sees the
+ * appropriate horizon's data instantly.
+ *
+ * Latest run still surfaces via the dashboard widget;
+ * this tab is for "how have past cohorts performed".
  */
 
 import { useMemo, useState } from "react";
@@ -20,10 +30,11 @@ import { SimpleBarChart, type BarSeries } from
   "@/components/charts/SimpleBarChart";
 import { DownloadCsvButton } from
   "@/components/common/DownloadCsvButton";
-import type { PerfBucket } from "@/lib/types";
+import type { PerfBucket, PerfSummary } from "@/lib/types";
 
 type Granularity = "week" | "month" | "quarter";
 type Scope = "all" | "india" | "us";
+type Horizon = 7 | 30 | 60 | 90;
 
 const GRANULARITIES: {
   value: Granularity;
@@ -39,6 +50,14 @@ const SCOPES: { value: Scope; label: string }[] = [
   { value: "india", label: "India" },
   { value: "us", label: "US" },
 ];
+
+// Granularity → primary horizon. Weekly emphasises the
+// 7-day outcome, monthly the 30-day, quarterly the 90-day.
+const HORIZON_FOR: Record<Granularity, Horizon> = {
+  week: 7,
+  month: 30,
+  quarter: 90,
+};
 
 function fmtPct(v: number | null | undefined): string {
   if (v == null) return "—";
@@ -59,6 +78,55 @@ function returnColor(
   if (v > 0) return "text-emerald-600 dark:text-emerald-400";
   if (v < 0) return "text-rose-600 dark:text-rose-400";
   return "text-gray-500";
+}
+
+// Type-narrowed accessors so TS verifies we're reading
+// the fields that exist on PerfBucket / PerfSummary.
+function bucketHitRate(
+  b: PerfBucket, h: Horizon,
+): number | null | undefined {
+  if (h === 7) return b.hit_rate_7d;
+  if (h === 30) return b.hit_rate_30d;
+  if (h === 60) return b.hit_rate_60d;
+  return b.hit_rate_90d;
+}
+
+function bucketReturn(
+  b: PerfBucket, h: Horizon,
+): number | null | undefined {
+  if (h === 7) return b.avg_return_7d;
+  if (h === 30) return b.avg_return_30d;
+  if (h === 60) return b.avg_return_60d;
+  return b.avg_return_90d;
+}
+
+function bucketExcess(
+  b: PerfBucket, h: Horizon,
+): number | null | undefined {
+  if (h === 7) return b.avg_excess_7d;
+  if (h === 30) return b.avg_excess_30d;
+  if (h === 60) return b.avg_excess_60d;
+  return b.avg_excess_90d;
+}
+
+function summaryHitRate(
+  s: PerfSummary | undefined, h: Horizon,
+): number | null | undefined {
+  if (!s) return undefined;
+  if (h === 7) return s.hit_rate_7d;
+  if (h === 30) return s.hit_rate_30d;
+  if (h === 60) return s.hit_rate_60d;
+  return s.hit_rate_90d;
+}
+
+function summaryExcess(
+  s: PerfSummary | undefined, h: Horizon,
+): number | null | undefined {
+  if (!s) return undefined;
+  if (h === 7) return s.avg_excess_7d;
+  if (h === 30) return s.avg_excess_30d;
+  if (h === 60) return s.avg_excess_60d;
+  return s.avg_excess_90d;
 }
 
 interface KpiTileProps {
@@ -135,22 +203,18 @@ function PillStrip<T extends string>({
   );
 }
 
-function buildCsv(buckets: PerfBucket[]): string {
+function buildCsv(
+  buckets: PerfBucket[], horizon: Horizon,
+): string {
   const cols: (keyof PerfBucket)[] = [
     "bucket_label",
     "bucket_start",
     "total_recs",
     "acted_on_count",
     "pending_count",
-    "hit_rate_30d",
-    "hit_rate_60d",
-    "hit_rate_90d",
-    "avg_return_30d",
-    "avg_return_60d",
-    "avg_return_90d",
-    "avg_excess_30d",
-    "avg_excess_60d",
-    "avg_excess_90d",
+    `hit_rate_${horizon}d` as keyof PerfBucket,
+    `avg_return_${horizon}d` as keyof PerfBucket,
+    `avg_excess_${horizon}d` as keyof PerfBucket,
   ];
   const header = cols.join(",");
   const lines = buckets.map((b) =>
@@ -172,6 +236,8 @@ export function RecommendationPerformanceTab() {
   const [actedOnOnly, setActedOnOnly] =
     useState<boolean>(false);
 
+  const horizon = HORIZON_FOR[granularity];
+
   const perf = useRecommendationPerformance({
     granularity,
     scope,
@@ -179,9 +245,6 @@ export function RecommendationPerformanceTab() {
     monthsBack: 14,
   });
 
-  // Wrap fallbacks in useMemo so dep identity is
-  // stable across renders (eslint-plugin-react-hooks
-  // v5 flags ?? [] inside another hook's deps).
   const buckets = useMemo(
     () => perf.value?.buckets ?? [],
     [perf.value?.buckets],
@@ -190,36 +253,30 @@ export function RecommendationPerformanceTab() {
   const totalPending =
     summary?.pending_count ?? 0;
 
-  // Bar chart 1: hit rate per bucket × horizon.
+  // Bar chart 1: hit rate per bucket at the primary
+  // horizon for the chosen granularity. One series.
   const hitRateChart = useMemo(() => {
     const categories = buckets.map((b) => b.bucket_label);
+    const values = buckets.map((b) => {
+      const v = bucketHitRate(b, horizon);
+      return v ?? 0;
+    });
     const series: BarSeries[] = [
-      {
-        name: "30d",
-        values: buckets.map((b) => b.hit_rate_30d ?? 0),
-      },
-      {
-        name: "60d",
-        values: buckets.map((b) => b.hit_rate_60d ?? 0),
-      },
-      {
-        name: "90d",
-        values: buckets.map((b) => b.hit_rate_90d ?? 0),
-      },
+      { name: `Hit rate ${horizon}d`, values },
     ];
     return { categories, series };
-  }, [buckets]);
+  }, [buckets, horizon]);
 
-  // Bar chart 2: avg return vs benchmark per bucket
-  // (90d horizon — the most stable signal).
+  // Bar chart 2: avg return vs benchmark at the
+  // primary horizon. Paired bars per bucket.
   const returnChart = useMemo(() => {
     const categories = buckets.map((b) => b.bucket_label);
     const recReturn = buckets.map(
-      (b) => b.avg_return_90d ?? 0,
+      (b) => bucketReturn(b, horizon) ?? 0,
     );
     const benchReturn = buckets.map((b) => {
-      const r = b.avg_return_90d;
-      const e = b.avg_excess_90d;
+      const r = bucketReturn(b, horizon);
+      const e = bucketExcess(b, horizon);
       if (r == null || e == null) return 0;
       return r - e;
     });
@@ -228,10 +285,25 @@ export function RecommendationPerformanceTab() {
       { name: "Benchmark", values: benchReturn },
     ];
     return { categories, series };
+  }, [buckets, horizon]);
+
+  // Bar chart 3 (NEW): activity per bucket — recs
+  // issued. Always renderable (doesn't depend on
+  // outcomes), so the tab shows *something* even
+  // when the cohort is too young for outcomes.
+  const activityChart = useMemo(() => {
+    const categories = buckets.map((b) => b.bucket_label);
+    const issued = buckets.map((b) => b.total_recs);
+    const acted = buckets.map((b) => b.acted_on_count);
+    const series: BarSeries[] = [
+      { name: "Issued", values: issued },
+      { name: "Acted on", values: acted },
+    ];
+    return { categories, series };
   }, [buckets]);
 
   const handleDownload = () => {
-    const csv = buildCsv(buckets);
+    const csv = buildCsv(buckets, horizon);
     const blob = new Blob([csv], {
       type: "text/csv;charset=utf-8",
     });
@@ -325,17 +397,26 @@ export function RecommendationPerformanceTab() {
           tooltip="Recs the user acted on"
         />
         <KpiTile
-          label="Hit rate 90d"
-          value={fmtPct(summary?.hit_rate_90d)}
-          tooltip="Beat-benchmark rate at 90 days"
+          label={`Hit rate ${horizon}d`}
+          value={fmtPct(
+            summaryHitRate(summary, horizon),
+          )}
+          tooltip={
+            `Beat-benchmark rate at ${horizon} days`
+          }
         />
         <KpiTile
-          label="Avg excess 90d"
-          value={fmtReturn(summary?.avg_excess_90d)}
-          valueClass={returnColor(
-            summary?.avg_excess_90d,
+          label={`Avg excess ${horizon}d`}
+          value={fmtReturn(
+            summaryExcess(summary, horizon),
           )}
-          tooltip="Avg excess return vs benchmark at 90d"
+          valueClass={returnColor(
+            summaryExcess(summary, horizon),
+          )}
+          tooltip={
+            "Avg excess return vs benchmark at "
+            + `${horizon}d`
+          }
         />
       </div>
 
@@ -351,15 +432,17 @@ export function RecommendationPerformanceTab() {
             "text-amber-800 dark:text-amber-200"
           }
           title={
-            "Recommendations younger than 30 days " +
-            "have no outcomes yet — they will appear " +
-            "in the metrics once the daily " +
-            "recommendation_outcomes job processes them."
+            "Recommendations younger than the "
+            + "selected horizon don't have outcomes "
+            + "yet — they will appear in the metrics "
+            + "once the daily recommendation_outcomes "
+            + "job processes them."
           }
+          data-testid="perf-stale-chip"
         >
           ⚠ {totalPending} recommendation
-          {totalPending === 1 ? "" : "s"} under 30 days,
-          outcomes pending
+          {totalPending === 1 ? "" : "s"}{" "}
+          under {horizon} days, outcomes pending
         </div>
       )}
 
@@ -405,6 +488,24 @@ export function RecommendationPerformanceTab() {
         && !perf.error
         && buckets.length > 0 && (
         <div className="space-y-4">
+          {/* Activity is always renderable —
+              regardless of outcome availability. */}
+          <div
+            className={
+              "rounded-md border border-gray-200 " +
+              "dark:border-gray-700 bg-white " +
+              "dark:bg-gray-800 p-3"
+            }
+          >
+            <SimpleBarChart
+              categories={activityChart.categories}
+              series={activityChart.series}
+              title="Recommendations issued vs acted on"
+              yAxisLabel="count"
+              height={240}
+              valueFormatter={(v) => String(v)}
+            />
+          </div>
           <div
             className={
               "rounded-md border border-gray-200 " +
@@ -415,7 +516,7 @@ export function RecommendationPerformanceTab() {
             <SimpleBarChart
               categories={hitRateChart.categories}
               series={hitRateChart.series}
-              title="Hit rate by horizon"
+              title={`Hit rate at ${horizon}-day horizon`}
               yAxisLabel="%"
               height={280}
               valueFormatter={(v) =>
@@ -433,7 +534,10 @@ export function RecommendationPerformanceTab() {
             <SimpleBarChart
               categories={returnChart.categories}
               series={returnChart.series}
-              title="Avg 90d return vs benchmark"
+              title={
+                "Avg "
+                + `${horizon}d return vs benchmark`
+              }
               yAxisLabel="%"
               height={280}
               valueFormatter={(v) =>

@@ -814,12 +814,15 @@ export interface PerfBucket {
   total_recs: number;
   acted_on_count: number;
   pending_count: number;
+  hit_rate_7d?: number | null;
   hit_rate_30d?: number | null;
   hit_rate_60d?: number | null;
   hit_rate_90d?: number | null;
+  avg_return_7d?: number | null;
   avg_return_30d?: number | null;
   avg_return_60d?: number | null;
   avg_return_90d?: number | null;
+  avg_excess_7d?: number | null;
   avg_excess_30d?: number | null;
   avg_excess_60d?: number | null;
   avg_excess_90d?: number | null;
@@ -829,10 +832,17 @@ export interface PerfSummary {
   total_recs: number;
   acted_on_count: number;
   pending_count: number;
+  hit_rate_7d?: number | null;
   hit_rate_30d?: number | null;
   hit_rate_60d?: number | null;
   hit_rate_90d?: number | null;
+  avg_return_7d?: number | null;
+  avg_return_30d?: number | null;
+  avg_return_60d?: number | null;
   avg_return_90d?: number | null;
+  avg_excess_7d?: number | null;
+  avg_excess_30d?: number | null;
+  avg_excess_60d?: number | null;
   avg_excess_90d?: number | null;
 }
 
