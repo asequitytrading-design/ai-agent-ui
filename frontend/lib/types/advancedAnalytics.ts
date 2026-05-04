@@ -114,6 +114,22 @@ export const ADVANCED_REPORT_ORDER: AdvancedReportName[] = [
   "top-50-delivery-by-qty",
 ];
 
+/** Tab IDs include the data reports plus the frontend-only
+ *  Help tab. Keep AdvancedReportName separate — it mirrors
+ *  the backend endpoint set and drives RSC pre-fetch + URL
+ *  validation. */
+export type AdvancedTabId = AdvancedReportName | "help";
+
+export const ADVANCED_TAB_LABELS: Record<AdvancedTabId, string> = {
+  ...ADVANCED_REPORT_LABELS,
+  help: "Help",
+};
+
+export const ADVANCED_TAB_ORDER: AdvancedTabId[] = [
+  ...ADVANCED_REPORT_ORDER,
+  "help",
+];
+
 export type MarketFilter = "all" | "india" | "us";
 export type TickerTypeFilter = "all" | "stock" | "etf";
 
