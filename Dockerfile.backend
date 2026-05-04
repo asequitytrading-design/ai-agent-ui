@@ -15,9 +15,12 @@ RUN apt-get update && \
         gcc g++ libffi-dev && \
     rm -rf /var/lib/apt/lists/*
 
-COPY backend/requirements.txt .
+COPY backend/requirements.txt backend/requirements-dev.txt ./
+# Dev/test deps (pytest, pytest-asyncio, fakeredis) baked into
+# the runtime image so CI / docker-compose can run
+# `python -m pytest` without a manual install. Adds ~25 MB.
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --prefix=/install -r requirements.txt
+    pip install --prefix=/install -r requirements-dev.txt
 # PyTorch CPU-only for FinBERT sentiment scoring
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --prefix=/install \
@@ -47,6 +50,10 @@ COPY auth/ ./auth/
 COPY stocks/ ./stocks/
 COPY scripts/ ./scripts/
 COPY dashboard/ ./dashboard/
+# Tests + pytest config so `python -m pytest tests/backend`
+# runs from /app inside the container.
+COPY tests/ ./tests/
+COPY pyproject.toml ./
 
 # Python path matches the venv layout
 ENV PYTHONPATH=/app/backend:/app/auth:/app/stocks:/app/dashboard

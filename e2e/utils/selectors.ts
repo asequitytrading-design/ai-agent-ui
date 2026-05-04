@@ -214,4 +214,22 @@ export const FE = {
   forecastChartCanvas: "forecast-chart-canvas",
   compareChartCanvas: "compare-chart-canvas",
   plotlyChart: "plotly-chart",
+
+  // ── Advanced Analytics (Sprint 9 AA-13) ─────────
+  advancedAnalyticsHeading: "advanced-analytics-heading",
+  advancedAnalyticsTabs: "advanced-analytics-tabs",
+  advancedAnalyticsTab: (id: string) =>
+    `advanced-analytics-tab-${id}`,
+  advancedAnalyticsPanel: (id: string) =>
+    `advanced-analytics-panel-${id}`,
+  advancedAnalyticsTable: (id: string) =>
+    `advanced-analytics-table-${id}`,
+  advancedAnalyticsStaleChip: (id: string) =>
+    `advanced-analytics-stale-${id}`,
+  advancedAnalyticsSort: (key: string) =>
+    `advanced-analytics-sort-${key}`,
+  advancedAnalyticsPrev: (id: string) =>
+    `advanced-analytics-prev-${id}`,
+  advancedAnalyticsNext: (id: string) =>
+    `advanced-analytics-next-${id}`,
 } as const;

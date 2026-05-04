@@ -110,6 +110,48 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Re-fetch even if OHLCV is fresh",
     )
 
+    # bhavcopy -----------------------------------------------------
+    # Sprint 9 Advanced Analytics — NSE delivery ingest
+    # via jugaad-data full bhavcopy.  Idempotent per day.
+    p_bhav = sub.add_parser(
+        "bhavcopy",
+        help=(
+            "Ingest NSE bhavcopy delivery into "
+            "stocks.nse_delivery (single date or "
+            "multi-month backfill)"
+        ),
+    )
+    g_bhav = p_bhav.add_mutually_exclusive_group(
+        required=True,
+    )
+    g_bhav.add_argument(
+        "--date",
+        type=str,
+        help="Trading date YYYY-MM-DD (single-day ingest)",
+    )
+    g_bhav.add_argument(
+        "--backfill-months",
+        type=int,
+        help="Backfill the last N months sequentially",
+    )
+
+    # fundamentals-snapshot ----------------------------------------
+    # Sprint 9 Advanced Analytics — daily aggregator over
+    # stocks.quarterly_results into stocks.fundamentals_snapshot
+    # (3y/5y CAGR, ROCE, YoY).  Idempotent per snapshot_date.
+    p_fs = sub.add_parser(
+        "fundamentals-snapshot",
+        help=(
+            "Build daily fundamentals snapshot " "(3y/5y CAGR + ROCE + YoY)"
+        ),
+    )
+    p_fs.add_argument(
+        "--date",
+        type=str,
+        default=None,
+        help=("Override snapshot date YYYY-MM-DD " "(default: today)"),
+    )
+
     # status -------------------------------------------------------
     p_status = sub.add_parser(
         "status",
@@ -313,10 +355,7 @@ def _build_parser() -> argparse.ArgumentParser:
     # recommend ----------------------------------------------------
     p_recommend = sub.add_parser(
         "recommend",
-        help=(
-            "Generate LLM portfolio "
-            "recommendations"
-        ),
+        help=("Generate LLM portfolio " "recommendations"),
     )
     p_recommend.add_argument(
         "--scope",
@@ -343,8 +382,7 @@ def _build_parser() -> argparse.ArgumentParser:
     # refresh (full pipeline) --------------------------------------
     p_refresh = sub.add_parser(
         "refresh",
-        help="Full pipeline: data → analytics "
-        "→ sentiment → piotroski",
+        help="Full pipeline: data → analytics " "→ sentiment → piotroski",
     )
     p_refresh.add_argument(
         "--scope",
@@ -377,6 +415,8 @@ async def _dispatch(args: argparse.Namespace) -> None:
         "bulk": _cmd_bulk,
         "fundamentals": _cmd_fundamentals,
         "daily": _cmd_daily,
+        "bhavcopy": _cmd_bhavcopy,
+        "fundamentals-snapshot": _cmd_fundamentals_snapshot,
         "status": _cmd_status,
         "skipped": _cmd_skipped,
         "retry": _cmd_retry,
@@ -480,6 +520,79 @@ async def _cmd_daily(
         result["processed"],
         result["skipped"],
         result["failed"],
+    )
+
+
+async def _cmd_bhavcopy(args: argparse.Namespace) -> None:
+    from datetime import datetime
+
+    from backend.pipeline.jobs.bhavcopy import (
+        run_backfill,
+        run_bhavcopy,
+    )
+
+    if args.date:
+        try:
+            d = datetime.strptime(args.date, "%Y-%m-%d").date()
+        except ValueError:
+            _logger.error(
+                "Invalid --date %r (expected YYYY-MM-DD)",
+                args.date,
+            )
+            sys.exit(2)
+        result = await run_bhavcopy(d)
+        _logger.info(
+            "Bhavcopy %s: status=%s rows=%d%s",
+            result["date"],
+            result["status"],
+            result["rows"],
+            (f" error={result['error']}" if result.get("error") else ""),
+        )
+        return
+
+    result = await run_backfill(args.backfill_months)
+    _logger.info(
+        "Bhavcopy backfill %s..%s: ok=%d skipped=%d "
+        "failed=%d rows=%d duration=%.1fs",
+        result["start_date"],
+        result["end_date"],
+        result["ok"],
+        result["skipped"],
+        result["failed"],
+        result["total_rows"],
+        result["duration_s"],
+    )
+
+
+async def _cmd_fundamentals_snapshot(
+    args: argparse.Namespace,
+) -> None:
+    from datetime import datetime
+
+    from backend.pipeline.jobs.fundamentals_snapshot import (
+        run_snapshot,
+    )
+
+    snap_d = None
+    if args.date:
+        try:
+            snap_d = datetime.strptime(
+                args.date,
+                "%Y-%m-%d",
+            ).date()
+        except ValueError:
+            _logger.error(
+                "Invalid --date %r (expected YYYY-MM-DD)",
+                args.date,
+            )
+            sys.exit(2)
+    result = await run_snapshot(snap_d)
+    _logger.info(
+        "Fundamentals snapshot %s: tickers=%d rows=%d " "duration=%.1fs",
+        result["snapshot_date"],
+        result["tickers"],
+        result["rows"],
+        result["duration_s"],
     )
 
 
@@ -812,6 +925,12 @@ async def _cmd_reset(args: argparse.Namespace) -> None:
 async def _cmd_quarterly(
     args: argparse.Namespace,
 ) -> None:
+    from sqlalchemy import func, select
+    from tools._stock_shared import _require_repo
+    from tools.stock_data_tool import (
+        _fetch_and_store_quarterly,
+    )
+
     from backend.db.engine import get_session_factory
     from backend.db.models.stock_master import (
         StockMaster,
@@ -822,11 +941,6 @@ async def _cmd_quarterly(
         get_cursor,
         get_next_batch,
         set_cursor_status,
-    )
-    from sqlalchemy import func, select
-    from tools._stock_shared import _require_repo
-    from tools.stock_data_tool import (
-        _fetch_and_store_quarterly,
     )
 
     cursor_name = args.cursor
@@ -976,28 +1090,33 @@ async def _cmd_analytics(
         force,
         run_id,
     )
-    repo.append_scheduler_run({
-        "run_id": run_id,
-        "job_id": "cli",
-        "job_name": f"CLI analytics ({scope})",
-        "job_type": "compute_analytics",
-        "scope": scope,
-        "status": "running",
-        "started_at": __import__(
-            "datetime",
-        ).datetime.now(
-            __import__("datetime").timezone.utc,
-        ),
-        "completed_at": None,
-        "duration_secs": None,
-        "tickers_total": 0,
-        "tickers_done": 0,
-        "error_message": None,
-        "trigger_type": "cli",
-        "pipeline_run_id": None,
-    })
+    repo.append_scheduler_run(
+        {
+            "run_id": run_id,
+            "job_id": "cli",
+            "job_name": f"CLI analytics ({scope})",
+            "job_type": "compute_analytics",
+            "scope": scope,
+            "status": "running",
+            "started_at": __import__(
+                "datetime",
+            ).datetime.now(
+                __import__("datetime").timezone.utc,
+            ),
+            "completed_at": None,
+            "duration_secs": None,
+            "tickers_total": 0,
+            "tickers_done": 0,
+            "error_message": None,
+            "trigger_type": "cli",
+            "pipeline_run_id": None,
+        }
+    )
     execute_compute_analytics(
-        scope, run_id, repo, force=force,
+        scope,
+        run_id,
+        repo,
+        force=force,
     )
     _logger.info("Analytics complete: run=%s", run_id)
 
@@ -1020,28 +1139,33 @@ async def _cmd_sentiment(
         force,
         run_id,
     )
-    repo.append_scheduler_run({
-        "run_id": run_id,
-        "job_id": "cli",
-        "job_name": f"CLI sentiment ({scope})",
-        "job_type": "run_sentiment",
-        "scope": scope,
-        "status": "running",
-        "started_at": __import__(
-            "datetime",
-        ).datetime.now(
-            __import__("datetime").timezone.utc,
-        ),
-        "completed_at": None,
-        "duration_secs": None,
-        "tickers_total": 0,
-        "tickers_done": 0,
-        "error_message": None,
-        "trigger_type": "cli",
-        "pipeline_run_id": None,
-    })
+    repo.append_scheduler_run(
+        {
+            "run_id": run_id,
+            "job_id": "cli",
+            "job_name": f"CLI sentiment ({scope})",
+            "job_type": "run_sentiment",
+            "scope": scope,
+            "status": "running",
+            "started_at": __import__(
+                "datetime",
+            ).datetime.now(
+                __import__("datetime").timezone.utc,
+            ),
+            "completed_at": None,
+            "duration_secs": None,
+            "tickers_total": 0,
+            "tickers_done": 0,
+            "error_message": None,
+            "trigger_type": "cli",
+            "pipeline_run_id": None,
+        }
+    )
     execute_run_sentiment(
-        scope, run_id, repo, force=force,
+        scope,
+        run_id,
+        repo,
+        force=force,
     )
     _logger.info("Sentiment complete: run=%s", run_id)
 
@@ -1064,28 +1188,33 @@ async def _cmd_forecast(
         force,
         run_id,
     )
-    repo.append_scheduler_run({
-        "run_id": run_id,
-        "job_id": "cli",
-        "job_name": f"CLI forecast ({scope})",
-        "job_type": "run_forecasts",
-        "scope": scope,
-        "status": "running",
-        "started_at": __import__(
-            "datetime",
-        ).datetime.now(
-            __import__("datetime").timezone.utc,
-        ),
-        "completed_at": None,
-        "duration_secs": None,
-        "tickers_total": 0,
-        "tickers_done": 0,
-        "error_message": None,
-        "trigger_type": "cli",
-        "pipeline_run_id": None,
-    })
+    repo.append_scheduler_run(
+        {
+            "run_id": run_id,
+            "job_id": "cli",
+            "job_name": f"CLI forecast ({scope})",
+            "job_type": "run_forecasts",
+            "scope": scope,
+            "status": "running",
+            "started_at": __import__(
+                "datetime",
+            ).datetime.now(
+                __import__("datetime").timezone.utc,
+            ),
+            "completed_at": None,
+            "duration_secs": None,
+            "tickers_total": 0,
+            "tickers_done": 0,
+            "error_message": None,
+            "trigger_type": "cli",
+            "pipeline_run_id": None,
+        }
+    )
     execute_run_forecasts(
-        scope, run_id, repo, force=force,
+        scope,
+        run_id,
+        repo,
+        force=force,
     )
     _logger.info("Forecast complete: run=%s", run_id)
 
@@ -1103,6 +1232,7 @@ async def _cmd_recommend(
     import uuid as _uuid
     from datetime import date, datetime, timedelta, timezone
 
+    from config import get_settings
     from jobs.recommendation_engine import (
         stage1_prefilter,
         stage2_gap_analysis,
@@ -1114,11 +1244,9 @@ async def _cmd_recommend(
         create_async_engine,
     )
     from sqlalchemy.pool import NullPool
-    from config import get_settings
-    from backend.db.models.recommendation import (
-        Recommendation as RecModel,
-        RecommendationRun as RunModel,
-    )
+
+    from backend.db.models.recommendation import Recommendation as RecModel
+    from backend.db.models.recommendation import RecommendationRun as RunModel
 
     scope = getattr(args, "scope", "india")
     force = getattr(args, "force", False)
@@ -1146,8 +1274,7 @@ async def _cmd_recommend(
 
     user_df = query_iceberg_df(
         "stocks.portfolio_transactions",
-        "SELECT DISTINCT user_id "
-        "FROM portfolio_transactions",
+        "SELECT DISTINCT user_id " "FROM portfolio_transactions",
     )
     if user_df.empty:
         _logger.warning("No users with portfolios")
@@ -1167,7 +1294,8 @@ async def _cmd_recommend(
         poolclass=NullPool,
     )
     factory = async_sessionmaker(
-        eng, class_=AsyncSession,
+        eng,
+        class_=AsyncSession,
     )
 
     generated = 0
@@ -1181,7 +1309,8 @@ async def _cmd_recommend(
             )
 
             quota = check_recommendation_quota(
-                uid, scope=scope,
+                uid,
+                scope=scope,
             )
             if not quota.get("allowed"):
                 _logger.info(
@@ -1194,10 +1323,13 @@ async def _cmd_recommend(
 
         # Stage 2 + 3
         s2 = stage2_gap_analysis(
-            uid, candidates, scope=scope,
+            uid,
+            candidates,
+            scope=scope,
         )
         if not s2.get(
-            "portfolio_summary", {},
+            "portfolio_summary",
+            {},
         ).get("total_holdings"):
             _logger.info(
                 "User %s: no %s holdings — skip",
@@ -1212,76 +1344,82 @@ async def _cmd_recommend(
 
         # Persist
         run_id = str(_uuid.uuid4())
-        cand_map = {
-            c["ticker"]: c
-            for c in s2.get("candidates", [])
-        }
+        cand_map = {c["ticker"]: c for c in s2.get("candidates", [])}
         async with factory() as s:
-            s.add(RunModel(
-                run_id=run_id,
-                user_id=uid,
-                run_date=date.today(),
-                run_type="cli",
-                scope=scope,
-                portfolio_snapshot=s2.get(
-                    "portfolio_summary", {},
-                ),
-                health_score=s3.get(
-                    "health_score", 0,
-                ),
-                health_label=s3.get(
-                    "health_label", "unknown",
-                ),
-                health_assessment=s3.get(
-                    "portfolio_health_assessment",
-                ),
-                candidates_scanned=len(candidates),
-                candidates_passed=len(
-                    s2.get("candidates", []),
-                ),
-                llm_model=s3.get("llm_model"),
-                llm_tokens_used=s3.get(
-                    "llm_tokens_used",
-                ),
-            ))
+            s.add(
+                RunModel(
+                    run_id=run_id,
+                    user_id=uid,
+                    run_date=date.today(),
+                    run_type="cli",
+                    scope=scope,
+                    portfolio_snapshot=s2.get(
+                        "portfolio_summary",
+                        {},
+                    ),
+                    health_score=s3.get(
+                        "health_score",
+                        0,
+                    ),
+                    health_label=s3.get(
+                        "health_label",
+                        "unknown",
+                    ),
+                    health_assessment=s3.get(
+                        "portfolio_health_assessment",
+                    ),
+                    candidates_scanned=len(candidates),
+                    candidates_passed=len(
+                        s2.get("candidates", []),
+                    ),
+                    llm_model=s3.get("llm_model"),
+                    llm_tokens_used=s3.get(
+                        "llm_tokens_used",
+                    ),
+                )
+            )
             for r in recs:
                 ticker = r.get("ticker")
                 c = cand_map.get(ticker, {})
-                s.add(RecModel(
-                    id=str(_uuid.uuid4()),
-                    run_id=run_id,
-                    tier=r.get("tier", "discovery"),
-                    category=r.get(
-                        "category", "general",
-                    ),
-                    ticker=ticker,
-                    action=r.get("action", "hold"),
-                    severity=r.get(
-                        "severity", "low",
-                    ),
-                    rationale=r.get(
-                        "rationale", "",
-                    ),
-                    expected_impact=r.get(
-                        "expected_impact",
-                    ),
-                    data_signals=r.get(
-                        "data_signals", {},
-                    ),
-                    price_at_rec=(
-                        r.get("price_at_rec")
-                        or c.get("current_price")
-                    ),
-                    target_price=(
-                        r.get("target_price")
-                        or c.get("target_price")
-                    ),
-                    expected_return_pct=(
-                        r.get("expected_return_pct")
-                        or c.get("forecast_3m_pct")
-                    ),
-                    status="active",
-                ))
+                s.add(
+                    RecModel(
+                        id=str(_uuid.uuid4()),
+                        run_id=run_id,
+                        tier=r.get("tier", "discovery"),
+                        category=r.get(
+                            "category",
+                            "general",
+                        ),
+                        ticker=ticker,
+                        action=r.get("action", "hold"),
+                        severity=r.get(
+                            "severity",
+                            "low",
+                        ),
+                        rationale=r.get(
+                            "rationale",
+                            "",
+                        ),
+                        expected_impact=r.get(
+                            "expected_impact",
+                        ),
+                        data_signals=r.get(
+                            "data_signals",
+                            {},
+                        ),
+                        price_at_rec=(
+                            r.get("price_at_rec") or c.get("current_price")
+                        ),
+                        target_price=(
+                            r.get("target_price") or c.get("target_price")
+                        ),
+                        expected_return_pct=(
+                            r.get("expected_return_pct")
+                            or c.get("forecast_3m_pct")
+                        ),
+                        status="active",
+                    )
+                )
             await s.commit()
 
         _logger.info(
@@ -1294,8 +1432,7 @@ async def _cmd_recommend(
     await eng.dispose()
     elapsed = _time.monotonic() - t0
     _logger.info(
-        "Recommend done: %d generated, "
-        "%d skipped (%.1fs)",
+        "Recommend done: %d generated, " "%d skipped (%.1fs)",
         generated,
         skipped,
         elapsed,
@@ -1349,8 +1486,7 @@ async def _cmd_refresh(
 
     pipeline_run_id = str(uuid.uuid4())
     _logger.info(
-        "Refresh pipeline: scope=%s force=%s "
-        "steps=%d run=%s",
+        "Refresh pipeline: scope=%s force=%s " "steps=%d run=%s",
         scope,
         force,
         len(steps),
@@ -1358,7 +1494,8 @@ async def _cmd_refresh(
     )
 
     for i, (job_type, executor_fn) in enumerate(
-        steps, 1,
+        steps,
+        1,
     ):
         run_id = str(uuid.uuid4())
         _logger.info(
@@ -1368,29 +1505,34 @@ async def _cmd_refresh(
             job_type,
             run_id,
         )
-        repo.append_scheduler_run({
-            "run_id": run_id,
-            "job_id": "cli",
-            "job_name": f"CLI {job_type} ({scope})",
-            "job_type": job_type,
-            "scope": scope,
-            "status": "running",
-            "started_at": __import__(
-                "datetime",
-            ).datetime.now(
-                __import__("datetime").timezone.utc,
-            ),
-            "completed_at": None,
-            "duration_secs": None,
-            "tickers_total": 0,
-            "tickers_done": 0,
-            "error_message": None,
-            "trigger_type": "cli",
-            "pipeline_run_id": pipeline_run_id,
-        })
+        repo.append_scheduler_run(
+            {
+                "run_id": run_id,
+                "job_id": "cli",
+                "job_name": f"CLI {job_type} ({scope})",
+                "job_type": job_type,
+                "scope": scope,
+                "status": "running",
+                "started_at": __import__(
+                    "datetime",
+                ).datetime.now(
+                    __import__("datetime").timezone.utc,
+                ),
+                "completed_at": None,
+                "duration_secs": None,
+                "tickers_total": 0,
+                "tickers_done": 0,
+                "error_message": None,
+                "trigger_type": "cli",
+                "pipeline_run_id": pipeline_run_id,
+            }
+        )
         try:
             executor_fn(
-                scope, run_id, repo, force=force,
+                scope,
+                run_id,
+                repo,
+                force=force,
             )
             _logger.info(
                 "Step %d/%d: %s complete",
@@ -1407,7 +1549,8 @@ async def _cmd_refresh(
                 exc,
             )
             _logger.info(
-                "Pipeline aborted at step %d", i,
+                "Pipeline aborted at step %d",
+                i,
             )
             return
 
@@ -1419,8 +1562,7 @@ async def _cmd_refresh(
     _logger.info("Step final: Piotroski F-Score")
     result = await run_screen()
     _logger.info(
-        "Piotroski: scored=%d strong=%d "
-        "moderate=%d weak=%d (%.1fs)",
+        "Piotroski: scored=%d strong=%d " "moderate=%d weak=%d (%.1fs)",
         result["scored"],
         result["strong"],
         result["moderate"],

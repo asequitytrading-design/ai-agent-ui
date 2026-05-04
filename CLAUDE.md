@@ -438,6 +438,7 @@ When you're about to do X, read pattern Y first.
 | Doing... | § | Memory |
 |---|---|---|
 | Add a tabular list page | 5.4 | `tabular-page-pattern`, `insights-column-selector-pattern` |
+| Add an advanced-analytics report tab | 5.4 | `project_advanced_analytics` |
 | Aggregate w/ stale per-entity inputs | 5.5 | `portfolio-pl-stale-ticker-chip` |
 | Add a modal (any kind) | 5.6 | `modal-stacking-pattern` |
 | Add a portfolio-related modal | 5.6 | `portfolio-management` |

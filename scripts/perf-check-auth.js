@@ -40,6 +40,8 @@ const ROUTES = [
   { path: "/analytics/marketplace", budget: 75, auth: true },
   // Insights (tabbed — each tab loads same page)
   { path: "/insights", budget: 75, auth: true },
+  // Advanced Analytics (Sprint 9 AA-7..14, pro/superuser)
+  { path: "/advanced-analytics", budget: 75, auth: true },
   // Admin (single page, 6 tabs rendered client-side)
   { path: "/admin", budget: 70, auth: true },
   // Docs

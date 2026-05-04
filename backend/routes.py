@@ -3672,6 +3672,9 @@ def create_app(
     from recommendation_routes import (
         create_recommendation_router,
     )
+    from advanced_analytics_routes import (
+        create_advanced_analytics_router,
+    )
 
     app.include_router(
         create_dashboard_router(),
@@ -3687,6 +3690,10 @@ def create_app(
     )
     app.include_router(
         create_recommendation_router(),
+        prefix="/v1",
+    )
+    app.include_router(
+        create_advanced_analytics_router(),
         prefix="/v1",
     )
     from market_routes import create_market_router

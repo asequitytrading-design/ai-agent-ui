@@ -12,6 +12,7 @@
 export type View =
   | "dashboard"
   | "analytics"
+  | "advanced-analytics"
   | "docs"
   | "admin";
 
@@ -48,6 +49,7 @@ export interface NavItem {
   href: string;
   label: string;
   superuserOnly?: boolean;
+  proOrSuperuserOnly?: boolean;
   requiresInsights?: boolean;
   icon: ReactNode;
   children?: NavItem[];
@@ -110,6 +112,18 @@ export const NAV_ITEMS: NavItem[] = [
         ),
       },
     ],
+  },
+  {
+    view: "advanced-analytics",
+    href: "/advanced-analytics",
+    label: "Advanced Analytics",
+    proOrSuperuserOnly: true,
+    icon: (
+      <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M3 3v18h18" />
+        <path d="M7 15l3-4 4 3 5-7" />
+      </svg>
+    ),
   },
   {
     view: "admin",

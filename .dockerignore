@@ -34,9 +34,11 @@ data/
 
 # Test artifacts
 e2e/
-tests/
 *.png
 .playwright-mcp/
+# tests/ is allow-listed for the backend image so
+# `docker compose run --rm backend python -m pytest tests/backend`
+# works without volume mounts (ASETPLTFRM-357 #1).
 
 # Docs / assets
 docs/
