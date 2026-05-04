@@ -2382,6 +2382,18 @@ function ScreenQLTab() {
       ? "tables"
       : "screen",
   );
+  // Keystroke hint — picks Cmd vs Ctrl after hydration to
+  // avoid SSR/client mismatch (navigator.platform is
+  // undefined on the server).
+  const [kbdHint, setKbdHint] = useState("Ctrl+Enter");
+  useEffect(() => {
+    if (
+      typeof navigator !== "undefined" &&
+      /Mac/i.test(navigator.platform)
+    ) {
+      setKbdHint("⌘+Enter");
+    }
+  }, []);
   const [query, setQuery] = useState(
     searchParams.get("q") ?? "",
   );
@@ -2934,11 +2946,7 @@ function ScreenQLTab() {
             : "Run Screen"}
         </button>
         <span className="text-xs text-gray-400">
-          {typeof navigator !== "undefined" &&
-          /Mac/i.test(navigator.platform)
-            ? "⌘+Enter"
-            : "Ctrl+Enter"}{" "}
-          to run
+          {kbdHint} to run
         </span>
         {results && (
           <span
