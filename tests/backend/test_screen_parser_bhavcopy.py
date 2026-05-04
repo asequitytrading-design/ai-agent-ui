@@ -234,3 +234,129 @@ def test_table_query_text_op_validation():
             'ticker > "AAPL"', "nse_delivery",
         )
     assert "Cannot use" in str(exc.value)
+
+
+# ---------------------------------------------------------------
+# 4. Tables sub-mode — superuser column selection + aggregation
+# ---------------------------------------------------------------
+
+
+def test_table_catalog_includes_full_universe():
+    """Sprint 9 follow-up — superuser-only Tables mode
+    exposes every Iceberg table in stocks.* (≥18)."""
+    for t in (
+        "company_info",
+        "analysis_summary",
+        "sentiment_scores",
+        "piotroski_scores",
+        "forecast_runs",
+        "forecasts",
+        "registry",
+        "data_gaps",
+        "llm_pricing",
+        "llm_usage",
+    ):
+        assert t in TABLE_CATALOG, t
+    assert len(TABLE_CATALOG) >= 18
+
+
+def test_generate_table_sql_select_columns_subset():
+    gen = generate_table_sql(
+        "sentiment_scores",
+        None,
+        select_columns=["ticker", "avg_score"],
+        limit=5,
+    )
+    assert "sentiment_scores.ticker" in gen.sql
+    assert "sentiment_scores.avg_score" in gen.sql
+    assert "headline_count" not in gen.sql
+    assert gen.columns_used == ["ticker", "avg_score"]
+
+
+def test_generate_table_sql_select_columns_unknown_rejected():
+    with pytest.raises(ScreenQLError) as exc:
+        generate_table_sql(
+            "sentiment_scores",
+            None,
+            select_columns=["ticker", "fake_col"],
+        )
+    assert "fake_col" in str(exc.value)
+
+
+def test_generate_table_sql_aggregation_with_group_by():
+    gen = generate_table_sql(
+        "sentiment_scores",
+        None,
+        aggregations=[
+            ("count", "*", "rows"),
+            ("count_distinct", "ticker", "tickers"),
+        ],
+        group_by=["score_date"],
+        sort_by="score_date",
+        sort_dir="desc",
+        limit=20,
+    )
+    assert "COUNT(*)" in gen.sql
+    assert "COUNT(DISTINCT sentiment_scores.ticker)" in gen.sql
+    assert "GROUP BY sentiment_scores.score_date" in gen.sql
+    assert "AS rows" in gen.sql
+    assert "AS tickers" in gen.sql
+    assert gen.columns_used == [
+        "score_date",
+        "rows",
+        "tickers",
+    ]
+    # COUNT in aggregation mode wraps the GROUP BY shape.
+    assert "FROM (" in gen.count_sql
+
+
+def test_generate_table_sql_single_row_aggregate():
+    """No group_by → single-row aggregate, count_sql=1."""
+    gen = generate_table_sql(
+        "sentiment_scores",
+        None,
+        aggregations=[
+            ("min", "score_date", "first_day"),
+            ("max", "score_date", "last_day"),
+            ("count_distinct", "ticker", None),
+        ],
+        group_by=[],
+        limit=1,
+    )
+    assert "GROUP BY" not in gen.sql
+    assert "MIN(sentiment_scores.score_date)" in gen.sql
+    assert "MAX(sentiment_scores.score_date)" in gen.sql
+    assert gen.count_sql == "SELECT 1 AS cnt"
+
+
+def test_generate_table_sql_unknown_aggregation_rejected():
+    with pytest.raises(ScreenQLError):
+        generate_table_sql(
+            "sentiment_scores",
+            None,
+            aggregations=[("median", "avg_score", None)],
+        )
+
+
+def test_generate_table_sql_count_star_only_for_count():
+    """sum/avg/min/max with column='*' are rejected."""
+    with pytest.raises(ScreenQLError):
+        generate_table_sql(
+            "sentiment_scores",
+            None,
+            aggregations=[("sum", "*", None)],
+        )
+
+
+def test_generate_table_sql_aggregation_alias_default():
+    """Alias defaults to ``{fn}_{col}`` (or fn_rows for *)."""
+    gen = generate_table_sql(
+        "sentiment_scores",
+        None,
+        aggregations=[
+            ("count", "*", None),
+            ("avg", "avg_score", None),
+        ],
+    )
+    assert "AS count_rows" in gen.sql
+    assert "AS avg_avg_score" in gen.sql

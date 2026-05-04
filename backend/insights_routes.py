@@ -28,7 +28,10 @@ import pandas as pd
 from fastapi import APIRouter, Depends, Query, Response
 
 import auth.endpoints.helpers as _helpers
-from auth.dependencies import get_current_user
+from auth.dependencies import (
+    get_current_user,
+    superuser_only,
+)
 from auth.models import UserContext
 from cache import get_cache, TTL_STABLE
 from market_utils import (
@@ -2105,9 +2108,15 @@ def create_insights_router() -> APIRouter:
     @router.get(
         "/screen/tables",
         response_model=ScreenTablesResponse,
+        dependencies=[Depends(superuser_only)],
     )
     async def get_screen_tables():
-        """Return whitelisted tables for Tables sub-mode."""
+        """Return whitelisted tables for Tables sub-mode.
+
+        Superuser-only — Tables mode exposes every Iceberg
+        table in ``stocks.*`` for ad-hoc inspection. Pro /
+        general users do not see this dropdown.
+        """
         from backend.insights.screen_parser import (
             get_table_catalog_json,
         )
@@ -2119,6 +2128,7 @@ def create_insights_router() -> APIRouter:
     @router.post(
         "/screen/table",
         response_model=ScreenTableResponse,
+        dependencies=[Depends(superuser_only)],
     )
     async def run_screen_table(
         req: ScreenTableRequest,
@@ -2126,11 +2136,14 @@ def create_insights_router() -> APIRouter:
             get_current_user,
         ),
     ):
-        """Execute a Tables-sub-mode query.
+        """Execute a Tables-sub-mode query (superuser).
 
         Single-table SELECT against a whitelisted Iceberg
-        table (TABLE_CATALOG). WHERE / sort / limit are
-        all parameterized; LIMIT is hard-capped at 1000.
+        table (TABLE_CATALOG). Supports column selection,
+        aggregations (COUNT/COUNT_DISTINCT/MIN/MAX/AVG/SUM)
+        and GROUP BY. WHERE / sort / limit / aggregations /
+        group_by are all parameterized; LIMIT is hard-capped
+        at 1000. Superuser-only — bypasses _scoped_tickers.
         """
         from hashlib import sha256
 
@@ -2140,6 +2153,13 @@ def create_insights_router() -> APIRouter:
             parse_table_query,
         )
 
+        agg_key = ";".join(
+            f"{a.fn}:{a.column}:{a.alias or ''}"
+            for a in req.aggregations
+        )
+        sel_key = ",".join(req.select_columns or [])
+        grp_key = ",".join(req.group_by)
+
         cache = get_cache()
         ck = (
             "cache:insights:screentbl:"
@@ -2147,6 +2167,7 @@ def create_insights_router() -> APIRouter:
                 f"{req.table}:{req.where}:"
                 f"{req.sort_by}:{req.sort_dir}:"
                 f"{req.limit}:{req.offset}:"
+                f"{sel_key}:{agg_key}:{grp_key}:"
                 f"{user.user_id}".encode()
             ).hexdigest()[:16]
         )
@@ -2169,10 +2190,8 @@ def create_insights_router() -> APIRouter:
                 detail=str(exc),
             )
 
-        tickers = await _scoped_tickers(
-            user, "discovery",
-        )
-
+        # Superuser bypasses ticker scoping — Tables mode
+        # is for full-universe ad-hoc inspection.
         try:
             gen = generate_table_sql(
                 req.table,
@@ -2181,9 +2200,13 @@ def create_insights_router() -> APIRouter:
                 sort_dir=req.sort_dir,
                 limit=req.limit,
                 offset=req.offset,
-                ticker_filter=(
-                    tickers if tickers else None
-                ),
+                ticker_filter=None,
+                select_columns=req.select_columns,
+                aggregations=[
+                    (a.fn, a.column, a.alias)
+                    for a in req.aggregations
+                ],
+                group_by=req.group_by,
             )
         except ScreenQLError as exc:
             from fastapi import HTTPException
@@ -2246,6 +2269,7 @@ def create_insights_router() -> APIRouter:
             offset=req.offset,
             columns=gen.columns_used,
             table=req.table,
+            is_aggregated=bool(req.aggregations),
         )
         if cache:
             cache.set(

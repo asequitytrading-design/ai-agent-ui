@@ -1240,6 +1240,9 @@ TABLE_LIMIT_DEFAULT = 100
 # Per-table column whitelist. Columns are declared with their
 # logical type; date columns ride as TEXT (use `LIKE "2026-04"`
 # for substring time filters in v1; numeric range comes later).
+# Sprint 9 follow-up: superuser-only Tables mode now exposes
+# every Iceberg table in `stocks.*` for ad-hoc inspection +
+# aggregation (COUNT/MIN/MAX/AVG/SUM with optional GROUP BY).
 TABLE_CATALOG: dict[str, dict[str, FieldType]] = {
     "nse_delivery": {
         "ticker": FieldType.TEXT,
@@ -1248,6 +1251,7 @@ TABLE_CATALOG: dict[str, dict[str, FieldType]] = {
         "delivery_pct": FieldType.NUMBER,
         "traded_qty": FieldType.NUMBER,
         "traded_value": FieldType.NUMBER,
+        "ingested_at": FieldType.TEXT,
     },
     "fundamentals_snapshot": {
         "ticker": FieldType.TEXT,
@@ -1260,12 +1264,14 @@ TABLE_CATALOG: dict[str, dict[str, FieldType]] = {
         "yoy_qtr_sales": FieldType.NUMBER,
         "roce": FieldType.NUMBER,
         "debt_to_eq": FieldType.NUMBER,
+        "ingested_at": FieldType.TEXT,
     },
     "corporate_events": {
         "ticker": FieldType.TEXT,
         "event_date": FieldType.TEXT,
         "event_type": FieldType.TEXT,
         "event_label": FieldType.TEXT,
+        "ingested_at": FieldType.TEXT,
     },
     "promoter_holdings": {
         "ticker": FieldType.TEXT,
@@ -1274,6 +1280,7 @@ TABLE_CATALOG: dict[str, dict[str, FieldType]] = {
         "pledged_pct": FieldType.NUMBER,
         "chng_qoq": FieldType.NUMBER,
         "source": FieldType.TEXT,
+        "ingested_at": FieldType.TEXT,
     },
     "ohlcv": {
         "ticker": FieldType.TEXT,
@@ -1282,21 +1289,245 @@ TABLE_CATALOG: dict[str, dict[str, FieldType]] = {
         "high": FieldType.NUMBER,
         "low": FieldType.NUMBER,
         "close": FieldType.NUMBER,
+        "adj_close": FieldType.NUMBER,
         "volume": FieldType.NUMBER,
+        "fetched_at": FieldType.TEXT,
     },
     "dividends": {
         "ticker": FieldType.TEXT,
         "ex_date": FieldType.TEXT,
-        "amount": FieldType.NUMBER,
+        "dividend_amount": FieldType.NUMBER,
+        "currency": FieldType.TEXT,
+        "fetched_at": FieldType.TEXT,
     },
     "quarterly_results": {
         "ticker": FieldType.TEXT,
         "quarter_end": FieldType.TEXT,
+        "fiscal_year": FieldType.NUMBER,
+        "fiscal_quarter": FieldType.TEXT,
         "statement_type": FieldType.TEXT,
         "revenue": FieldType.NUMBER,
         "net_income": FieldType.NUMBER,
+        "gross_profit": FieldType.NUMBER,
+        "operating_income": FieldType.NUMBER,
+        "ebitda": FieldType.NUMBER,
+        "eps_basic": FieldType.NUMBER,
         "eps_diluted": FieldType.NUMBER,
+        "total_assets": FieldType.NUMBER,
+        "total_liabilities": FieldType.NUMBER,
+        "total_equity": FieldType.NUMBER,
+        "total_debt": FieldType.NUMBER,
+        "cash_and_equivalents": FieldType.NUMBER,
+        "operating_cashflow": FieldType.NUMBER,
+        "capex": FieldType.NUMBER,
+        "free_cashflow": FieldType.NUMBER,
+        "current_assets": FieldType.NUMBER,
+        "current_liabilities": FieldType.NUMBER,
+        "shares_outstanding": FieldType.NUMBER,
+        "updated_at": FieldType.TEXT,
     },
+    "company_info": {
+        "ticker": FieldType.TEXT,
+        "company_name": FieldType.TEXT,
+        "sector": FieldType.TEXT,
+        "industry": FieldType.TEXT,
+        "exchange": FieldType.TEXT,
+        "country": FieldType.TEXT,
+        "currency": FieldType.TEXT,
+        "market_cap": FieldType.NUMBER,
+        "pe_ratio": FieldType.NUMBER,
+        "peg_ratio_yf": FieldType.NUMBER,
+        "price_to_book": FieldType.NUMBER,
+        "book_value": FieldType.NUMBER,
+        "beta": FieldType.NUMBER,
+        "dividend_yield": FieldType.NUMBER,
+        "earnings_growth": FieldType.NUMBER,
+        "revenue_growth": FieldType.NUMBER,
+        "profit_margins": FieldType.NUMBER,
+        "current_price": FieldType.NUMBER,
+        "week_52_high": FieldType.NUMBER,
+        "week_52_low": FieldType.NUMBER,
+        "avg_volume": FieldType.NUMBER,
+        "float_shares": FieldType.NUMBER,
+        "short_ratio": FieldType.NUMBER,
+        "analyst_target": FieldType.NUMBER,
+        "recommendation": FieldType.NUMBER,
+        "employees": FieldType.NUMBER,
+        "fetched_at": FieldType.TEXT,
+    },
+    "analysis_summary": {
+        "ticker": FieldType.TEXT,
+        "analysis_date": FieldType.TEXT,
+        "bull_phase_pct": FieldType.NUMBER,
+        "bear_phase_pct": FieldType.NUMBER,
+        "max_drawdown_pct": FieldType.NUMBER,
+        "max_drawdown_duration_days": FieldType.NUMBER,
+        "annualized_volatility_pct": FieldType.NUMBER,
+        "annualized_return_pct": FieldType.NUMBER,
+        "sharpe_ratio": FieldType.NUMBER,
+        "all_time_high": FieldType.NUMBER,
+        "all_time_high_date": FieldType.TEXT,
+        "all_time_low": FieldType.NUMBER,
+        "all_time_low_date": FieldType.TEXT,
+        "sma_50_signal": FieldType.TEXT,
+        "sma_200_signal": FieldType.TEXT,
+        "rsi_signal": FieldType.TEXT,
+        "macd_signal_text": FieldType.TEXT,
+        "best_month": FieldType.TEXT,
+        "worst_month": FieldType.TEXT,
+        "best_year": FieldType.TEXT,
+        "worst_year": FieldType.TEXT,
+        "computed_at": FieldType.TEXT,
+    },
+    "sentiment_scores": {
+        "ticker": FieldType.TEXT,
+        "score_date": FieldType.TEXT,
+        "avg_score": FieldType.NUMBER,
+        "headline_count": FieldType.NUMBER,
+        "source": FieldType.TEXT,
+        "scored_at": FieldType.TEXT,
+    },
+    "piotroski_scores": {
+        "ticker": FieldType.TEXT,
+        "score_date": FieldType.TEXT,
+        "total_score": FieldType.NUMBER,
+        "label": FieldType.TEXT,
+        "market_cap": FieldType.NUMBER,
+        "revenue": FieldType.NUMBER,
+        "avg_volume": FieldType.NUMBER,
+        "sector": FieldType.TEXT,
+        "industry": FieldType.TEXT,
+        "company_name": FieldType.TEXT,
+        "computed_at": FieldType.TEXT,
+    },
+    "forecast_runs": {
+        "ticker": FieldType.TEXT,
+        "run_date": FieldType.TEXT,
+        "horizon_months": FieldType.NUMBER,
+        "sentiment": FieldType.TEXT,
+        "current_price_at_run": FieldType.NUMBER,
+        "target_3m_date": FieldType.TEXT,
+        "target_3m_price": FieldType.NUMBER,
+        "target_3m_pct_change": FieldType.NUMBER,
+        "target_3m_lower": FieldType.NUMBER,
+        "target_3m_upper": FieldType.NUMBER,
+        "target_6m_date": FieldType.TEXT,
+        "target_6m_price": FieldType.NUMBER,
+        "target_6m_pct_change": FieldType.NUMBER,
+        "target_9m_date": FieldType.TEXT,
+        "target_9m_price": FieldType.NUMBER,
+        "target_9m_pct_change": FieldType.NUMBER,
+        "mae": FieldType.NUMBER,
+        "rmse": FieldType.NUMBER,
+        "mape": FieldType.NUMBER,
+        "confidence_score": FieldType.NUMBER,
+        "computed_at": FieldType.TEXT,
+    },
+    "forecasts": {
+        "ticker": FieldType.TEXT,
+        "horizon_months": FieldType.NUMBER,
+        "run_date": FieldType.TEXT,
+        "forecast_date": FieldType.TEXT,
+        "predicted_price": FieldType.NUMBER,
+        "lower_bound": FieldType.NUMBER,
+        "upper_bound": FieldType.NUMBER,
+    },
+    "registry": {
+        "ticker": FieldType.TEXT,
+        "last_fetch_date": FieldType.TEXT,
+        "total_rows": FieldType.NUMBER,
+        "date_range_start": FieldType.TEXT,
+        "date_range_end": FieldType.TEXT,
+        "market": FieldType.TEXT,
+        "created_at": FieldType.TEXT,
+        "updated_at": FieldType.TEXT,
+    },
+    "data_gaps": {
+        "ticker": FieldType.TEXT,
+        "data_type": FieldType.TEXT,
+        "query_count": FieldType.NUMBER,
+        "detected_at": FieldType.TEXT,
+        "resolved_at": FieldType.TEXT,
+        "resolution": FieldType.TEXT,
+    },
+    "llm_pricing": {
+        "provider": FieldType.TEXT,
+        "model": FieldType.TEXT,
+        "input_cost_per_1m": FieldType.NUMBER,
+        "output_cost_per_1m": FieldType.NUMBER,
+        "effective_from": FieldType.TEXT,
+        "effective_to": FieldType.TEXT,
+        "currency": FieldType.TEXT,
+        "updated_by": FieldType.TEXT,
+        "created_at": FieldType.TEXT,
+    },
+    "llm_usage": {
+        "request_date": FieldType.TEXT,
+        "user_id": FieldType.TEXT,
+        "agent_id": FieldType.TEXT,
+        "model": FieldType.TEXT,
+        "provider": FieldType.TEXT,
+        "tier_index": FieldType.NUMBER,
+        "event_type": FieldType.TEXT,
+        "cascade_reason": FieldType.TEXT,
+        "cascade_from_model": FieldType.TEXT,
+        "prompt_tokens": FieldType.NUMBER,
+        "completion_tokens": FieldType.NUMBER,
+        "total_tokens": FieldType.NUMBER,
+        "input_cost_per_1m": FieldType.NUMBER,
+        "output_cost_per_1m": FieldType.NUMBER,
+        "estimated_cost_usd": FieldType.NUMBER,
+        "latency_ms": FieldType.NUMBER,
+        "success": FieldType.TEXT,
+        "error_code": FieldType.TEXT,
+        "key_source": FieldType.TEXT,
+        "timestamp": FieldType.TEXT,
+    },
+    "query_log": {
+        "user_id": FieldType.TEXT,
+        "query_text": FieldType.TEXT,
+        "classified_intent": FieldType.TEXT,
+        "sub_agent_invoked": FieldType.TEXT,
+        "tools_used": FieldType.TEXT,
+        "data_sources_used": FieldType.TEXT,
+        "was_local_sufficient": FieldType.TEXT,
+        "response_time_ms": FieldType.NUMBER,
+        "gap_tickers": FieldType.TEXT,
+        "timestamp": FieldType.TEXT,
+    },
+    "chat_audit_log": {
+        "session_id": FieldType.TEXT,
+        "user_id": FieldType.TEXT,
+        "started_at": FieldType.TEXT,
+        "ended_at": FieldType.TEXT,
+        "message_count": FieldType.NUMBER,
+        "agent_ids_used": FieldType.TEXT,
+        "created_at": FieldType.TEXT,
+    },
+    "portfolio_transactions": {
+        "transaction_id": FieldType.TEXT,
+        "user_id": FieldType.TEXT,
+        "ticker": FieldType.TEXT,
+        "side": FieldType.TEXT,
+        "quantity": FieldType.NUMBER,
+        "price": FieldType.NUMBER,
+        "currency": FieldType.TEXT,
+        "market": FieldType.TEXT,
+        "trade_date": FieldType.TEXT,
+        "fees": FieldType.NUMBER,
+        "created_at": FieldType.TEXT,
+    },
+}
+
+# Whitelisted aggregation functions for Tables sub-mode.
+# All emit deterministic SQL — no UDFs, no window functions.
+AGG_FUNCS: dict[str, str] = {
+    "count": "COUNT",
+    "count_distinct": "COUNT",  # rendered as COUNT(DISTINCT ...)
+    "min": "MIN",
+    "max": "MAX",
+    "avg": "AVG",
+    "sum": "SUM",
 }
 
 
@@ -1465,6 +1696,31 @@ class _TableParser(Parser):
         return Condition(field_name, op, value, fd)
 
 
+def _date_like_col(col: str) -> bool:
+    """Return True if `col` should be CAST to VARCHAR.
+
+    Date / timestamp columns ride as TEXT in the catalog
+    (so they accept LIKE filters); the underlying Iceberg
+    type may still be DATE/TIMESTAMP. CASTing in SELECT
+    keeps JSON serialization stable.
+    """
+    return (
+        "date" in col
+        or col == "quarter_end"
+        or col.endswith("_at")
+        or col == "timestamp"
+    )
+
+
+def _proj_expr(table: str, col: str) -> str:
+    """SELECT-projection for a single column (CAST dates)."""
+    if _date_like_col(col):
+        return (
+            f"CAST({table}.{col} AS VARCHAR) AS {col}"
+        )
+    return f"{table}.{col}"
+
+
 def generate_table_sql(
     table: str,
     ast: ASTNode | None,
@@ -1473,6 +1729,11 @@ def generate_table_sql(
     limit: int = TABLE_LIMIT_DEFAULT,
     offset: int = 0,
     ticker_filter: list[str] | None = None,
+    select_columns: list[str] | None = None,
+    aggregations: (
+        list[tuple[str, str, str | None]] | None
+    ) = None,
+    group_by: list[str] | None = None,
 ) -> GeneratedQuery:
     """Generate DuckDB SQL for the Tables sub-mode.
 
@@ -1482,6 +1743,14 @@ def generate_table_sql(
     not provided. *ticker_filter* (when given) injects
     ``WHERE ticker IN (...)`` so general users still see
     their watchlist + holdings only.
+
+    *select_columns* (raw mode) restricts the projection
+    to that subset. *aggregations* (list of
+    ``(fn, column, alias)``) and *group_by* together
+    switch the query to aggregation mode — the projection
+    becomes ``group_by ... agg(col) AS alias`` and ORDER BY
+    sorts on the first group_by column unless *sort_by* is
+    one of the group_by / aggregation aliases.
     """
     if table not in TABLE_CATALOG:
         raise ScreenQLError(
@@ -1514,33 +1783,156 @@ def generate_table_sql(
             else scope
         )
 
-    # SELECT projection — every whitelisted column,
-    # casting dates to VARCHAR so JSON serialization is
-    # deterministic.
-    select_parts: list[str] = []
-    for col, ftype in cols.items():
-        if ftype is FieldType.TEXT and (
-            "date" in col or col == "quarter_end"
+    where_sql = (
+        f"WHERE {where_clause}\n" if where_clause else ""
+    )
+
+    aggs = aggregations or []
+    grp = group_by or []
+    is_aggregated = bool(aggs)
+
+    # ----- Aggregation mode -----------------------------
+    if is_aggregated:
+        for g in grp:
+            if g not in cols:
+                raise ScreenQLError(
+                    f"Unknown group_by column: {g}",
+                )
+        select_parts: list[str] = [
+            _proj_expr(table, g) for g in grp
+        ]
+        result_columns: list[str] = list(grp)
+        for fn, col, alias in aggs:
+            fn_lower = fn.lower()
+            if fn_lower not in AGG_FUNCS:
+                raise ScreenQLError(
+                    f"Unknown aggregation: {fn}",
+                )
+            sql_fn = AGG_FUNCS[fn_lower]
+            if col == "*":
+                if fn_lower != "count":
+                    raise ScreenQLError(
+                        f"{fn} requires a column",
+                    )
+                expr = "COUNT(*)"
+                col_label = "rows"
+            else:
+                if col not in cols:
+                    raise ScreenQLError(
+                        f"Unknown column: {col}",
+                    )
+                if fn_lower == "count_distinct":
+                    expr = (
+                        f"COUNT(DISTINCT {table}.{col})"
+                    )
+                else:
+                    expr = f"{sql_fn}({table}.{col})"
+                col_label = col
+            out_alias = (
+                alias
+                if alias
+                else f"{fn_lower}_{col_label}"
+            )
+            # Sanitize alias to identifier-safe chars
+            out_alias = "".join(
+                c if (c.isalnum() or c == "_") else "_"
+                for c in out_alias
+            ) or f"agg_{len(result_columns)}"
+            select_parts.append(f"{expr} AS {out_alias}")
+            result_columns.append(out_alias)
+        select_str = ", ".join(select_parts)
+
+        group_sql = ""
+        if grp:
+            group_cols = ", ".join(
+                f"{table}.{g}" for g in grp
+            )
+            group_sql = f"GROUP BY {group_cols}\n"
+
+        # ORDER BY — first try sort_by against the
+        # output projection (alias or group_by). Fall
+        # back to first aggregation alias DESC.
+        if (
+            sort_by
+            and sort_by in result_columns
         ):
-            select_parts.append(
-                f"CAST({table}.{col} AS VARCHAR) AS {col}"
+            order_col = sort_by
+        elif grp:
+            order_col = (
+                grp[0]
+                if not _date_like_col(grp[0])
+                else f"{table}.{grp[0]}"
             )
         else:
-            select_parts.append(f"{table}.{col}")
-    select_str = ", ".join(select_parts)
+            order_col = result_columns[-1]
+        direction = (
+            "ASC" if sort_dir == "asc" else "DESC"
+        )
 
-    # ORDER BY — fall back to ticker if sort_by not in
-    # the column whitelist.
+        params.append(limit_capped)
+        limit_idx = len(params)
+        params.append(offset_capped)
+        offset_idx = len(params)
+
+        sql = (
+            f"SELECT {select_str}\n"
+            f"FROM {table}\n"
+            f"{where_sql}"
+            f"{group_sql}"
+            f"ORDER BY {order_col} {direction} "
+            f"NULLS LAST\n"
+            f"LIMIT ${limit_idx} OFFSET ${offset_idx}"
+        )
+        if grp:
+            count_sql = (
+                f"SELECT COUNT(*) AS cnt FROM ("
+                f"SELECT 1 FROM {table}\n"
+                f"{where_sql}"
+                f"GROUP BY "
+                + ", ".join(
+                    f"{table}.{g}" for g in grp
+                )
+                + ") sub"
+            )
+        else:
+            # Single-row aggregate (no GROUP BY).
+            count_sql = "SELECT 1 AS cnt"
+
+        return GeneratedQuery(
+            sql=sql,
+            count_sql=count_sql,
+            params=params,
+            columns_used=result_columns,
+            tables_used={table},
+        )
+
+    # ----- Raw mode (no aggregations) -------------------
+    if select_columns:
+        unknown = [
+            c for c in select_columns if c not in cols
+        ]
+        if unknown:
+            raise ScreenQLError(
+                f"Unknown column(s): "
+                f"{', '.join(unknown)}",
+            )
+        proj_cols = list(select_columns)
+    else:
+        proj_cols = list(cols.keys())
+    select_str = ", ".join(
+        _proj_expr(table, c) for c in proj_cols
+    )
+
+    # ORDER BY — fall back to first projected column
+    # (was: hard-coded ticker, which broke for tables
+    # without a ticker column like llm_pricing).
     if sort_by and sort_by in cols:
         order_col = f"{table}.{sort_by}"
     else:
-        order_col = f"{table}.ticker"
+        first = proj_cols[0]
+        order_col = f"{table}.{first}"
     direction = (
         "ASC" if sort_dir == "asc" else "DESC"
-    )
-
-    where_sql = (
-        f"WHERE {where_clause}\n" if where_clause else ""
     )
 
     params.append(limit_capped)
@@ -1564,6 +1956,6 @@ def generate_table_sql(
         sql=sql,
         count_sql=count_sql,
         params=params,
-        columns_used=list(cols.keys()),
+        columns_used=proj_cols,
         tables_used={table},
     )

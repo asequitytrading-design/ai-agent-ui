@@ -2,6 +2,43 @@
 
 ---
 
+## 2026-05-04 (late PM) — ScreenQL Tables sub-mode: full Iceberg coverage + aggregations + superuser gate
+
+**Scope**: extended the Tables sub-mode (originally 7 tables, single-table SELECT only) into a superuser-only ad-hoc query surface over **every Iceberg table** in `stocks.*`, with column projection, aggregations, and GROUP BY. Reproduces the diagnostic `SELECT score_date, COUNT(*), COUNT(DISTINCT ticker) FROM sentiment_scores GROUP BY score_date` query directly from the UI — no SQL shell needed.
+
+### What changed
+
+| Layer | File | Summary |
+|---|---|---|
+| Backend | `backend/insights/screen_parser.py` | `TABLE_CATALOG` 7 → **20 tables** (every `stocks.*` Iceberg table); new `AGG_FUNCS` whitelist (`COUNT`, `COUNT_DISTINCT`, `MIN`, `MAX`, `AVG`, `SUM`); `_proj_expr` helper for date-as-VARCHAR projection; `generate_table_sql()` now branches into **aggregation mode** when `aggregations` non-empty (group-by SQL, `COUNT(*) FROM (... GROUP BY)` shape for `count_sql`, single-row-aggregate path with `count_sql='SELECT 1'`) and **column-projection mode** otherwise |
+| Backend | `backend/insights_models.py` | `TableAggregation` model (`fn`, `column`, `alias`); `ScreenTableRequest` gains `select_columns`, `aggregations`, `group_by`; response gains `is_aggregated` |
+| Backend | `backend/insights_routes.py` | `superuser_only` dependency on `/insights/screen/tables` + `/insights/screen/table` (HTTP 403 for general/pro); plumbs new fields into `generate_table_sql`; cache key extended with sel/agg/grp hashes; drops `_scoped_tickers` (superuser bypass — full universe) |
+| Frontend | `frontend/app/(authenticated)/analytics/insights/page.tsx` | `TableQueryMode` rebuilt: column-checkbox grid, **Aggregations** section with fn/column/alias rows + add/remove, **Group by** checkboxes, dynamic Sort By dropdown that surfaces aggregation aliases. Reset on table change. `ScreenQLTab` adds `isSuperuser` gate via `getRoleFromToken()` — non-superusers never see the toggle, and `?mode=tables` deep links silently downgrade to Screen mode |
+| Tests | `tests/backend/test_screen_parser_bhavcopy.py` | 8 new tests: full-universe catalog assertion, column-subset projection, unknown-column rejection, group-by aggregation SQL shape, single-row aggregate (`count_sql='SELECT 1'`), unknown-aggregation rejection, `*` only allowed for COUNT, alias defaulting (`{fn}_{col}`) |
+
+### Verification snapshot
+
+- **46 / 46** parser tests green (38 existing + 8 new); **87 / 87** across all screen / insights tests
+- API: `GET /insights/screen/tables` → 20 tables (superuser); HTTP 403 for `test@demo.com`. `POST /insights/screen/table` 403 for non-superuser
+- Reproduced sentiment summary end-to-end: 32 distinct days, 2026-03-28 → 2026-05-04, 15741 rows, 810 distinct tickers — single-row aggregate AND grouped-by-date both match
+- Browser (live): superuser sees toggle + 20-option dropdown + columns checkboxes + aggregation builder + group-by; query "COUNT(*), COUNT(DISTINCT ticker) GROUP BY score_date" returned **32 of 32** rows with header `score_date | count_rows | count_distinct_ticker`. General user sees no toggle, no Tables UI, falls through to Screen mode even on `?mode=tables` deep link
+- TypeScript clean (only pre-existing portfolio test fixture errors unrelated to this branch)
+
+### Patterns to remember
+
+- **Iceberg `DATE`/`TIMESTAMP` projected as VARCHAR** for stable JSON. Logical type stays TEXT in catalog (so LIKE works), `_date_like_col(name)` decides CAST. Don't add aggregation aliases to that helper — they're new identifiers, not source columns.
+- **Single-row aggregate count_sql** must be `'SELECT 1 AS cnt'` literal — `COUNT(*) FROM (SELECT 1 FROM tbl)` would re-scan the whole table just to return 1.
+- **Group-by COUNT shape**: `SELECT COUNT(*) FROM (SELECT 1 FROM tbl WHERE … GROUP BY …) sub`. The inner `SELECT 1` avoids materializing aggregation expressions twice.
+- **Dev-test localStorage gotcha**: canonical key is `auth_access_token` (not `access_token`). When manually injecting tokens via DevTools for role gating tests, use the `auth_*` keys or `getRoleFromToken()` reads stale state.
+- **Superuser bypass = no `_scoped_tickers`** — Tables mode is full-universe by design; don't paste in the discovery scope filter.
+
+### Carry-over for next session
+
+- Bundles into the existing `feature/aa-ticker-search` branch (12th commit). PR still pending per user's "raise final PR later" call.
+- Sentiment table itself: 32 days of coverage as of 2026-05-04, dense steady-state from Apr 14 (~21 trading days @ full universe of 810 tickers); Apr 9–11 are backfill ramp-up, not gaps.
+
+---
+
 ## 2026-05-04 (PM) — Same-day AA polish + ScreenQL extensions (11 commits queued)
 
 **Scope**: After PR #135 merged to dev (AA epic + -357), spent the rest of the session on a polish bundle on a fresh branch `feature/aa-ticker-search` based off the merged dev. User explicitly closed PR #136 (the first interim PR) to bundle more fixes; will raise the final PR later. 11 commits queued, ready for a single squash to dev.

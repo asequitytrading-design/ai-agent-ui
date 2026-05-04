@@ -43,6 +43,7 @@ import {
   downloadCsv,
   type CsvColumn,
 } from "@/lib/downloadCsv";
+import { getRoleFromToken } from "@/lib/auth";
 import dynamic from "next/dynamic";
 import type { BarSeries } from "@/components/charts/SimpleBarChart";
 import { PiotroskiBadge } from "@/components/insights/PiotroskiBadge";
@@ -2008,6 +2009,31 @@ interface TableDef {
   columns: TableColumnDef[];
 }
 
+// Aggregation builder types.
+const AGG_FUNCS = [
+  "count",
+  "count_distinct",
+  "min",
+  "max",
+  "avg",
+  "sum",
+] as const;
+type AggFn = (typeof AGG_FUNCS)[number];
+
+interface AggRow {
+  fn: AggFn;
+  column: string; // "*" for COUNT(*)
+  alias: string;
+}
+
+interface TableQueryResult {
+  rows: Record<string, unknown>[];
+  total: number;
+  columns: string[];
+  table: string;
+  is_aggregated: boolean;
+}
+
 function TableQueryMode() {
   const [tables, setTables] = useState<TableDef[]>([]);
   const [selected, setSelected] = useState<string>("");
@@ -2017,12 +2043,17 @@ function TableQueryMode() {
     "desc",
   );
   const [limit, setLimit] = useState<number>(100);
-  const [results, setResults] = useState<{
-    rows: Record<string, unknown>[];
-    total: number;
-    columns: string[];
-    table: string;
-  } | null>(null);
+  // Per-table column selection — empty Set = "all". Reset
+  // on table change.
+  const [colSel, setColSel] = useState<Set<string>>(
+    new Set(),
+  );
+  const [groupBy, setGroupBy] = useState<Set<string>>(
+    new Set(),
+  );
+  const [aggs, setAggs] = useState<AggRow[]>([]);
+  const [results, setResults] =
+    useState<TableQueryResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>("");
 
@@ -2059,6 +2090,17 @@ function TableQueryMode() {
     [tables, selected],
   );
 
+  // Reset per-table selections on table change.
+  useEffect(() => {
+    setColSel(new Set());
+    setGroupBy(new Set());
+    setAggs([]);
+    setSortBy("");
+    setResults(null);
+  }, [selected]);
+
+  const isAgg = aggs.length > 0;
+
   const runTableQuery = useCallback(async () => {
     if (!selected) return;
     setLoading(true);
@@ -2071,6 +2113,30 @@ function TableQueryMode() {
         process.env.NEXT_PUBLIC_BACKEND_URL ??
         "http://localhost:8181"
       }/v1`;
+      const body: Record<string, unknown> = {
+        table: selected,
+        where: whereText,
+        sort_by: sortBy || null,
+        sort_dir: sortDir,
+        limit,
+        offset: 0,
+      };
+      if (isAgg) {
+        body.aggregations = aggs.map((a) => ({
+          fn: a.fn,
+          column: a.column,
+          alias: a.alias || null,
+        }));
+        body.group_by = Array.from(groupBy);
+      } else if (colSel.size > 0) {
+        // Preserve catalog column order in projection.
+        const sel = colSel;
+        body.select_columns = (
+          currentTable?.columns ?? []
+        )
+          .map((c) => c.name)
+          .filter((n) => sel.has(n));
+      }
       const res = await apiFetch(
         `${API_URL}/insights/screen/table`,
         {
@@ -2078,14 +2144,7 @@ function TableQueryMode() {
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({
-            table: selected,
-            where: whereText,
-            sort_by: sortBy || null,
-            sort_dir: sortDir,
-            limit,
-            offset: 0,
-          }),
+          body: JSON.stringify(body),
         },
       );
       if (!res.ok) {
@@ -2102,25 +2161,50 @@ function TableQueryMode() {
       setResults(null);
     }
     setLoading(false);
-  }, [selected, whereText, sortBy, sortDir, limit]);
+  }, [
+    selected,
+    whereText,
+    sortBy,
+    sortDir,
+    limit,
+    isAgg,
+    aggs,
+    groupBy,
+    colSel,
+    currentTable,
+  ]);
 
+  // Dynamic table columns — driven by `results.columns`
+  // (server-truth) so aggregation aliases render correctly.
   const dynamicCols = useMemo<
     Column<Record<string, unknown>>[]
   >(() => {
     if (!results || !currentTable) return [];
-    return currentTable.columns.map((c) => ({
-      key: c.name,
-      label: c.name,
-      numeric: c.type === "number",
-      render: (r: Record<string, unknown>) => {
-        const v = r[c.name];
-        if (v == null) return "—";
-        if (typeof v === "number") {
-          return v.toFixed(c.type === "number" ? 4 : 0);
-        }
-        return String(v);
-      },
-    }));
+    const typeMap = new Map(
+      currentTable.columns.map((c) => [c.name, c.type]),
+    );
+    return results.columns.map((name) => {
+      const t = typeMap.get(name);
+      const isNumber =
+        t === "number" ||
+        // Aggregation aliases (count_*, sum_*, avg_*) — numeric.
+        /^(count|sum|avg|min|max)/i.test(name);
+      return {
+        key: name,
+        label: name,
+        numeric: isNumber,
+        render: (r: Record<string, unknown>) => {
+          const v = r[name];
+          if (v == null) return "—";
+          if (typeof v === "number") {
+            return Number.isInteger(v)
+              ? v.toLocaleString("en-US")
+              : v.toFixed(4);
+          }
+          return String(v);
+        },
+      };
+    });
   }, [results, currentTable]);
 
   const csvCols = useMemo(
@@ -2132,6 +2216,49 @@ function TableQueryMode() {
     [dynamicCols],
   );
 
+  // Helpers ----------------------------------------------
+  const toggle = (
+    set: Set<string>,
+    setter: (s: Set<string>) => void,
+    name: string,
+  ) => {
+    const next = new Set(set);
+    if (next.has(name)) next.delete(name);
+    else next.add(name);
+    setter(next);
+  };
+
+  const addAgg = () => {
+    if (!currentTable) return;
+    const firstNumeric =
+      currentTable.columns.find(
+        (c) => c.type === "number",
+      )?.name ?? currentTable.columns[0]?.name ?? "*";
+    setAggs([
+      ...aggs,
+      {
+        fn: aggs.length === 0 ? "count" : "min",
+        column: aggs.length === 0 ? "*" : firstNumeric,
+        alias: "",
+      },
+    ]);
+  };
+
+  const updateAgg = (
+    idx: number,
+    patch: Partial<AggRow>,
+  ) => {
+    setAggs(
+      aggs.map((a, i) =>
+        i === idx ? { ...a, ...patch } : a,
+      ),
+    );
+  };
+
+  const removeAgg = (idx: number) => {
+    setAggs(aggs.filter((_, i) => i !== idx));
+  };
+
   return (
     <div className="space-y-4">
       <div
@@ -2140,14 +2267,20 @@ function TableQueryMode() {
           dark:bg-amber-900/10 px-3 py-2
           text-xs text-amber-800 dark:text-amber-300"
       >
-        <strong>Tables mode</strong> — query a single
-        Iceberg table directly. WHERE clause uses the
+        <strong>Tables mode</strong> (superuser) — query
+        any Iceberg table directly. WHERE clause uses the
         same DSL as Screen mode (e.g.{" "}
         <code className="font-mono">
           delivery_pct &gt; 70 AND ticker LIKE
           &quot;RELIA&quot;
         </code>
-        ). LIMIT capped at 1000.
+        ). Pick columns to project, or add aggregations
+        (<code className="font-mono">COUNT</code>,{" "}
+        <code className="font-mono">MIN</code>,{" "}
+        <code className="font-mono">MAX</code>,{" "}
+        <code className="font-mono">AVG</code>,{" "}
+        <code className="font-mono">SUM</code>) with an
+        optional GROUP BY. LIMIT capped at 1000.
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">
@@ -2191,12 +2324,37 @@ function TableQueryMode() {
                 bg-white dark:bg-gray-800 px-2 py-1.5
                 text-sm text-gray-700 dark:text-gray-200"
             >
-              <option value="">(default — ticker)</option>
-              {currentTable?.columns.map((c) => (
-                <option key={c.name} value={c.name}>
-                  {c.name}
-                </option>
-              ))}
+              <option value="">(default)</option>
+              {isAgg && (
+                <optgroup label="Aggregations">
+                  {aggs.map((a, i) => {
+                    const alias =
+                      a.alias ||
+                      `${a.fn}_${
+                        a.column === "*"
+                          ? "rows"
+                          : a.column
+                      }`;
+                    return (
+                      <option
+                        key={`agg-${i}`}
+                        value={alias}
+                      >
+                        {alias}
+                      </option>
+                    );
+                  })}
+                </optgroup>
+              )}
+              <optgroup
+                label={isAgg ? "Group by" : "Columns"}
+              >
+                {currentTable?.columns.map((c) => (
+                  <option key={c.name} value={c.name}>
+                    {c.name}
+                  </option>
+                ))}
+              </optgroup>
             </select>
             <select
               value={sortDir}
@@ -2223,27 +2381,234 @@ function TableQueryMode() {
           className="rounded-md border border-gray-200
             dark:border-gray-700 bg-gray-50
             dark:bg-gray-800/40 px-3 py-2"
+          data-testid="screenql-table-cols"
+          open
         >
           <summary
             className="cursor-pointer text-xs
               font-semibold text-gray-700
-              dark:text-gray-300"
+              dark:text-gray-300 flex items-center gap-2"
           >
-            Columns ({currentTable.columns.length})
+            <span>
+              Columns ({currentTable.columns.length})
+              {!isAgg && colSel.size > 0 && (
+                <span className="ml-1 text-indigo-600 dark:text-indigo-400">
+                  · {colSel.size} selected
+                </span>
+              )}
+              {isAgg && (
+                <span className="ml-1 text-amber-600 dark:text-amber-400">
+                  · ignored in aggregation mode
+                </span>
+              )}
+            </span>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                setColSel(new Set());
+              }}
+              className="ml-auto text-[11px] font-normal
+                text-gray-500 hover:text-gray-700
+                dark:text-gray-400 dark:hover:text-gray-200
+                underline"
+              disabled={isAgg || colSel.size === 0}
+            >
+              all (clear)
+            </button>
           </summary>
           <div
             className="mt-2 grid grid-cols-2 sm:grid-cols-3
-              gap-x-4 gap-y-1 text-[11px] font-mono
+              md:grid-cols-4 gap-x-3 gap-y-1
+              text-[11px] font-mono
               text-gray-600 dark:text-gray-400"
           >
             {currentTable.columns.map((c) => (
-              <span key={c.name}>
-                {c.name}{" "}
-                <span className="text-gray-400">
-                  ({c.type})
+              <label
+                key={c.name}
+                className={`flex items-center gap-1.5
+                  cursor-pointer select-none
+                  ${isAgg ? "opacity-50" : ""}`}
+              >
+                <input
+                  type="checkbox"
+                  checked={colSel.has(c.name)}
+                  disabled={isAgg}
+                  onChange={() =>
+                    toggle(colSel, setColSel, c.name)
+                  }
+                  className="h-3 w-3"
+                />
+                <span>
+                  {c.name}{" "}
+                  <span className="text-gray-400">
+                    ({c.type})
+                  </span>
                 </span>
-              </span>
+              </label>
             ))}
+          </div>
+        </details>
+      )}
+
+      {currentTable && (
+        <details
+          className="rounded-md border border-gray-200
+            dark:border-gray-700 bg-gray-50
+            dark:bg-gray-800/40 px-3 py-2"
+          data-testid="screenql-table-agg"
+          open={isAgg}
+        >
+          <summary
+            className="cursor-pointer text-xs
+              font-semibold text-gray-700
+              dark:text-gray-300 flex items-center gap-2"
+          >
+            <span>
+              Aggregations
+              {isAgg && (
+                <span className="ml-1 text-indigo-600 dark:text-indigo-400">
+                  · {aggs.length} expr
+                  {groupBy.size > 0 &&
+                    ` · GROUP BY ${groupBy.size}`}
+                </span>
+              )}
+            </span>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                addAgg();
+              }}
+              className="ml-auto rounded-md border
+                border-indigo-300 dark:border-indigo-700
+                bg-indigo-50 dark:bg-indigo-900/30
+                px-2 py-0.5 text-[11px] font-medium
+                text-indigo-700 dark:text-indigo-300
+                hover:bg-indigo-100
+                dark:hover:bg-indigo-900/50"
+              data-testid="screenql-table-agg-add"
+            >
+              + add
+            </button>
+          </summary>
+          <div className="mt-2 space-y-2">
+            {aggs.length === 0 && (
+              <div className="text-[11px] text-gray-500 dark:text-gray-400">
+                No aggregations. Click <strong>+ add</strong> to count / min / max / avg / sum a column. Combined with <em>Group by</em> below to bucket results (e.g. <code className="font-mono">COUNT(*)</code> grouped by <code className="font-mono">score_date</code>).
+              </div>
+            )}
+            {aggs.map((a, i) => (
+              <div
+                key={i}
+                className="grid grid-cols-[1fr_1fr_1fr_auto]
+                  gap-2 items-center"
+                data-testid={`screenql-table-agg-row-${i}`}
+              >
+                <select
+                  value={a.fn}
+                  onChange={(e) =>
+                    updateAgg(i, {
+                      fn: e.target.value as AggFn,
+                    })
+                  }
+                  className="rounded-md border
+                    border-gray-300 dark:border-gray-600
+                    bg-white dark:bg-gray-800 px-2 py-1
+                    text-xs font-mono
+                    text-gray-700 dark:text-gray-200"
+                  aria-label="Aggregation function"
+                >
+                  {AGG_FUNCS.map((fn) => (
+                    <option key={fn} value={fn}>
+                      {fn.toUpperCase()}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={a.column}
+                  onChange={(e) =>
+                    updateAgg(i, {
+                      column: e.target.value,
+                    })
+                  }
+                  className="rounded-md border
+                    border-gray-300 dark:border-gray-600
+                    bg-white dark:bg-gray-800 px-2 py-1
+                    text-xs font-mono
+                    text-gray-700 dark:text-gray-200"
+                  aria-label="Aggregation column"
+                >
+                  <option value="*">*</option>
+                  {currentTable.columns.map((c) => (
+                    <option key={c.name} value={c.name}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="text"
+                  value={a.alias}
+                  placeholder={`alias (e.g. ${a.fn}_${
+                    a.column === "*" ? "rows" : a.column
+                  })`}
+                  onChange={(e) =>
+                    updateAgg(i, {
+                      alias: e.target.value,
+                    })
+                  }
+                  className="rounded-md border
+                    border-gray-300 dark:border-gray-600
+                    bg-white dark:bg-gray-800 px-2 py-1
+                    text-xs font-mono
+                    text-gray-700 dark:text-gray-200
+                    placeholder:text-gray-400"
+                  aria-label="Aggregation alias"
+                />
+                <button
+                  type="button"
+                  onClick={() => removeAgg(i)}
+                  className="text-xs text-gray-500
+                    hover:text-red-600 px-1"
+                  aria-label="Remove aggregation"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+
+            {isAgg && (
+              <div className="pt-2 border-t border-gray-200 dark:border-gray-700">
+                <div className="text-[11px] font-semibold text-gray-700 dark:text-gray-300 mb-1">
+                  Group by
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-x-3 gap-y-1 text-[11px] font-mono text-gray-600 dark:text-gray-400">
+                  {currentTable.columns.map((c) => (
+                    <label
+                      key={c.name}
+                      className="flex items-center gap-1.5 cursor-pointer select-none"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={groupBy.has(c.name)}
+                        onChange={() =>
+                          toggle(
+                            groupBy,
+                            setGroupBy,
+                            c.name,
+                          )
+                        }
+                        className="h-3 w-3"
+                      />
+                      <span>{c.name}</span>
+                    </label>
+                  ))}
+                </div>
+                <div className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
+                  Empty = single-row aggregate over the entire (filtered) table.
+                </div>
+              </div>
+            )}
           </div>
         </details>
       )}
@@ -2377,11 +2742,24 @@ function TableQueryMode() {
 function ScreenQLTab() {
   const searchParams = useSearchParams();
   const router = useRouter();
+  // Tables sub-mode is superuser-only — non-superusers
+  // never see the toggle and cannot land on `?mode=tables`
+  // (deep link silently downgrades to Screen mode).
+  const [isSuperuser, setIsSuperuser] = useState(false);
+  useEffect(() => {
+    setIsSuperuser(getRoleFromToken() === "superuser");
+  }, []);
   const [mode, setMode] = useState<"screen" | "tables">(
-    searchParams.get("mode") === "tables"
-      ? "tables"
-      : "screen",
+    "screen",
   );
+  useEffect(() => {
+    if (
+      isSuperuser &&
+      searchParams.get("mode") === "tables"
+    ) {
+      setMode("tables");
+    }
+  }, [isSuperuser, searchParams]);
   // Keystroke hint — picks Cmd vs Ctrl after hydration to
   // avoid SSR/client mismatch (navigator.platform is
   // undefined on the server).
@@ -2773,48 +3151,56 @@ function ScreenQLTab() {
 
   return (
     <div className="space-y-4">
-      {/* Mode toggle: Screen DSL vs Tables sub-mode */}
-      <div
-        className="inline-flex rounded-lg border
-          border-gray-300 dark:border-gray-600 p-0.5
-          bg-gray-50 dark:bg-gray-800"
-        data-testid="screenql-mode-toggle"
-        role="tablist"
-        aria-label="ScreenQL mode"
-      >
-        {(["screen", "tables"] as const).map((m) => {
-          const active = mode === m;
-          return (
-            <button
-              key={m}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              onClick={() => {
-                setMode(m);
-                router.replace(
-                  `/analytics/insights?tab=screenql${
-                    m === "tables" ? "&mode=tables" : ""
-                  }`,
-                  { scroll: false },
-                );
-              }}
-              data-testid={`screenql-mode-${m}`}
-              className={`px-3 py-1 text-xs font-medium
-                rounded-md transition-colors ${
-                  active
-                    ? "bg-white dark:bg-gray-900 text-indigo-600 dark:text-indigo-400 shadow-sm"
-                    : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
-                }`}
-            >
-              {m === "screen" ? "Screen" : "Tables"}
-            </button>
-          );
-        })}
-      </div>
+      {/* Mode toggle: Screen DSL vs Tables sub-mode.
+          Tables is superuser-only — pro/general users
+          see only the Screen pill. */}
+      {isSuperuser && (
+        <div
+          className="inline-flex rounded-lg border
+            border-gray-300 dark:border-gray-600 p-0.5
+            bg-gray-50 dark:bg-gray-800"
+          data-testid="screenql-mode-toggle"
+          role="tablist"
+          aria-label="ScreenQL mode"
+        >
+          {(["screen", "tables"] as const).map((m) => {
+            const active = mode === m;
+            return (
+              <button
+                key={m}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => {
+                  setMode(m);
+                  router.replace(
+                    `/analytics/insights?tab=screenql${
+                      m === "tables"
+                        ? "&mode=tables"
+                        : ""
+                    }`,
+                    { scroll: false },
+                  );
+                }}
+                data-testid={`screenql-mode-${m}`}
+                className={`px-3 py-1 text-xs font-medium
+                  rounded-md transition-colors ${
+                    active
+                      ? "bg-white dark:bg-gray-900 text-indigo-600 dark:text-indigo-400 shadow-sm"
+                      : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                  }`}
+              >
+                {m === "screen" ? "Screen" : "Tables"}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
-      {mode === "tables" && <TableQueryMode />}
-      {mode === "screen" && (
+      {mode === "tables" && isSuperuser && (
+        <TableQueryMode />
+      )}
+      {(mode === "screen" || !isSuperuser) && (
       <>
       {/* Preset chips */}
       <div
