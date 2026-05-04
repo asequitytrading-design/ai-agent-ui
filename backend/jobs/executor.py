@@ -2972,22 +2972,36 @@ def execute_nse_bhavcopy_daily(
     cancel_event=None,
     **kwargs,
 ) -> None:
-    """Ingest NSE bhavcopy delivery for today (T-day).
+    """Ingest NSE bhavcopy delivery for the most recent
+    trading day with available data.
 
-    Runs at 19:30 IST mon-fri (post-market) per the
-    Sprint 9 plan; on holidays the bhavcopy body is
-    empty and the job logs a skipped result without
-    error.  Idempotent — re-runs on the same date
-    replace prior rows.
+    Walks back from today up to 7 calendar days, ingesting
+    the first non-empty bhavcopy. This makes the job safe
+    in BOTH the morning India Daily Pipeline (07:00 IST,
+    when today's file isn't yet published — falls back to
+    T-1) AND a post-market evening run (today's file is
+    available). Idempotent: a re-run on the same date
+    replaces prior rows.
     """
     import asyncio
-    from datetime import date
+    from datetime import date, timedelta
 
     from backend.pipeline.jobs.bhavcopy import run_bhavcopy
 
     _run_start = datetime.now(timezone.utc)
+    result: dict = {"rows": 0, "status": "skipped"}
     try:
-        result = asyncio.run(run_bhavcopy(date.today()))
+        for days_back in range(0, 8):
+            target = date.today() - timedelta(days=days_back)
+            attempt = asyncio.run(run_bhavcopy(target))
+            if attempt.get("rows", 0) > 0:
+                result = attempt
+                break
+            # Last attempt — surface its status so a
+            # legitimate failure isn't masked by a
+            # prior weekend skip.
+            if days_back == 7:
+                result = attempt
     except Exception as exc:  # noqa: BLE001
         _logger.exception(
             "nse_bhavcopy_daily failed: %s",
