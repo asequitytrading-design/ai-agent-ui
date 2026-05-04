@@ -21,7 +21,7 @@
  * the column selector).
  */
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ColumnSelector } from "@/components/insights/ColumnSelector";
 import {
@@ -85,6 +85,8 @@ export function AdvancedAnalyticsTable({ report, initialData }: Props) {
   const [market, setMarket] = useState<MarketFilter>("all");
   const [tickerType, setTickerType] =
     useState<TickerTypeFilter>("all");
+  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState("");
 
   // Filters change the result set — reset pagination at the
   // setter site so a stale ?page=4 can't render an empty
@@ -101,6 +103,19 @@ export function AdvancedAnalyticsTable({ report, initialData }: Props) {
     [],
   );
 
+  // Debounce ticker search 300 ms — avoids one fetch per
+  // keystroke while user is typing (e.g. "RELIANCE").
+  useEffect(() => {
+    const id = window.setTimeout(() => {
+      setSearch((prev) => {
+        const next = searchInput.trim().toUpperCase();
+        if (next !== prev) setPage(1);
+        return next;
+      });
+    }, 300);
+    return () => window.clearTimeout(id);
+  }, [searchInput]);
+
   const { value, loading, error } = useAdvancedAnalyticsReport(
     report,
     page,
@@ -109,6 +124,7 @@ export function AdvancedAnalyticsTable({ report, initialData }: Props) {
     sortDir,
     market,
     tickerType,
+    search,
     initialData,
   );
 
@@ -188,6 +204,16 @@ export function AdvancedAnalyticsTable({ report, initialData }: Props) {
           />
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          <input
+            type="search"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder="Search ticker…"
+            maxLength={20}
+            data-testid={`advanced-analytics-search-${report}`}
+            aria-label="Search by ticker"
+            className="rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-2 py-0.5 text-xs text-gray-700 dark:text-gray-200 placeholder:text-gray-400 dark:placeholder:text-gray-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 w-32 sm:w-40"
+          />
           <select
             value={market}
             onChange={(e) =>

@@ -44,6 +44,7 @@ export function useAdvancedAnalyticsReport(
   sortDir: "asc" | "desc",
   market: MarketFilter,
   tickerType: TickerTypeFilter,
+  search: string,
   fallbackData?: AdvancedReportResponse,
 ): AdvancedAnalyticsData {
   const params = new URLSearchParams({
@@ -54,6 +55,7 @@ export function useAdvancedAnalyticsReport(
     ticker_type: tickerType,
   });
   if (sortKey) params.set("sort_key", sortKey);
+  if (search) params.set("search", search);
 
   const key = `${API_URL}/advanced-analytics/${report}?${params.toString()}`;
 

@@ -290,6 +290,33 @@ def test_pagination_and_sort_query_params_accepted(
     assert len(body["rows"]) <= 2
 
 
+def test_search_filters_tickers_by_substring(
+    super_client: TestClient,
+):
+    """`?search=AAA` keeps only tickers containing AAA
+    (case-insensitive). Seed universe is AAA / BBB / CCC.NS."""
+    r = super_client.get(
+        "/v1/advanced-analytics/top-50-delivery-by-qty"
+        "?search=aaa"
+    )
+    assert r.status_code == 200
+    rows = r.json()["rows"]
+    assert all("AAA" in row["ticker"] for row in rows), rows
+
+
+def test_search_unknown_ticker_returns_empty(
+    super_client: TestClient,
+):
+    r = super_client.get(
+        "/v1/advanced-analytics/top-50-delivery-by-qty"
+        "?search=ZZZZ"
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["rows"] == []
+    assert body["total"] == 0
+
+
 def test_stale_tickers_populated_for_missing_inputs(
     monkeypatch: pytest.MonkeyPatch,
     super_client: TestClient,

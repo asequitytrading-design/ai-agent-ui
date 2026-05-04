@@ -724,12 +724,14 @@ async def _compute_report(
     sort_dir: str,
     market: MarketFilter = "all",
     ticker_type: TickerTypeFilter = "all",
+    search: str = "",
 ) -> Response:
     """Shared cache / scope / compute pipeline for all 7 endpoints."""
     cache = get_cache()
+    needle = search.strip().upper()
     ck = (
         f"cache:advanced_analytics:{report}:{user.user_id}"
-        f":m{market}:t{ticker_type}"
+        f":m{market}:t{ticker_type}:q{needle}"
         f":p{page}:s{sort_key or 'default'}:{sort_dir}"
         f":ps{page_size}"
     )
@@ -739,6 +741,8 @@ async def _compute_report(
 
     tickers = await _scoped_tickers(user, "discovery")
     tickers = _filter_tickers(tickers, market, ticker_type)
+    if needle:
+        tickers = [t for t in tickers if needle in t.upper()]
     rows = _build_all_rows(tickers)
 
     filtered = [r for r in rows if _passes_filter(r, report)]
@@ -794,6 +798,7 @@ def create_advanced_analytics_router() -> APIRouter:
             sort_dir: str = Query("desc", pattern="^(asc|desc)$"),
             market: str = Query("all", pattern="^(all|india|us)$"),
             ticker_type: str = Query("all", pattern="^(all|stock|etf)$"),
+            search: str = Query("", max_length=20),
         ) -> Response:
             try:
                 return await _compute_report(
@@ -805,6 +810,7 @@ def create_advanced_analytics_router() -> APIRouter:
                     sort_dir,
                     market,  # type: ignore[arg-type]
                     ticker_type,  # type: ignore[arg-type]
+                    search,
                 )
             except HTTPException:
                 raise
