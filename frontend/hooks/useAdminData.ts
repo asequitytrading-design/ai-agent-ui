@@ -615,6 +615,33 @@ export interface DataHealthResult {
     total_tickers: number;
     missing_tickers: string[];
   };
+  bhavcopy?: {
+    total_tickers: number;
+    missing_tickers: string[];
+    missing_latest_count: number;
+    stale_count: number;
+    stale_tickers: string[];
+    latest_date: string | null;
+  };
+  corporate_events?: {
+    total_events: number;
+    tickers_with_events: number;
+    latest_event_date: string | null;
+    days_since_latest: number | null;
+  };
+  fundamentals_snapshot?: {
+    total_tickers: number;
+    missing_tickers: string[];
+    latest_snapshot_date: string | null;
+    stale_count: number;
+  };
+  promoter_holdings?: {
+    total_tickers: number;
+    missing_tickers: string[];
+    latest_quarter_end: string | null;
+    expected_quarter_end: string;
+    coverage_pct: number;
+  };
 }
 
 export type FixTarget =
