@@ -2,6 +2,55 @@
 
 ---
 
+## 2026-05-04 (PM) — Same-day AA polish + ScreenQL extensions (11 commits queued)
+
+**Scope**: After PR #135 merged to dev (AA epic + -357), spent the rest of the session on a polish bundle on a fresh branch `feature/aa-ticker-search` based off the merged dev. User explicitly closed PR #136 (the first interim PR) to bundle more fixes; will raise the final PR later. 11 commits queued, ready for a single squash to dev.
+
+### Commits on `feature/aa-ticker-search`
+
+| # | Commit | Layer | Summary |
+|---|---|---|---|
+| 1 | `063964d` | Backend + Frontend | Ticker search filter — debounced `?search=` Query param on all 7 AA endpoints; `<input type="search">` on the shared table; resets pagination on change |
+| 2 | `889b154` | Frontend | Help tab (8th AA tab) — 56 columns × 9 categories with description + formula + trade takeaway; in-tab search + accordion + glossary |
+| 3 | `b9e8c1d` | Backend + DB | Wired `nse_bhavcopy_daily` + `corporate_events_daily` + `fundamentals_snapshot_daily` into "India Daily Pipeline" as steps 7-9. Bhavcopy executor walks back T-0..T-7 to handle pre-publish morning runs |
+| 4 | `6b20ab6` | Backend + Frontend | iceberg_maintenance moved to step 9 (last); 4 AA tables added to `ALL_TABLES` + `DATE_COLUMNS`; readable captions in 3 frontend `JOB_LABELS` maps |
+| 5 | `30bf9f4` | DB + Docs | `promoter_holdings_quarterly` schedule (25th @ 04:00 IST monthly); §3.8 added to rollout SOP |
+| 6 | `9dff699` | Backend + Frontend | Data Health dashboard cards for bhavcopy / corporate_events / fundamentals_snapshot / promoter_holdings (4 new cards in 3×3 grid) |
+| 7 | `8e16144` | Backend | **AA reports anchored to `MAX(date) FROM nse_delivery`** — fixes Current Day Upmove returning 0 rows (OHLCV/delivery date skew). Cap both loaders to `as_of`; cache key embeds the date |
+| 8 | `c7c9f9e` | Backend | **Two-layer cache**: outer cache `(user, as_of)` + inner cache (full params); `as_of` cached 60 s. Filter/sort 4-50 ms (was 6 s) — **~1500× speedup** on warm path |
+| 9 | `3176860` | Frontend | Default filters India + Stocks-only on all 7 AA tabs (RSC pre-fetch updated to match) |
+| 10 | `e6da732` | Backend + Frontend | **ScreenQL extensions**: +25 fields (bhavcopy/AA mirror), `LIKE` op, Tables sub-mode (whitelist of 7 tables, hard `LIMIT ≤ 1000`, per-table parser via catalog swap) |
+| 11 | `f243813` | Frontend | Hydration mismatch fix on Cmd/Ctrl+Enter hint (state + useEffect SSR-safety pattern) |
+
+### Bonus dev-side ops applied (no code, no commit)
+
+- 1-month bhavcopy backfill (22 trading days, 2026-04-02 to 2026-04-30, 54k rows in `nse_delivery`)
+- ETF cutover SQL applied — 54 rows in `stock_registry` flipped to `ticker_type='etf'` so the new "Stocks only" default filter actually filters
+
+### Verification snapshot
+
+- 38/38 new ScreenQL tests + 27 AA-12 + 3 ETF tests green; 67/67 across all parser tests (no regression)
+- AA endpoints: 6/7 reports populated (BSE-blocked promoter holdings empty as expected); Current Day Upmove went from 0 → 107 rows after the as_of anchor fix
+- ScreenQL: `today_x_vol > 2` → 52 results; `ticker LIKE "RELIA"` → RELIANCE.NS; Tables mode: `nse_delivery WHERE delivery_pct > 70` → 100 of 703 rows
+- Browser: AA tabs render with India + Stocks defaults; ScreenQL Tables sub-mode toggle + dropdown + columns panel + run all work end-to-end
+- ESLint clean across all changed frontend files
+
+### Patterns to remember (also captured in auto-memory)
+
+- **`docker compose restart` insufficient** when route handlers close over module-level functions; use `up -d --force-recreate backend` instead.
+- **Daily refresh runs through `pipelines` table**, not `scheduled_jobs`. AA jobs added as `pipeline_steps` rows.
+- **iceberg_maintenance ALL_TABLES + DATE_COLUMNS are explicit lists** — backup is dir-rsync, but compaction/retention need the table listed.
+- **JOB_LABELS map duplicated in 3 frontend files** — update all when adding job types.
+- **NaT** ≠ None — always check `pd.isna(d)` before `.isoformat()`.
+
+### Carry-over for next session
+
+- **PR not yet raised** — user said "we will raise the final pr little later". When ready: `gh pr create --base dev --head feature/aa-ticker-search`.
+- **Production cutover** for AA epic (PR #135) still pending. Plus the ETF cutover SQL needs to run in prod too (matches dev fix).
+- **ASETPLTFRM-358** (BSE allowlist) + **ASETPLTFRM-359** (CAGR Q12 monitor) still open in backlog.
+
+---
+
 ## 2026-05-04 — Sprint 9 carry-overs (ASETPLTFRM-357) — items 1 + 5 shipped, items 2 + 4 spun out
 
 **Scope**: closed two of the five post-merge follow-ups bundled in ASETPLTFRM-357 (8 SP) directly on `feature/sprint9` so they land in the same squash PR as the AA epic. Spun the two external/passive items into their own backlog stories so -357 can transition Done.
