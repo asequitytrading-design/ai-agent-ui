@@ -17,6 +17,11 @@ const JOB_TYPES = [
   { value: "run_piotroski", label: "Piotroski F-Score" },
   { value: "recommendations", label: "Recommendations" },
   { value: "recommendation_outcomes", label: "Outcome Tracker" },
+  { value: "nse_bhavcopy_daily", label: "NSE Bhavcopy Delivery" },
+  { value: "corporate_events_daily", label: "Corporate Events" },
+  { value: "fundamentals_snapshot_daily", label: "Fundamentals Snapshot" },
+  { value: "promoter_holdings_quarterly", label: "Promoter Holdings" },
+  { value: "iceberg_maintenance", label: "Iceberg Maintenance" },
 ] as const;
 
 const ALL_DAYS = [

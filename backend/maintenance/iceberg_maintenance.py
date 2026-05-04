@@ -56,6 +56,12 @@ ALL_TABLES = [
     "stocks.llm_pricing",
     "stocks.llm_usage",
     "stocks.portfolio_transactions",
+    # Sprint 9 Advanced Analytics tables — daily ingest,
+    # need compaction + retention.
+    "stocks.nse_delivery",
+    "stocks.fundamentals_snapshot",
+    "stocks.corporate_events",
+    "stocks.promoter_holdings",
 ]
 
 # Dead tables safe to drop (migrated to PG or unused)
@@ -78,6 +84,11 @@ DATE_COLUMNS: dict[str, str] = {
     "stocks.audit_log": "timestamp",
     "stocks.usage_history": "timestamp",
     "stocks.llm_usage": "request_date",
+    # Sprint 9 Advanced Analytics tables.
+    "stocks.nse_delivery": "date",
+    "stocks.fundamentals_snapshot": "snapshot_date",
+    "stocks.corporate_events": "event_date",
+    "stocks.promoter_holdings": "quarter_end",
 }
 
 MAX_RETENTION_YEARS = 11

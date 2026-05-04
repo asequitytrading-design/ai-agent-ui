@@ -904,6 +904,10 @@ function NewScheduleForm({
         recommendations: "Recommendations",
         recommendation_outcomes: "Outcome Tracker",
         iceberg_maintenance: "Iceberg Maintenance",
+        nse_bhavcopy_daily: "NSE Bhavcopy Delivery",
+        corporate_events_daily: "Corporate Events",
+        fundamentals_snapshot_daily: "Fundamentals Snapshot",
+        promoter_holdings_quarterly: "Promoter Holdings",
       };
       const typeLabel = typeLabelMap[jobType]
         || "Data Refresh";
