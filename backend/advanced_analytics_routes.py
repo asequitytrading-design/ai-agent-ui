@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import logging
 import math
+from datetime import date
 from typing import Literal
 
 import pandas as pd
@@ -203,12 +204,49 @@ def _safe_query(table: str, sql: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def _load_ohlcv_25d(tickers: list[str]) -> pd.DataFrame:
-    """Last 25 trading days of OHLCV per ticker.
+def _effective_trading_date() -> date:
+    """Return the most-recent date with NSE bhavcopy data.
+
+    Anchors every AA report to the same "current day" so
+    ``today_x_vol`` (volume) and ``current_dpc`` (delivery)
+    consistently describe the same trading session — even
+    when the daily pipeline runs on a holiday / weekend
+    morning where today's bhavcopy isn't published yet,
+    or when OHLCV's bulk download is one day ahead of the
+    delivery feed.
+
+    Falls back to ``date.today()`` when the delivery table
+    is empty (cold start, dev with BSE-blocked sources,
+    etc.) — behaves identically to the prior unanchored
+    code in that case.
+    """
+    df = _safe_query(
+        "stocks.nse_delivery",
+        "SELECT MAX(date) AS d FROM nse_delivery",
+    )
+    if df.empty:
+        return date.today()
+    raw = df["d"].iloc[0]
+    if raw is None or pd.isna(raw):
+        return date.today()
+    if hasattr(raw, "date"):
+        return raw.date()
+    if isinstance(raw, date):
+        return raw
+    return date.today()
+
+
+def _load_ohlcv_25d(
+    tickers: list[str], as_of: date,
+) -> pd.DataFrame:
+    """Last 25 trading days of OHLCV per ticker, ending
+    on or before *as_of*.
 
     25 days covers the longest window any AA report needs
     (20-day rolling avg + a 5-day buffer for non-trading
-    gaps).
+    gaps). The ``date <= as_of`` cap aligns OHLCV to the
+    same effective "current day" used by the delivery
+    feed (see :func:`_effective_trading_date`).
     """
     if not tickers:
         return pd.DataFrame()
@@ -221,12 +259,16 @@ def _load_ohlcv_25d(tickers: list[str]) -> pd.DataFrame:
         "  ) AS rn FROM ohlcv "
         f"  WHERE ticker IN ({_ph(tickers)}) "
         "    AND date >= '1980-01-01'"
+        f"    AND date <= '{as_of.isoformat()}'"
         ") WHERE rn <= 25",
     )
 
 
-def _load_delivery_25d(tickers: list[str]) -> pd.DataFrame:
-    """Last 25 trading days of NSE delivery per ticker."""
+def _load_delivery_25d(
+    tickers: list[str], as_of: date,
+) -> pd.DataFrame:
+    """Last 25 trading days of NSE delivery per ticker,
+    ending on or before *as_of*."""
     if not tickers:
         return pd.DataFrame()
     return _safe_query(
@@ -237,7 +279,8 @@ def _load_delivery_25d(tickers: list[str]) -> pd.DataFrame:
         "  SELECT *, ROW_NUMBER() OVER ("
         "    PARTITION BY ticker ORDER BY date DESC"
         "  ) AS rn FROM nse_delivery "
-        f"  WHERE ticker IN ({_ph(tickers)})"
+        f"  WHERE ticker IN ({_ph(tickers)}) "
+        f"    AND date <= '{as_of.isoformat()}'"
         ") WHERE rn <= 25",
     )
 
@@ -665,17 +708,23 @@ def _df_to_dict(df: pd.DataFrame) -> dict[str, dict]:
     }
 
 
-def _build_all_rows(tickers: list[str]) -> list[AdvancedRow]:
+def _build_all_rows(
+    tickers: list[str], as_of: date,
+) -> list[AdvancedRow]:
     """Run all 8 batched DuckDB reads, then compose rows.
 
     One SQL round-trip per Iceberg table — never a per-ticker
     loop into Iceberg (§4.1 #1, #2).
+
+    *as_of* is the effective trading date — caps OHLCV +
+    delivery loads so both halves of every row describe the
+    same trading session.
     """
     if not tickers:
         return []
 
-    ohlcv_df = _load_ohlcv_25d(tickers)
-    delivery_df = _load_delivery_25d(tickers)
+    ohlcv_df = _load_ohlcv_25d(tickers, as_of)
+    delivery_df = _load_delivery_25d(tickers, as_of)
     ind_df = _load_indicators_latest(tickers)
     funds_df = _load_fundamentals(tickers)
     prom_df = _load_promoter(tickers)
@@ -729,9 +778,17 @@ async def _compute_report(
     """Shared cache / scope / compute pipeline for all 7 endpoints."""
     cache = get_cache()
     needle = search.strip().upper()
+    # Anchor the report to the most-recent NSE bhavcopy day
+    # so every ticker's "today" describes the same trading
+    # session (handles weekends / public holidays / long
+    # weekends without per-report date logic). The cache
+    # key embeds *as_of* so a fresh bhavcopy ingest
+    # invalidates yesterday's responses automatically.
+    as_of = _effective_trading_date()
     ck = (
         f"cache:advanced_analytics:{report}:{user.user_id}"
         f":m{market}:t{ticker_type}:q{needle}"
+        f":dt{as_of.isoformat()}"
         f":p{page}:s{sort_key or 'default'}:{sort_dir}"
         f":ps{page_size}"
     )
@@ -743,7 +800,7 @@ async def _compute_report(
     tickers = _filter_tickers(tickers, market, ticker_type)
     if needle:
         tickers = [t for t in tickers if needle in t.upper()]
-    rows = _build_all_rows(tickers)
+    rows = _build_all_rows(tickers, as_of)
 
     filtered = [r for r in rows if _passes_filter(r, report)]
     page_rows, total = _apply_sort_paginate(
