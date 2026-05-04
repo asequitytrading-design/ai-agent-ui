@@ -27,8 +27,18 @@ ScreenQL, RecommendationHistory, Admin Users).
 |---|---|---|---|
 | `page` | `int ≥ 1` | `1` | Server-side pagination |
 | `page_size` | `1 ≤ int ≤ 200` | `25` | Hard cap 200 |
-| `sort_key` | `str | null` | Default sort per report | Any field on `AdvancedRow` |
+| `sort_key` | `str \| null` | Default sort per report | Any field on `AdvancedRow` |
 | `sort_dir` | `"asc" \| "desc"` | `"desc"` | Pattern-validated |
+| `market` | `"all" \| "india" \| "us"` | `"all"` (UI default `india`) | Pre-filter via `detect_market()` |
+| `ticker_type` | `"all" \| "stock" \| "etf"` | `"all"` (UI default `stock`) | Pre-filter via `stock_registry.ticker_type` |
+| `search` | `str` (≤ 20 chars) | `""` | Case-insensitive substring match on ticker. Debounced 300 ms client-side |
+
+**`as_of` anchor** (commit `8e16144`): every report
+caps both OHLCV + delivery loads to `MAX(date) FROM
+nse_delivery` so volume + delivery describe the same
+trading session. Cached 60 s in Redis. Naturally
+handles weekends, public holidays, long weekends, and
+OHLCV-vs-delivery skew.
 
 ### Response shape
 
@@ -118,10 +128,16 @@ title row via `frontend/components/common/StaleTickerChip.tsx`
 
 | Iceberg table | Cadence | Source |
 |---|---|---|
-| `stocks.nse_delivery` | Daily 19:30 IST mon-fri | NSE bhavcopy via `jugaad_data` |
-| `stocks.fundamentals_snapshot` | Daily 20:00 IST mon-sat | Aggregated from `quarterly_results` |
-| `stocks.promoter_holdings` | Quarterly 04:00 IST 1st of feb/may/aug/nov | BSE shareholding scrape (currently Cloudflare-blocked from dev IP) |
-| `stocks.corporate_events` | Daily 07:00 IST mon-sat | NSE corporate-actions feed |
+| `stocks.nse_delivery` | Step 6 of India Daily Pipeline (07:00 IST tue-sat); executor walks back T-0..T-7 to find first non-empty day | NSE bhavcopy via `jugaad_data` |
+| `stocks.fundamentals_snapshot` | Step 8 of India Daily Pipeline | Aggregated from `quarterly_results` |
+| `stocks.promoter_holdings` | Standalone `scheduled_jobs` row — monthly on the 25th @ 04:00 IST (idempotent on quarter_end). Currently Cloudflare-blocked from dev IP; production needs allowlisted egress (ASETPLTFRM-358) | BSE shareholding scrape |
+| `stocks.corporate_events` | Step 7 of India Daily Pipeline | NSE corporate-actions feed (rolling 7-day window) |
+
+Step 9 of the pipeline is `iceberg_maintenance` — runs
+last so it backs up + compacts the AA tables ingested in
+steps 6-8. `ALL_TABLES` + `DATE_COLUMNS` in
+`backend/maintenance/iceberg_maintenance.py` extended for
+the new tables.
 
 See `stocks/create_tables.py:1296+` for the schemas (`_nse_delivery_schema`, `_promoter_holdings_schema`, `_corporate_events_schema`, `_fundamentals_snapshot_schema`).
 
