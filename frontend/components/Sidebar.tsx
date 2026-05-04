@@ -51,6 +51,12 @@ function canSeeItem(
     if (profile.role === "pro") return true;
     return profile.page_permissions?.admin === true;
   }
+  if (item.proOrSuperuserOnly) {
+    if (!profile) return false;
+    return (
+      profile.role === "pro" || profile.role === "superuser"
+    );
+  }
   if (item.requiresInsights) {
     if (!profile) return false;
     if (profile.role === "superuser") return true;

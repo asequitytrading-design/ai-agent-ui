@@ -31,6 +31,10 @@ Tables created
 - ``stocks.query_log``
 - ``stocks.data_gaps``
 - ``stocks.piotroski_scores``
+- ``stocks.nse_delivery``
+- ``stocks.promoter_holdings``
+- ``stocks.corporate_events``
+- ``stocks.fundamentals_snapshot``
 
 Migrated to PostgreSQL (no longer created here)
 ------------------------------------------------
@@ -90,6 +94,10 @@ _SENTIMENT_SCORES_TABLE = f"{_NAMESPACE}.sentiment_scores"
 _QUERY_LOG_TABLE = f"{_NAMESPACE}.query_log"
 _DATA_GAPS_TABLE = f"{_NAMESPACE}.data_gaps"
 _PIOTROSKI_SCORES_TABLE = f"{_NAMESPACE}.piotroski_scores"
+_NSE_DELIVERY_TABLE = f"{_NAMESPACE}.nse_delivery"
+_PROMOTER_HOLDINGS_TABLE = f"{_NAMESPACE}.promoter_holdings"
+_CORPORATE_EVENTS_TABLE = f"{_NAMESPACE}.corporate_events"
+_FUNDAMENTALS_SNAPSHOT_TABLE = f"{_NAMESPACE}.fundamentals_snapshot"
 
 
 def _get_catalog() -> SqlCatalog:
@@ -1285,6 +1293,227 @@ def _llm_usage_schema() -> Schema:
     )
 
 
+def _nse_delivery_schema() -> Schema:
+    """Return the Iceberg schema for ``stocks.nse_delivery``.
+
+    Returns:
+        Schema: NSE bhavcopy delivery quantities; composite
+            key (ticker, date); partitioned by ticker.
+            Sprint 9 Advanced Analytics — feeds dv / dpc /
+            x_dv / 10d/20d delivery averages used by all
+            7 advanced-analytics report endpoints.
+    """
+    return Schema(
+        NestedField(
+            field_id=1, name="ticker", field_type=StringType(), required=False
+        ),
+        NestedField(
+            field_id=2, name="date", field_type=DateType(), required=False
+        ),
+        NestedField(
+            field_id=3,
+            name="deliverable_qty",
+            field_type=LongType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=4,
+            name="delivery_pct",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=5,
+            name="traded_qty",
+            field_type=LongType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=6,
+            name="traded_value",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=7,
+            name="ingested_at",
+            field_type=TimestampType(),
+            required=False,
+        ),
+    )
+
+
+def _promoter_holdings_schema() -> Schema:
+    """Return the Iceberg schema for ``stocks.promoter_holdings``.
+
+    Returns:
+        Schema: Quarterly promoter shareholding +
+            pledged percentages from BSE shareholding-
+            pattern disclosures; composite key
+            (ticker, quarter_end). No partition — small
+            table (~3k rows: ~750 tickers × 4 quarters).
+    """
+    return Schema(
+        NestedField(
+            field_id=1, name="ticker", field_type=StringType(), required=False
+        ),
+        NestedField(
+            field_id=2,
+            name="quarter_end",
+            field_type=DateType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=3,
+            name="prom_hld_pct",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=4,
+            name="pledged_pct",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=5,
+            name="chng_qoq",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=6,
+            name="source",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=7,
+            name="ingested_at",
+            field_type=TimestampType(),
+            required=False,
+        ),
+    )
+
+
+def _corporate_events_schema() -> Schema:
+    """Return the Iceberg schema for ``stocks.corporate_events``.
+
+    Returns:
+        Schema: Corporate event log (Financial Results,
+            Dividend, Stock Split, Board Meeting); from
+            NSE corporate-board-meetings + complementary
+            sources. Partitioned by ticker; latest event
+            per ticker drives the ``event`` / ``event_date``
+            columns in the advanced-analytics rows.
+    """
+    return Schema(
+        NestedField(
+            field_id=1, name="ticker", field_type=StringType(), required=False
+        ),
+        NestedField(
+            field_id=2,
+            name="event_date",
+            field_type=DateType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=3,
+            name="event_type",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=4,
+            name="event_label",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=5,
+            name="ingested_at",
+            field_type=TimestampType(),
+            required=False,
+        ),
+    )
+
+
+def _fundamentals_snapshot_schema() -> Schema:
+    """Return the Iceberg schema for ``stocks.fundamentals_snapshot``.
+
+    Returns:
+        Schema: Daily aggregated fundamentals derived
+            from ``stocks.quarterly_results``; supplies
+            multi-year growth + ROCE + YoY columns to
+            advanced-analytics endpoints. Composite key
+            (ticker, snapshot_date). No partition — small
+            table (~2k rows refreshed daily, snapshot
+            replaces previous via scoped delete).
+    """
+    return Schema(
+        NestedField(
+            field_id=1, name="ticker", field_type=StringType(), required=False
+        ),
+        NestedField(
+            field_id=2,
+            name="snapshot_date",
+            field_type=DateType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=3,
+            name="sales_3y_cagr",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=4,
+            name="prft_3y_cagr",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=5,
+            name="sales_5y_cagr",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=6,
+            name="prft_5y_cagr",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=7,
+            name="yoy_qtr_prft",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=8,
+            name="yoy_qtr_sales",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=9,
+            name="debt_to_eq",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=10, name="roce", field_type=DoubleType(), required=False
+        ),
+        NestedField(
+            field_id=11,
+            name="ingested_at",
+            field_type=TimestampType(),
+            required=False,
+        ),
+    )
+
+
 def _provider_partition_spec(schema: Schema) -> PartitionSpec:
     """Return a partition spec by ``provider``.
 
@@ -1798,6 +2027,43 @@ def create_tables() -> None:
         empty_spec,
     )
 
+    # Sprint 9 Advanced Analytics — feeds the 7
+    # ``/v1/advanced-analytics/`` report endpoints.
+    # NSE delivery (1.5M rows over 6mo backfill —
+    # partitioned by ticker like ``stocks.ohlcv``).
+    nse_delivery_schema = _nse_delivery_schema()
+    _create_table(
+        catalog,
+        _NSE_DELIVERY_TABLE,
+        nse_delivery_schema,
+        _ticker_partition_spec(nse_delivery_schema),
+    )
+    # Promoter holdings (~3k rows quarterly — small,
+    # no partition).
+    _create_table(
+        catalog,
+        _PROMOTER_HOLDINGS_TABLE,
+        _promoter_holdings_schema(),
+        empty_spec,
+    )
+    # Corporate events (medium volume — partition by
+    # ticker so latest-event lookup per ticker is cheap).
+    corp_events_schema = _corporate_events_schema()
+    _create_table(
+        catalog,
+        _CORPORATE_EVENTS_TABLE,
+        corp_events_schema,
+        _ticker_partition_spec(corp_events_schema),
+    )
+    # Fundamentals snapshot (~2k rows refreshed daily —
+    # no partition).
+    _create_table(
+        catalog,
+        _FUNDAMENTALS_SNAPSHOT_TABLE,
+        _fundamentals_snapshot_schema(),
+        empty_spec,
+    )
+
     _logger.info("Stocks Iceberg table initialisation complete.")
 
 
@@ -1864,8 +2130,7 @@ def evolve_company_info_peg_yf() -> None:
     existing = {f.name for f in tbl.schema().fields}
     if "peg_ratio_yf" in existing:
         _logger.info(
-            "company_info already has peg_ratio_yf — "
-            "skipping evolution."
+            "company_info already has peg_ratio_yf — " "skipping evolution."
         )
         return
     with tbl.update_schema() as update:
@@ -1873,9 +2138,7 @@ def evolve_company_info_peg_yf() -> None:
             path="peg_ratio_yf",
             field_type=DoubleType(),
         )
-    _logger.info(
-        "Evolved company_info schema: added peg_ratio_yf"
-    )
+    _logger.info("Evolved company_info schema: added peg_ratio_yf")
 
 
 if __name__ == "__main__":

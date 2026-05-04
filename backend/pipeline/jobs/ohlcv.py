@@ -18,6 +18,7 @@ from sqlalchemy import select
 from backend.db.engine import get_session_factory
 from backend.db.models.stock_master import StockMaster
 from backend.db.pg_stocks import get_registry, upsert_registry
+from backend.tools._stock_registry import _detect_ticker_type
 from backend.pipeline.config import (
     DEFAULT_BATCH_SIZE,
     DEFAULT_HISTORY_YEARS,
@@ -214,6 +215,7 @@ async def _process_ticker(
             ),
             "date_range_end": df_max,
             "market": "india",
+            "ticker_type": _detect_ticker_type(store_as),
         })
 
     return "ok"

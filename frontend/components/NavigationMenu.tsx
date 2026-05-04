@@ -25,6 +25,10 @@ function canSeeItem(item: typeof NAV_ITEMS[number], profile: UserProfile | null)
     if (profile.role === "superuser") return true;
     return profile.page_permissions?.admin === true;
   }
+  if (item.proOrSuperuserOnly) {
+    if (!profile) return false;
+    return profile.role === "pro" || profile.role === "superuser";
+  }
   if (item.requiresInsights) {
     if (!profile) return false;
     if (profile.role === "superuser") return true;

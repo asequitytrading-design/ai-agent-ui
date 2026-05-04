@@ -7,6 +7,35 @@ on:
     branches: [dev, qa, release, main]
 
 jobs:
+  # ── backend-test: pytest gate for tests/backend/** ──────────────────────────
+  # Runs on every push/PR (any branch). Required by qa, release, main.
+  backend-test:
+    name: Backend — pytest tests/backend
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dev dependencies
+        run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          pip install --upgrade pip
+          pip install -r backend/requirements-dev.txt
+
+      - name: Run pytest
+        env:
+          PYTHONPATH: .:backend:auth:stocks:dashboard
+        run: |
+          source .venv/bin/activate
+          python -m pytest tests/backend -q --maxfail=5
+
   # ── dev: Python quality + Next.js lint ──────────────────────────────────────
   dev:
     name: Dev — Python + Next.js lint
@@ -56,6 +85,7 @@ jobs:
   # ── qa: All dev steps + backend smoke test ──────────────────────────────────
   qa:
     name: QA — Integration smoke test
+    needs: [backend-test]
     if: |
       github.ref == 'refs/heads/qa' ||
       (github.event_name == 'pull_request' && github.base_ref == 'qa')
@@ -114,6 +144,7 @@ jobs:
   # ── release: QA steps + staging deploy marker ───────────────────────────────
   release:
     name: Release — Staging gate
+    needs: [backend-test]
     if: |
       github.ref == 'refs/heads/release' ||
       (github.event_name == 'pull_request' && github.base_ref == 'release')
@@ -178,6 +209,7 @@ jobs:
   # ── main: Production deploy gate ────────────────────────────────────────────
   main:
     name: Main — Production gate
+    needs: [backend-test]
     if: |
       github.ref == 'refs/heads/main' ||
       (github.event_name == 'pull_request' && github.base_ref == 'main')

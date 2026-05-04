@@ -162,7 +162,8 @@ def _analyzable_tickers(
         t
         for t in tickers
         if registry.get(t, {}).get(
-            "ticker_type", "stock",
+            "ticker_type",
+            "stock",
         )
         in ("stock", "etf")
     ]
@@ -182,7 +183,8 @@ def _has_financials(
         t
         for t in tickers
         if registry.get(t, {}).get(
-            "ticker_type", "stock",
+            "ticker_type",
+            "stock",
         )
         == "stock"
     ]
@@ -220,10 +222,7 @@ def _finalize_run(
         # Treat as success with warnings when <5%
         # of tickers failed (data-quality issues).
         error_rate = len(errors) / max(done, 1)
-        status = (
-            "failed" if error_rate >= 0.05
-            else "success"
-        )
+        status = "failed" if error_rate >= 0.05 else "success"
     elif errors:
         status = "failed"
     else:
@@ -240,9 +239,7 @@ def _finalize_run(
             "duration_secs": duration,
             "tickers_total": total,
             "tickers_done": done,
-            "error_message": (
-                "; ".join(errors[:5]) if errors else None
-            ),
+            "error_message": ("; ".join(errors[:5]) if errors else None),
         },
     )
     _logger.info(
@@ -412,8 +409,7 @@ def execute_compute_analytics(
                         )
         except Exception as exc:
             _logger.warning(
-                "[scheduler] Analysis freshness query"
-                " failed: %s",
+                "[scheduler] Analysis freshness query" " failed: %s",
                 exc,
             )
 
@@ -444,8 +440,7 @@ def execute_compute_analytics(
         if yf_map.get(t, t) not in analysis_fresh
     ]
     _logger.info(
-        "[batch-analytics] Phase 1: %d to compute "
-        "(%d fresh, skip)",
+        "[batch-analytics] Phase 1: %d to compute " "(%d fresh, skip)",
         len(compute_tickers),
         len(analysis_fresh),
     )
@@ -491,12 +486,9 @@ def execute_compute_analytics(
             cancelled = True
             break
 
-        batch = compute_tickers[
-            batch_start: batch_start + BATCH_SIZE
-        ]
+        batch = compute_tickers[batch_start : batch_start + BATCH_SIZE]
         _logger.info(
-            "[batch-analytics] Batch %d-%d/%d "
-            "(%d tickers)",
+            "[batch-analytics] Batch %d-%d/%d " "(%d tickers)",
             batch_start,
             batch_start + len(batch),
             len(compute_tickers),
@@ -518,8 +510,7 @@ def execute_compute_analytics(
             )
         except Exception as exc:
             _logger.warning(
-                "[batch-analytics] OHLCV batch read "
-                "failed: %s",
+                "[batch-analytics] OHLCV batch read " "failed: %s",
                 exc,
             )
             for t in batch:
@@ -551,14 +542,9 @@ def execute_compute_analytics(
             )
             use_adj = (
                 "adj_close" in df.columns
-                and df["adj_close"].notna().mean()
-                > 0.5
+                and df["adj_close"].notna().mean() > 0.5
             )
-            adj_col = (
-                df["adj_close"]
-                if use_adj
-                else df["close"]
-            )
+            adj_col = df["adj_close"] if use_adj else df["close"]
             ohlcv = pd.DataFrame(
                 {
                     "Open": df["open"],
@@ -575,10 +561,7 @@ def execute_compute_analytics(
         with ThreadPoolExecutor(
             max_workers=5,
         ) as pool:
-            future_map = {
-                pool.submit(_process, t): t
-                for t in batch
-            }
+            future_map = {pool.submit(_process, t): t for t in batch}
             for future in as_completed(future_map):
                 t = future_map[future]
                 try:
@@ -609,8 +592,7 @@ def execute_compute_analytics(
 
     t_phase1 = time.monotonic() - t_start
     _logger.info(
-        "[batch-analytics] Phase 1 done: %d computed "
-        "in %.1fs",
+        "[batch-analytics] Phase 1 done: %d computed " "in %.1fs",
         len(results),
         t_phase1,
     )
@@ -618,8 +600,7 @@ def execute_compute_analytics(
     # ── Phase 2: Bulk analysis_summary append ──────────
     if results:
         _logger.info(
-            "[batch-analytics] Phase 2: writing %d "
-            "analysis_summary rows",
+            "[batch-analytics] Phase 2: writing %d " "analysis_summary rows",
             len(results),
         )
         t_phase2 = time.monotonic()
@@ -649,8 +630,7 @@ def execute_compute_analytics(
                     pa.string(),
                 ),
                 "ticker": pa.array(
-                    [r["ticker"]
-                     for r in summary_rows],
+                    [r["ticker"] for r in summary_rows],
                     pa.string(),
                 ),
                 "analysis_date": pa.array(
@@ -658,125 +638,118 @@ def execute_compute_analytics(
                     pa.date32(),
                 ),
                 "bull_phase_pct": pa.array(
-                    [_safe_float(r.get(
-                        "bull_phase_pct"))
-                     for r in summary_rows],
+                    [
+                        _safe_float(r.get("bull_phase_pct"))
+                        for r in summary_rows
+                    ],
                     pa.float64(),
                 ),
                 "bear_phase_pct": pa.array(
-                    [_safe_float(r.get(
-                        "bear_phase_pct"))
-                     for r in summary_rows],
+                    [
+                        _safe_float(r.get("bear_phase_pct"))
+                        for r in summary_rows
+                    ],
                     pa.float64(),
                 ),
                 "max_drawdown_pct": pa.array(
-                    [_safe_float(r.get(
-                        "max_drawdown_pct"))
-                     for r in summary_rows],
+                    [
+                        _safe_float(r.get("max_drawdown_pct"))
+                        for r in summary_rows
+                    ],
                     pa.float64(),
                 ),
                 "max_drawdown_duration_days": (
                     pa.array(
-                        [_safe_int(r.get(
-                            "max_drawdown_"
-                            "duration_days"))
-                         for r in summary_rows],
+                        [
+                            _safe_int(r.get("max_drawdown_" "duration_days"))
+                            for r in summary_rows
+                        ],
                         pa.int64(),
                     )
                 ),
                 "annualized_volatility_pct": (
                     pa.array(
-                        [_safe_float(r.get(
-                            "annualized_"
-                            "volatility_pct"))
-                         for r in summary_rows],
+                        [
+                            _safe_float(r.get("annualized_" "volatility_pct"))
+                            for r in summary_rows
+                        ],
                         pa.float64(),
                     )
                 ),
                 "annualized_return_pct": pa.array(
-                    [_safe_float(r.get(
-                        "annualized_return_pct"))
-                     for r in summary_rows],
+                    [
+                        _safe_float(r.get("annualized_return_pct"))
+                        for r in summary_rows
+                    ],
                     pa.float64(),
                 ),
                 "sharpe_ratio": pa.array(
-                    [_safe_float(r.get(
-                        "sharpe_ratio"))
-                     for r in summary_rows],
+                    [_safe_float(r.get("sharpe_ratio")) for r in summary_rows],
                     pa.float64(),
                 ),
                 "all_time_high": pa.array(
-                    [_safe_float(r.get(
-                        "all_time_high"))
-                     for r in summary_rows],
+                    [
+                        _safe_float(r.get("all_time_high"))
+                        for r in summary_rows
+                    ],
                     pa.float64(),
                 ),
                 "all_time_high_date": pa.array(
-                    [_to_date(r.get(
-                        "all_time_high_date"))
-                     for r in summary_rows],
+                    [
+                        _to_date(r.get("all_time_high_date"))
+                        for r in summary_rows
+                    ],
                     pa.date32(),
                 ),
                 "all_time_low": pa.array(
-                    [_safe_float(r.get(
-                        "all_time_low"))
-                     for r in summary_rows],
+                    [_safe_float(r.get("all_time_low")) for r in summary_rows],
                     pa.float64(),
                 ),
                 "all_time_low_date": pa.array(
-                    [_to_date(r.get(
-                        "all_time_low_date"))
-                     for r in summary_rows],
+                    [
+                        _to_date(r.get("all_time_low_date"))
+                        for r in summary_rows
+                    ],
                     pa.date32(),
                 ),
                 "support_levels": pa.array(
-                    [r.get("support_levels")
-                     for r in summary_rows],
+                    [r.get("support_levels") for r in summary_rows],
                     pa.string(),
                 ),
                 "resistance_levels": pa.array(
-                    [r.get("resistance_levels")
-                     for r in summary_rows],
+                    [r.get("resistance_levels") for r in summary_rows],
                     pa.string(),
                 ),
                 "sma_50_signal": pa.array(
-                    [r.get("sma_50_signal")
-                     for r in summary_rows],
+                    [r.get("sma_50_signal") for r in summary_rows],
                     pa.string(),
                 ),
                 "sma_200_signal": pa.array(
-                    [r.get("sma_200_signal")
-                     for r in summary_rows],
+                    [r.get("sma_200_signal") for r in summary_rows],
                     pa.string(),
                 ),
                 "rsi_signal": pa.array(
-                    [r.get("rsi_signal")
-                     for r in summary_rows],
+                    [r.get("rsi_signal") for r in summary_rows],
                     pa.string(),
                 ),
                 "macd_signal_text": pa.array(
-                    [r.get("macd_signal_text")
-                     for r in summary_rows],
+                    [r.get("macd_signal_text") for r in summary_rows],
                     pa.string(),
                 ),
                 "best_month": pa.array(
-                    [r.get("best_month")
-                     for r in summary_rows],
+                    [r.get("best_month") for r in summary_rows],
                     pa.string(),
                 ),
                 "worst_month": pa.array(
-                    [r.get("worst_month")
-                     for r in summary_rows],
+                    [r.get("worst_month") for r in summary_rows],
                     pa.string(),
                 ),
                 "best_year": pa.array(
-                    [r.get("best_year")
-                     for r in summary_rows],
+                    [r.get("best_year") for r in summary_rows],
                     pa.string(),
                 ),
                 "worst_year": pa.array(
-                    [r.get("worst_year")
-                     for r in summary_rows],
+                    [r.get("worst_year") for r in summary_rows],
                     pa.string(),
                 ),
                 "computed_at": pa.array(
@@ -805,14 +778,18 @@ def execute_compute_analytics(
             summary_tbl,
         )
         _logger.info(
-            "[batch-analytics] Phase 2 done: %d rows "
-            "in %.1fs",
+            "[batch-analytics] Phase 2 done: %d rows " "in %.1fs",
             len(summary_rows),
             time.monotonic() - t_phase2,
         )
 
     _finalize_run(
-        repo, run_id, done, total, errors, cancelled,
+        repo,
+        run_id,
+        done,
+        total,
+        errors,
+        cancelled,
     )
 
 
@@ -866,8 +843,7 @@ def execute_run_sentiment(
 
     # ── Step 1: Market-wide sentiment (1 LLM call) ────
     _logger.info(
-        "[batch-sentiment] Fetching market-wide "
-        "headlines",
+        "[batch-sentiment] Fetching market-wide " "headlines",
     )
     market_score = 0.0
     try:
@@ -894,20 +870,17 @@ def execute_run_sentiment(
             if scored is not None:
                 market_score = scored
             _logger.info(
-                "[batch-sentiment] Market score: "
-                "%.3f (%d headlines)",
+                "[batch-sentiment] Market score: " "%.3f (%d headlines)",
                 market_score,
                 len(market_headlines),
             )
         else:
             _logger.info(
-                "[batch-sentiment] No market "
-                "headlines found, using 0.0",
+                "[batch-sentiment] No market " "headlines found, using 0.0",
             )
     except Exception as exc:
         _logger.warning(
-            "[batch-sentiment] Market score "
-            "failed: %s",
+            "[batch-sentiment] Market score " "failed: %s",
             exc,
         )
 
@@ -925,13 +898,13 @@ def execute_run_sentiment(
     # small slice is sampled back into the trickle each
     # run so newly-trending tickers self-recover.
     try:
+        from backend.db.pg_stocks import (
+            get_dormant_eligible_for_probe,
+            get_dormant_tickers,
+        )
         from stocks.repository import (
             _pg_session,
             _run_pg,
-        )
-        from backend.db.pg_stocks import (
-            get_dormant_tickers,
-            get_dormant_eligible_for_probe,
         )
 
         async def _dormant_call():
@@ -991,13 +964,10 @@ def execute_run_sentiment(
         )
         if not hist_df.empty:
             for _, row in hist_df.iterrows():
-                ticker_history_days[
-                    row["ticker"]
-                ] = int(row["days"])
+                ticker_history_days[row["ticker"]] = int(row["days"])
     except Exception as exc:
         _logger.warning(
-            "[batch-sentiment] Classification "
-            "query failed: %s",
+            "[batch-sentiment] Classification " "query failed: %s",
             exc,
         )
 
@@ -1012,61 +982,54 @@ def execute_run_sentiment(
     # `force=True` runs ignore dormancy entirely so an
     # operator can re-test everything on demand.
     in_scope_dormant = [
-        t for t in all_yf
-        if t in dormant_tickers and t not in sentiment_fresh
+        t for t in all_yf if t in dormant_tickers and t not in sentiment_fresh
     ]
     dormant_skip: list[str] = []
     dormant_probe: list[str] = []
     if in_scope_dormant and not force:
         try:
             probe_n = max(
-                1, int(len(in_scope_dormant) * 0.05),
+                1,
+                int(len(in_scope_dormant) * 0.05),
             )
 
             async def _probe_call():
                 async with _pg_session() as s:
-                    return await (
-                        get_dormant_eligible_for_probe(
-                            s, limit=probe_n,
-                        )
+                    return await get_dormant_eligible_for_probe(
+                        s,
+                        limit=probe_n,
                     )
 
             ordered = _run_pg(_probe_call) or []
             in_scope_set = set(in_scope_dormant)
-            dormant_probe = [
-                t for t in ordered if t in in_scope_set
-            ][:probe_n]
+            dormant_probe = [t for t in ordered if t in in_scope_set][:probe_n]
         except Exception:
             _logger.debug(
-                "[batch-sentiment] dormant probe "
-                "selection failed",
+                "[batch-sentiment] dormant probe " "selection failed",
                 exc_info=True,
             )
             dormant_probe = []
-        dormant_skip = [
-            t for t in in_scope_dormant
-            if t not in dormant_probe
-        ]
+        dormant_skip = [t for t in in_scope_dormant if t not in dormant_probe]
 
     remaining = [
-        t for t in all_yf
-        if t not in sentiment_fresh
-        and t not in dormant_skip
+        t for t in all_yf if t not in sentiment_fresh and t not in dormant_skip
     ]
 
     learning_full = [
-        t for t in remaining
-        if ticker_history_days.get(t, 0) < 10
-        and t not in dormant_probe
+        t
+        for t in remaining
+        if ticker_history_days.get(t, 0) < 10 and t not in dormant_probe
     ]
     hot = [
-        t for t in remaining
+        t
+        for t in remaining
         if t in hot_tickers
         and t not in learning_full
         and t not in dormant_probe
     ]
     cold = [
-        t for t in remaining
+        t
+        for t in remaining
         if t not in hot_tickers
         and t not in learning_full
         and t not in dormant_probe
@@ -1101,9 +1064,9 @@ def execute_run_sentiment(
                 if not mcap_df.empty:
                     for _, r in mcap_df.iterrows():
                         try:
-                            mcap_by_yf[
-                                str(r["ticker"])
-                            ] = float(r["market_cap"])
+                            mcap_by_yf[str(r["ticker"])] = float(
+                                r["market_cap"]
+                            )
                         except (TypeError, ValueError):
                             pass
             except Exception:
@@ -1120,9 +1083,7 @@ def execute_run_sentiment(
                 reverse=True,
             )
             learning = learning_sorted[:_LEARNING_CAP]
-            learning_cut = learning_sorted[
-                _LEARNING_CAP:
-            ]
+            learning_cut = learning_sorted[_LEARNING_CAP:]
         except Exception:
             _logger.exception(
                 "[batch-sentiment] learning cap "
@@ -1134,9 +1095,14 @@ def execute_run_sentiment(
 
     # Trickle: 15% of cold tickers sampled randomly.
     trickle_size = max(1, int(len(cold) * 0.15))
-    trickle = random.sample(
-        cold, min(trickle_size, len(cold)),
-    ) if cold else []
+    trickle = (
+        random.sample(
+            cold,
+            min(trickle_size, len(cold)),
+        )
+        if cold
+        else []
+    )
     cold_skip = [t for t in cold if t not in trickle]
 
     _logger.info(
@@ -1175,15 +1141,14 @@ def execute_run_sentiment(
         ) as pool:
             future_map = {
                 pool.submit(
-                    refresh_sentiment, t, force,
+                    refresh_sentiment,
+                    t,
+                    force,
                 ): t
                 for t in check_tickers
             }
             for future in as_completed(future_map):
-                if (
-                    cancel_event
-                    and cancel_event.is_set()
-                ):
+                if cancel_event and cancel_event.is_set():
                     pool.shutdown(
                         wait=False,
                         cancel_futures=True,
@@ -1203,8 +1168,7 @@ def execute_run_sentiment(
                 done += 1
 
         _logger.info(
-            "[batch-sentiment] Headline check "
-            "done: %d tickers in %.1fs",
+            "[batch-sentiment] Headline check " "done: %d tickers in %.1fs",
             len(check_tickers),
             time.monotonic() - t_start,
         )
@@ -1244,15 +1208,13 @@ def execute_run_sentiment(
                 "stocks.sentiment_scores",
             )
             tbl.refresh()
-            scored_df = (
-                tbl.scan(
-                    row_filter=EqualTo(
-                        "score_date", today,
-                    ),
-                    selected_fields=("ticker",),
-                )
-                .to_pandas()
-            )
+            scored_df = tbl.scan(
+                row_filter=EqualTo(
+                    "score_date",
+                    today,
+                ),
+                selected_fields=("ticker",),
+            ).to_pandas()
             scored_today = (
                 set(scored_df["ticker"].tolist())
                 if not scored_df.empty
@@ -1265,13 +1227,11 @@ def execute_run_sentiment(
             from backend.db.duckdb_engine import (
                 invalidate_metadata,
             )
+
             invalidate_metadata(
                 "stocks.sentiment_scores",
             )
-            unscored = [
-                t for t in all_yf
-                if t not in scored_today
-            ]
+            unscored = [t for t in all_yf if t not in scored_today]
             if unscored:
                 _logger.info(
                     "[batch-sentiment] Filling %d "
@@ -1283,6 +1243,7 @@ def execute_run_sentiment(
                 # Bulk insert all fallback rows in
                 # one Iceberg append (not per-ticker).
                 import pyarrow as pa
+
                 from stocks.repository import _now_utc
 
                 now = _now_utc()
@@ -1297,8 +1258,7 @@ def execute_run_sentiment(
                             pa.date32(),
                         ),
                         "avg_score": pa.array(
-                            [market_score]
-                            * len(unscored),
+                            [market_score] * len(unscored),
                             pa.float64(),
                         ),
                         "headline_count": pa.array(
@@ -1306,8 +1266,7 @@ def execute_run_sentiment(
                             pa.int32(),
                         ),
                         "source": pa.array(
-                            ["market_fallback"]
-                            * len(unscored),
+                            ["market_fallback"] * len(unscored),
                             pa.string(),
                         ),
                         "scored_at": pa.array(
@@ -1334,8 +1293,7 @@ def execute_run_sentiment(
                         And(
                             In(
                                 "ticker",
-                                [t.upper()
-                                 for t in unscored],
+                                [t.upper() for t in unscored],
                             ),
                             EqualTo(
                                 "score_date",
@@ -1343,8 +1301,7 @@ def execute_run_sentiment(
                             ),
                             In(
                                 "source",
-                                ["market_fallback",
-                                 "none"],
+                                ["market_fallback", "none"],
                             ),
                         ),
                     )
@@ -1356,14 +1313,12 @@ def execute_run_sentiment(
                 )
                 done += len(unscored)
                 _logger.info(
-                    "[batch-sentiment] Fallback "
-                    "inserted: %d rows",
+                    "[batch-sentiment] Fallback " "inserted: %d rows",
                     len(unscored),
                 )
         except Exception as exc:
             _logger.warning(
-                "[batch-sentiment] Gap fill "
-                "failed: %s",
+                "[batch-sentiment] Gap fill " "failed: %s",
                 exc,
             )
 
@@ -1388,7 +1343,12 @@ def execute_run_sentiment(
     )
 
     _finalize_run(
-        repo, run_id, done, total, errors, cancelled,
+        repo,
+        run_id,
+        done,
+        total,
+        errors,
+        cancelled,
     )
 
 
@@ -1413,13 +1373,10 @@ def _ohlcv_from_cached(
     df["date"] = pd.to_datetime(df["date"])
     df = df.sort_values("date").set_index("date")
     use_adj = (
-        "adj_close" in df.columns
-        and df["adj_close"].notna().mean() > 0.5
+        "adj_close" in df.columns and df["adj_close"].notna().mean() > 0.5
     )
     df = df.dropna(subset=["close"])
-    adj_col = (
-        df["adj_close"] if use_adj else df["close"]
-    )
+    adj_col = df["adj_close"] if use_adj else df["close"]
     result = pd.DataFrame(
         {
             "Open": df["open"],
@@ -1488,12 +1445,8 @@ def execute_run_forecasts(
             query_iceberg_df,
         )
 
-        yf_tickers_all = [
-            yf_map.get(t, t) for t in tickers
-        ]
-        ph = ",".join(
-            f"'{t}'" for t in yf_tickers_all
-        )
+        yf_tickers_all = [yf_map.get(t, t) for t in tickers]
+        ph = ",".join(f"'{t}'" for t in yf_tickers_all)
         _t0 = datetime.now(timezone.utc)
         _bulk_ohlcv = query_iceberg_df(
             "stocks.ohlcv",
@@ -1505,23 +1458,17 @@ def execute_run_forecasts(
             for tk, grp in _bulk_ohlcv.groupby(
                 "ticker",
             ):
-                _ohlcv_cache[str(tk)] = (
-                    grp.reset_index(drop=True)
-                )
-        _elapsed = (
-            datetime.now(timezone.utc) - _t0
-        ).total_seconds()
+                _ohlcv_cache[str(tk)] = grp.reset_index(drop=True)
+        _elapsed = (datetime.now(timezone.utc) - _t0).total_seconds()
         _logger.info(
-            "[forecast] Batch OHLCV: %d tickers, "
-            "%d rows in %.2fs",
+            "[forecast] Batch OHLCV: %d tickers, " "%d rows in %.2fs",
             len(_ohlcv_cache),
             len(_bulk_ohlcv),
             _elapsed,
         )
     except Exception:
         _logger.warning(
-            "[forecast] Batch OHLCV failed, "
-            "falling back to per-ticker",
+            "[forecast] Batch OHLCV failed, " "falling back to per-ticker",
             exc_info=True,
         )
 
@@ -1545,20 +1492,17 @@ def execute_run_forecasts(
             )
             # Keep latest run per ticker.
             _fc_df = _fc_df.sort_values(
-                "run_date", ascending=False,
+                "run_date",
+                ascending=False,
             ).drop_duplicates(
-                subset=["ticker"], keep="first",
+                subset=["ticker"],
+                keep="first",
             )
             for _, _r in _fc_df.iterrows():
-                _fc_run_cache[str(_r["ticker"])] = (
-                    _r.to_dict()
-                )
-        _elapsed = (
-            datetime.now(timezone.utc) - _t0
-        ).total_seconds()
+                _fc_run_cache[str(_r["ticker"])] = _r.to_dict()
+        _elapsed = (datetime.now(timezone.utc) - _t0).total_seconds()
         _logger.info(
-            "[forecast] Batch forecast_runs: "
-            "%d tickers in %.2fs",
+            "[forecast] Batch forecast_runs: " "%d tickers in %.2fs",
             len(_fc_run_cache),
             _elapsed,
         )
@@ -1576,31 +1520,20 @@ def execute_run_forecasts(
     )
     _analysis_cache: dict[str, dict] = {}
     try:
-        analysis_df = (
-            stock_repo.get_analysis_summary_batch(
-                tickers,
-            )
+        analysis_df = stock_repo.get_analysis_summary_batch(
+            tickers,
         )
-        if (
-            analysis_df is not None
-            and not analysis_df.empty
-        ):
+        if analysis_df is not None and not analysis_df.empty:
             for _, row in analysis_df.iterrows():
-                _analysis_cache[row["ticker"]] = (
-                    row.to_dict()
-                )
+                _analysis_cache[row["ticker"]] = row.to_dict()
     except Exception:
         _logger.warning(
             "Failed to pre-load analysis_summary",
             exc_info=True,
         )
 
-    _piotroski_cache = (
-        stock_repo.get_piotroski_scores_batch(tickers)
-    )
-    _quarterly_cache = (
-        stock_repo.get_quarterly_results_batch(tickers)
-    )
+    _piotroski_cache = stock_repo.get_piotroski_scores_batch(tickers)
+    _quarterly_cache = stock_repo.get_quarterly_results_batch(tickers)
 
     # Sector index pre-load removed — sector_relative_strength
     # dropped from Prophet regressors (|beta| < 0.001).
@@ -1618,11 +1551,9 @@ def execute_run_forecasts(
         if not force:
             fc_run = _fc_run_cache.get(yf_ticker)
             if not fc_run:
-                fc_run = (
-                    stock_repo.get_latest_forecast_run(
-                        yf_ticker,
-                        horizon_months,
-                    )
+                fc_run = stock_repo.get_latest_forecast_run(
+                    yf_ticker,
+                    horizon_months,
                 )
             if fc_run:
                 from datetime import timedelta
@@ -1631,12 +1562,9 @@ def execute_run_forecasts(
                 if rd is not None:
                     if hasattr(rd, "date"):
                         rd = rd.date()
-                    cutoff = (
-                        datetime.now(
-                            timezone.utc,
-                        ).date()
-                        - timedelta(days=7)
-                    )
+                    cutoff = datetime.now(
+                        timezone.utc,
+                    ).date() - timedelta(days=7)
                     if rd >= cutoff:
                         _logger.info(
                             "[scheduler] Forecast"
@@ -1675,12 +1603,9 @@ def execute_run_forecasts(
                 if rd is not None:
                     if hasattr(rd, "date"):
                         rd = rd.date()
-                    cutoff_30d = (
-                        datetime.now(
-                            timezone.utc,
-                        ).date()
-                        - timedelta(days=30)
-                    )
+                    cutoff_30d = datetime.now(
+                        timezone.utc,
+                    ).date() - timedelta(days=30)
                     if rd >= cutoff_30d:
                         _logger.info(
                             "[scheduler] %s: low-data"
@@ -1735,7 +1660,9 @@ def execute_run_forecasts(
 
         # ── Tier 2 features ──
         tier2 = compute_tier2_features(
-            df, None, earnings_dates=None,
+            df,
+            None,
+            earnings_dates=None,
         )
 
         # ── Enrich regressors ──
@@ -1745,7 +1672,10 @@ def execute_run_forecasts(
 
         if regressors is not None:
             regressors = _enrich_regressors(
-                regressors, yf_ticker, tier1, tier2,
+                regressors,
+                yf_ticker,
+                tier1,
+                tier2,
             )
 
         model, train_df = _train_prophet_model(
@@ -1799,12 +1729,9 @@ def execute_run_forecasts(
                     rd = rd.date()
                 elif hasattr(rd, "to_pydatetime"):
                     rd = rd.to_pydatetime().date()
-                acc_cutoff = (
-                    datetime.now(
-                        timezone.utc,
-                    ).date()
-                    - timedelta(days=30)
-                )
+                acc_cutoff = datetime.now(
+                    timezone.utc,
+                ).date() - timedelta(days=30)
                 if rd and rd >= acc_cutoff:
                     _prev_acc = {
                         "MAE": _prev["mae"],
@@ -1823,7 +1750,8 @@ def execute_run_forecasts(
             _prev_acc
             if _prev_acc
             else _calculate_forecast_accuracy(
-                model, prophet_df,
+                model,
+                prophet_df,
             )
         )
 
@@ -1854,7 +1782,8 @@ def execute_run_forecasts(
         )
 
         forecast_df, bias_meta = apply_technical_bias(
-            forecast_df, analysis_row,
+            forecast_df,
+            analysis_row,
         )
 
         # ── Confidence score ──
@@ -1867,24 +1796,21 @@ def execute_run_forecasts(
 
         _total_regressors = 14
         _available = (
-            sum(
-                1
-                for v in {**tier1, **tier2}.values()
-                if v != 0.0
-            )
+            sum(1 for v in {**tier1, **tier2}.values() if v != 0.0)
             + 3  # market+macro always available
         )
         _data_comp = min(
-            _available / _total_regressors, 1.0,
+            _available / _total_regressors,
+            1.0,
         )
 
-        conf_score, conf_components = (
-            compute_confidence_score(
-                accuracy, _data_comp,
-            )
+        conf_score, conf_components = compute_confidence_score(
+            accuracy,
+            _data_comp,
         )
         badge, badge_reason = confidence_badge(
-            conf_score, conf_components,
+            conf_score,
+            conf_components,
         )
 
         summary = _generate_forecast_summary(
@@ -1910,9 +1836,7 @@ def execute_run_forecasts(
                 run_dict[f"target_{m_key}_price"] = t.get(
                     "price",
                 )
-                run_dict[f"target_{m_key}_pct_change"] = (
-                    t.get("pct_change")
-                )
+                run_dict[f"target_{m_key}_pct_change"] = t.get("pct_change")
                 run_dict[f"target_{m_key}_lower"] = t.get(
                     "lower",
                 )
@@ -1939,11 +1863,7 @@ def execute_run_forecasts(
         # ── Sanity gate: skip forecast series for
         # extreme predictions (>200% deviation) ──
         _any_extreme = any(
-            abs(
-                summary.get("targets", {})
-                .get(mk, {})
-                .get("pct_change", 0)
-            )
+            abs(summary.get("targets", {}).get(mk, {}).get("pct_change", 0))
             > 200
             for mk in ("3m", "6m", "9m")
         )
@@ -1995,19 +1915,21 @@ def execute_run_forecasts(
         stock_repo.insert_forecast_series_batch(
             _pending_series,
         )
-        _elapsed = (
-            datetime.now(timezone.utc) - _t0
-        ).total_seconds()
+        _elapsed = (datetime.now(timezone.utc) - _t0).total_seconds()
         _logger.info(
-            "[forecast] Bulk write: %d runs + "
-            "%d series in %.2fs",
+            "[forecast] Bulk write: %d runs + " "%d series in %.2fs",
             len(_pending_runs),
             len(_pending_series),
             _elapsed,
         )
 
     _finalize_run(
-        repo, run_id, done, total, errors, cancelled,
+        repo,
+        run_id,
+        done,
+        total,
+        errors,
+        cancelled,
         started_at=_run_start,
     )
 
@@ -2046,18 +1968,23 @@ def execute_run_piotroski(
 
     total = len(yf_tickers)
     repo.update_scheduler_run(
-        run_id, {"tickers_total": total},
+        run_id,
+        {"tickers_total": total},
     )
     _logger.info(
-        "[batch-piotroski] Scoring %d tickers "
-        "(scope=%s)",
+        "[batch-piotroski] Scoring %d tickers " "(scope=%s)",
         total,
         scope,
     )
 
     if cancel_event and cancel_event.is_set():
         _finalize_run(
-            repo, run_id, 0, total, [], True,
+            repo,
+            run_id,
+            0,
+            total,
+            [],
+            True,
         )
         return
 
@@ -2104,8 +2031,12 @@ def execute_run_piotroski(
             exc_info=True,
         )
         _finalize_run(
-            repo, run_id, 0, total,
-            [str(exc)[:500]], False,
+            repo,
+            run_id,
+            0,
+            total,
+            [str(exc)[:500]],
+            False,
         )
 
 
@@ -2142,27 +2073,28 @@ def execute_run_recommendations(
     Errors per user are caught and logged; the batch
     continues.
     """
+    from db.duckdb_engine import query_iceberg_df
+
     from backend.jobs.recommendation_engine import (
         get_or_create_monthly_run,
     )
-    from db.duckdb_engine import query_iceberg_df
 
     _run_start = datetime.now(timezone.utc)
 
-    scopes = (
-        ["india", "us"] if scope == "all"
-        else [scope]
-    )
+    scopes = ["india", "us"] if scope == "all" else [scope]
     for s in scopes:
         if s not in ("india", "us"):
             _logger.error(
-                "[recommendations] Invalid scope "
-                "'%s' — aborting",
+                "[recommendations] Invalid scope " "'%s' — aborting",
                 s,
             )
             _finalize_run(
-                repo, run_id, 0, 0,
-                [f"invalid scope: {s}"], False,
+                repo,
+                run_id,
+                0,
+                0,
+                [f"invalid scope: {s}"],
+                False,
                 started_at=_run_start,
             )
             return
@@ -2171,32 +2103,31 @@ def execute_run_recommendations(
     try:
         user_df = query_iceberg_df(
             "stocks.portfolio_transactions",
-            "SELECT DISTINCT user_id "
-            "FROM portfolio_transactions",
+            "SELECT DISTINCT user_id " "FROM portfolio_transactions",
         )
-        user_ids = (
-            user_df["user_id"].tolist()
-            if not user_df.empty
-            else []
-        )
+        user_ids = user_df["user_id"].tolist() if not user_df.empty else []
     except Exception as exc:
         _logger.error(
-            "[recommendations] Failed to query "
-            "portfolio users: %s",
+            "[recommendations] Failed to query " "portfolio users: %s",
             exc,
         )
         _finalize_run(
-            repo, run_id, 0, 0,
-            [f"user query: {exc}"], False,
+            repo,
+            run_id,
+            0,
+            0,
+            [f"user query: {exc}"],
+            False,
             started_at=_run_start,
         )
         return
 
     total = len(user_ids) * len(scopes)
     _logger.info(
-        "[recommendations] %d users x %d scope(s) "
-        "= %d passes",
-        len(user_ids), len(scopes), total,
+        "[recommendations] %d users x %d scope(s) " "= %d passes",
+        len(user_ids),
+        len(scopes),
+        total,
     )
     repo.update_scheduler_run(
         run_id,
@@ -2221,18 +2152,20 @@ def execute_run_recommendations(
                 break
             try:
                 result = get_or_create_monthly_run(
-                    uid, s,
+                    uid,
+                    s,
                     run_type="scheduled",
                     repo=repo,
                 )
                 if not result.get("run_id"):
                     skipped += 1
                     _logger.info(
-                        "[recommendations] %s/%s: "
-                        "skipped (%s)",
-                        uid[:8], s,
+                        "[recommendations] %s/%s: " "skipped (%s)",
+                        uid[:8],
+                        s,
                         result.get(
-                            "status_note", "unknown",
+                            "status_note",
+                            "unknown",
                         ),
                     )
                 elif result.get("was_cached"):
@@ -2241,9 +2174,10 @@ def execute_run_recommendations(
                     generated += 1
             except Exception as exc:
                 _logger.warning(
-                    "[recommendations] %s/%s "
-                    "failed: %s",
-                    uid[:8], s, exc,
+                    "[recommendations] %s/%s " "failed: %s",
+                    uid[:8],
+                    s,
+                    exc,
                 )
                 errors.append(f"{uid}/{s}: {exc}")
 
@@ -2256,11 +2190,18 @@ def execute_run_recommendations(
     _logger.info(
         "[recommendations] done: generated=%d "
         "cached=%d skipped=%d errors=%d",
-        generated, cached, skipped, len(errors),
+        generated,
+        cached,
+        skipped,
+        len(errors),
     )
     _finalize_run(
-        repo, run_id, done, total,
-        errors, cancelled,
+        repo,
+        run_id,
+        done,
+        total,
+        errors,
+        cancelled,
         started_at=_run_start,
     )
 
@@ -2297,22 +2238,25 @@ def execute_run_recommendation_outcomes(
     import uuid as _uuid
     from datetime import date, timedelta
 
-    from sqlalchemy import select as sa_select, update as sa_upd, func
+    from config import get_settings
+    from db.duckdb_engine import query_iceberg_df
+    from jobs.recommendation_engine import (
+        compute_outcome_label,
+    )
+    from sqlalchemy import func
+    from sqlalchemy import select as sa_select
+    from sqlalchemy import update as sa_upd
     from sqlalchemy.ext.asyncio import (
         AsyncSession,
         async_sessionmaker,
         create_async_engine,
     )
     from sqlalchemy.pool import NullPool
-    from config import get_settings
+
+    from backend.db.models.recommendation import Recommendation as RecModel
     from backend.db.models.recommendation import (
-        Recommendation as RecModel,
         RecommendationOutcome as OutcomeModel,
     )
-    from jobs.recommendation_engine import (
-        compute_outcome_label,
-    )
-    from db.duckdb_engine import query_iceberg_df
 
     # Horizons we compute outcomes for. 7d unlocks the
     # weekly-granularity Performance view; 30/60/90 keep
@@ -2328,7 +2272,8 @@ def execute_run_recommendation_outcomes(
         poolclass=NullPool,
     )
     _factory = async_sessionmaker(
-        _eng, class_=AsyncSession,
+        _eng,
+        class_=AsyncSession,
     )
 
     # ── Fetch due recommendations ─────────────────────
@@ -2339,13 +2284,8 @@ def execute_run_recommendation_outcomes(
                 cutoff = today - timedelta(days=days)
 
                 existing = (
-                    sa_select(
-                        OutcomeModel.recommendation_id
-                    )
-                    .where(
-                        OutcomeModel.days_elapsed
-                        == days
-                    )
+                    sa_select(OutcomeModel.recommendation_id)
+                    .where(OutcomeModel.days_elapsed == days)
                     .scalar_subquery()
                 )
 
@@ -2362,23 +2302,21 @@ def execute_run_recommendation_outcomes(
                             ("active", "acted_on"),
                         ),
                         RecModel.ticker.isnot(None),
-                        func.date(
-                            RecModel.created_at
-                        ) <= cutoff,
+                        func.date(RecModel.created_at) <= cutoff,
                         RecModel.id.notin_(existing),
                     )
                 )
                 for r in q.scalars().all():
-                    results.append({
-                        "id": r.id,
-                        "ticker": r.ticker,
-                        "action": r.action,
-                        "price_at_rec": r.price_at_rec,
-                        "created_date": (
-                            r.created_at.date()
-                        ),
-                        "days_due": days,
-                    })
+                    results.append(
+                        {
+                            "id": r.id,
+                            "ticker": r.ticker,
+                            "action": r.action,
+                            "price_at_rec": r.price_at_rec,
+                            "created_date": (r.created_at.date()),
+                            "days_due": days,
+                        }
+                    )
         await _eng.dispose()
         return results
 
@@ -2386,13 +2324,16 @@ def execute_run_recommendation_outcomes(
         due_recs = asyncio.run(_get_due())
     except Exception as exc:
         _logger.error(
-            "[rec-outcomes] Failed to query due "
-            "recs: %s",
+            "[rec-outcomes] Failed to query due " "recs: %s",
             exc,
         )
         _finalize_run(
-            repo, run_id, 0, 0,
-            [str(exc)[:200]], False,
+            repo,
+            run_id,
+            0,
+            0,
+            [str(exc)[:200]],
+            False,
             started_at=_run_start,
         )
         return
@@ -2410,13 +2351,15 @@ def execute_run_recommendation_outcomes(
     if not due_recs:
         # Expire stale recs even if none due.
         try:
+
             async def _expire_empty():
                 eng2 = create_async_engine(
                     get_settings().database_url,
                     poolclass=NullPool,
                 )
                 fac2 = async_sessionmaker(
-                    eng2, class_=AsyncSession,
+                    eng2,
+                    class_=AsyncSession,
                 )
                 cutoff = today - timedelta(days=90)
                 async with fac2() as s:
@@ -2424,9 +2367,7 @@ def execute_run_recommendation_outcomes(
                         sa_upd(RecModel)
                         .where(
                             RecModel.status == "active",
-                            func.date(
-                                RecModel.created_at
-                            ) < cutoff,
+                            func.date(RecModel.created_at) < cutoff,
                         )
                         .values(status="expired")
                     )
@@ -2446,7 +2387,12 @@ def execute_run_recommendation_outcomes(
                 exc,
             )
         _finalize_run(
-            repo, run_id, 0, 0, [], False,
+            repo,
+            run_id,
+            0,
+            0,
+            [],
+            False,
             started_at=_run_start,
         )
         return
@@ -2458,10 +2404,7 @@ def execute_run_recommendation_outcomes(
     # each rec resolve the close on the first trading
     # day at or after target (handles weekends/holidays
     # transparently — at most a 6-day forward scan).
-    tickers = sorted({
-        r["ticker"] for r in due_recs
-        if r.get("ticker")
-    })
+    tickers = sorted({r["ticker"] for r in due_recs if r.get("ticker")})
     # close_map: (ticker, ISO-date-str) → close price.
     close_map: dict[tuple[str, str], float] = {}
     if tickers:
@@ -2469,8 +2412,7 @@ def execute_run_recommendation_outcomes(
         # cap at today (we don't have future data).
         targets = [
             min(
-                r["created_date"]
-                + timedelta(days=r["days_due"]),
+                r["created_date"] + timedelta(days=r["days_due"]),
                 today,
             )
             for r in due_recs
@@ -2480,7 +2422,8 @@ def execute_run_recommendation_outcomes(
             d_min = min(targets)
             # +6 days for the next-trading-day scan.
             d_max = min(
-                max(targets) + timedelta(days=6), today,
+                max(targets) + timedelta(days=6),
+                today,
             )
             placeholders = ",".join(
                 [f"'{t}'" for t in tickers],
@@ -2504,18 +2447,16 @@ def execute_run_recommendation_outcomes(
                             if hasattr(d, "isoformat")
                             else str(d)[:10]
                         )
-                        close_map[
-                            (row["ticker"], d_iso)
-                        ] = float(row["close"])
+                        close_map[(row["ticker"], d_iso)] = float(row["close"])
             except Exception as exc:
                 _logger.warning(
-                    "[rec-outcomes] Close fetch "
-                    "failed: %s",
+                    "[rec-outcomes] Close fetch " "failed: %s",
                     exc,
                 )
 
     def _resolve_close(
-        ticker: str, target: date,
+        ticker: str,
+        target: date,
     ) -> tuple[float | None, date | None]:
         """Find close on `target` or first trading day
         after (within 6 days). Returns (close, actual
@@ -2549,19 +2490,17 @@ def execute_run_recommendation_outcomes(
         days_due = rec.get("days_due", 30)
         created_d = rec.get("created_date")
 
-        if (
-            not price_at_rec
-            or not ticker
-            or not created_d
-        ):
+        if not price_at_rec or not ticker or not created_d:
             done += 1
             continue
 
         target = min(
-            created_d + timedelta(days=days_due), today,
+            created_d + timedelta(days=days_due),
+            today,
         )
         actual_price, check_d = _resolve_close(
-            ticker, target,
+            ticker,
+            target,
         )
         if actual_price is None or check_d is None:
             # No OHLCV at/after target — leave
@@ -2570,12 +2509,10 @@ def execute_run_recommendation_outcomes(
             done += 1
             continue
 
-        return_pct = (
-            (actual_price - price_at_rec)
-            / price_at_rec
-        ) * 100.0
+        return_pct = ((actual_price - price_at_rec) / price_at_rec) * 100.0
         label = compute_outcome_label(
-            action, return_pct,
+            action,
+            return_pct,
         )
         # Benchmark stays 0.0 here — pre-existing TODO,
         # tracked separately. excess == return_pct in
@@ -2584,23 +2521,25 @@ def execute_run_recommendation_outcomes(
         bench_return = 0.0
         excess = return_pct - bench_return
 
-        outcomes_to_insert.append({
-            "id": str(_uuid.uuid4()),
-            "recommendation_id": rec_id,
-            "check_date": check_d,
-            "days_elapsed": days_due,
-            "actual_price": actual_price,
-            "return_pct": round(return_pct, 2),
-            "benchmark_return_pct": round(
-                bench_return, 2,
-            ),
-            "excess_return_pct": round(excess, 2),
-            "outcome_label": label,
-        })
+        outcomes_to_insert.append(
+            {
+                "id": str(_uuid.uuid4()),
+                "recommendation_id": rec_id,
+                "check_date": check_d,
+                "days_elapsed": days_due,
+                "actual_price": actual_price,
+                "return_pct": round(return_pct, 2),
+                "benchmark_return_pct": round(
+                    bench_return,
+                    2,
+                ),
+                "excess_return_pct": round(excess, 2),
+                "outcome_label": label,
+            }
+        )
 
         _logger.info(
-            "[rec-outcomes] %s/%s @%dd "
-            "(check=%s): %.2f%% -> %s",
+            "[rec-outcomes] %s/%s @%dd " "(check=%s): %.2f%% -> %s",
             ticker,
             rec_id[:8],
             days_due,
@@ -2617,13 +2556,15 @@ def execute_run_recommendation_outcomes(
     # Bulk insert outcomes + expire stale
     if outcomes_to_insert:
         try:
+
             async def _bulk_insert():
                 eng3 = create_async_engine(
                     get_settings().database_url,
                     poolclass=NullPool,
                 )
                 fac3 = async_sessionmaker(
-                    eng3, class_=AsyncSession,
+                    eng3,
+                    class_=AsyncSession,
                 )
                 async with fac3() as s:
                     for o in outcomes_to_insert:
@@ -2637,9 +2578,7 @@ def execute_run_recommendation_outcomes(
                         sa_upd(RecModel)
                         .where(
                             RecModel.status == "active",
-                            func.date(
-                                RecModel.created_at
-                            ) < cutoff,
+                            func.date(RecModel.created_at) < cutoff,
                         )
                         .values(status="expired")
                     )
@@ -2650,22 +2589,24 @@ def execute_run_recommendation_outcomes(
 
             expired = asyncio.run(_bulk_insert())
             _logger.info(
-                "[rec-outcomes] Inserted %d outcomes, "
-                "expired %d stale",
+                "[rec-outcomes] Inserted %d outcomes, " "expired %d stale",
                 len(outcomes_to_insert),
                 expired,
             )
         except Exception as exc:
             _logger.warning(
-                "[rec-outcomes] Bulk insert "
-                "failed: %s",
+                "[rec-outcomes] Bulk insert " "failed: %s",
                 exc,
             )
             errors.append(str(exc)[:200])
 
     _finalize_run(
-        repo, run_id, done, total,
-        errors, cancelled,
+        repo,
+        run_id,
+        done,
+        total,
+        errors,
+        cancelled,
         started_at=_run_start,
     )
 
@@ -2760,7 +2701,8 @@ def execute_iceberg_maintenance(
         done += 1
         try:
             repo.update_scheduler_run(
-                run_id, {"tickers_done": done},
+                run_id,
+                {"tickers_done": done},
             )
         except Exception:
             pass
@@ -2772,8 +2714,12 @@ def execute_iceberg_maintenance(
         )
         errors.append(f"backup: {str(exc)[:200]}")
         _finalize_run(
-            repo, run_id, done, total,
-            errors, cancelled,
+            repo,
+            run_id,
+            done,
+            total,
+            errors,
+            cancelled,
             started_at=_run_start,
         )
         return
@@ -2790,8 +2736,7 @@ def execute_iceberg_maintenance(
                 )
             else:
                 _logger.info(
-                    "[maint] %s: %d → %d files (%d "
-                    "rows, %.1fs)",
+                    "[maint] %s: %d → %d files (%d " "rows, %.1fs)",
                     tbl,
                     r.get("before", 0),
                     r.get("after", 0),
@@ -2801,7 +2746,8 @@ def execute_iceberg_maintenance(
         except Exception as exc:
             _logger.warning(
                 "[maint] compact %s failed: %s",
-                tbl, exc,
+                tbl,
+                exc,
             )
             errors.append(
                 f"{tbl} compact: {str(exc)[:100]}",
@@ -2819,7 +2765,8 @@ def execute_iceberg_maintenance(
         # scheduler dashboard.
         try:
             sw = cleanup_orphans_v2(
-                tbl, skip_backup=True,
+                tbl,
+                skip_backup=True,
             )
             if sw.get("error"):
                 errors.append(
@@ -2836,7 +2783,8 @@ def execute_iceberg_maintenance(
                 _logger.error(
                     "[maint] %s sweep read-verify "
                     "FAILED — deleted %d files",
-                    tbl, sw.get("deleted_files", 0),
+                    tbl,
+                    sw.get("deleted_files", 0),
                 )
             else:
                 _logger.info(
@@ -2845,15 +2793,15 @@ def execute_iceberg_maintenance(
                     "snapshots",
                     tbl,
                     sw.get("deleted_files", 0),
-                    sw.get("deleted_bytes", 0)
-                    / 1_048_576,
+                    sw.get("deleted_bytes", 0) / 1_048_576,
                     sw.get("expired_snapshots", 0),
                 )
         except Exception as exc:
             _logger.warning(
-                "[maint] cleanup_orphans_v2 %s "
-                "failed: %s",
-                tbl, exc, exc_info=True,
+                "[maint] cleanup_orphans_v2 %s " "failed: %s",
+                tbl,
+                exc,
+                exc_info=True,
             )
             errors.append(
                 f"{tbl} sweep: {str(exc)[:120]}",
@@ -2869,8 +2817,12 @@ def execute_iceberg_maintenance(
             pass
 
     _finalize_run(
-        repo, run_id, done, total,
-        errors, cancelled,
+        repo,
+        run_id,
+        done,
+        total,
+        errors,
+        cancelled,
         started_at=_run_start,
     )
 
@@ -2910,6 +2862,8 @@ def execute_recommendation_cleanup(
     """
     import asyncio
 
+    from cache import get_cache
+    from config import get_settings
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import (
         AsyncSession,
@@ -2917,9 +2871,6 @@ def execute_recommendation_cleanup(
         create_async_engine,
     )
     from sqlalchemy.pool import NullPool
-
-    from cache import get_cache
-    from config import get_settings
 
     _run_start = datetime.now(timezone.utc)
 
@@ -2929,7 +2880,8 @@ def execute_recommendation_cleanup(
         poolclass=NullPool,
     )
     _factory = async_sessionmaker(
-        _eng, class_=AsyncSession,
+        _eng,
+        class_=AsyncSession,
     )
 
     deleted = 0
@@ -2997,7 +2949,342 @@ def execute_recommendation_cleanup(
         },
     )
     _finalize_run(
-        repo, run_id, deleted, deleted,
-        errors, cancelled=False,
+        repo,
+        run_id,
+        deleted,
+        deleted,
+        errors,
+        cancelled=False,
+        started_at=_run_start,
+    )
+
+
+# ──────────────────────────────────────────────────────
+# Sprint 9 Advanced Analytics — daily / quarterly jobs
+# ──────────────────────────────────────────────────────
+
+
+@register_job("nse_bhavcopy_daily")
+def execute_nse_bhavcopy_daily(
+    scope: str,
+    run_id: str,
+    repo,
+    cancel_event=None,
+    **kwargs,
+) -> None:
+    """Ingest NSE bhavcopy delivery for today (T-day).
+
+    Runs at 19:30 IST mon-fri (post-market) per the
+    Sprint 9 plan; on holidays the bhavcopy body is
+    empty and the job logs a skipped result without
+    error.  Idempotent — re-runs on the same date
+    replace prior rows.
+    """
+    import asyncio
+    from datetime import date
+
+    from backend.pipeline.jobs.bhavcopy import run_bhavcopy
+
+    _run_start = datetime.now(timezone.utc)
+    try:
+        result = asyncio.run(run_bhavcopy(date.today()))
+    except Exception as exc:  # noqa: BLE001
+        _logger.exception(
+            "nse_bhavcopy_daily failed: %s",
+            exc,
+        )
+        _finalize_run(
+            repo,
+            run_id,
+            0,
+            0,
+            [str(exc)],
+            cancelled=False,
+            started_at=_run_start,
+        )
+        return
+
+    rows = int(result.get("rows", 0))
+    status = result.get("status", "unknown")
+    errors = [result.get("error", "")] if status == "failed" else []
+    repo.update_scheduler_run(
+        run_id,
+        {"tickers_total": rows, "tickers_done": rows},
+    )
+    _finalize_run(
+        repo,
+        run_id,
+        rows,
+        rows,
+        errors,
+        cancelled=False,
+        started_at=_run_start,
+    )
+
+
+@register_job("fundamentals_snapshot_daily")
+def execute_fundamentals_snapshot_daily(
+    scope: str,
+    run_id: str,
+    repo,
+    cancel_event=None,
+    **kwargs,
+) -> None:
+    """Build today's fundamentals snapshot.
+
+    Runs at 20:00 IST mon-sat; idempotent per
+    snapshot_date.
+    """
+    import asyncio
+
+    from backend.pipeline.jobs.fundamentals_snapshot import (
+        run_snapshot,
+    )
+
+    _run_start = datetime.now(timezone.utc)
+    try:
+        result = asyncio.run(run_snapshot())
+    except Exception as exc:  # noqa: BLE001
+        _logger.exception(
+            "fundamentals_snapshot_daily failed: %s",
+            exc,
+        )
+        _finalize_run(
+            repo,
+            run_id,
+            0,
+            0,
+            [str(exc)],
+            cancelled=False,
+            started_at=_run_start,
+        )
+        return
+
+    rows = int(result.get("rows", 0))
+    repo.update_scheduler_run(
+        run_id,
+        {"tickers_total": rows, "tickers_done": rows},
+    )
+    _finalize_run(
+        repo,
+        run_id,
+        rows,
+        rows,
+        [],
+        cancelled=False,
+        started_at=_run_start,
+    )
+
+
+@register_job("corporate_events_daily")
+def execute_corporate_events_daily(
+    scope: str,
+    run_id: str,
+    repo,
+    cancel_event=None,
+    **kwargs,
+) -> None:
+    """Fetch + persist NSE corporate events for the trading window.
+
+    Runs at 07:00 IST mon-sat (before pre-open).  Pulls
+    last 7 days of corporate-actions + board-meetings,
+    deduplicates, writes one Iceberg commit.  Cloudflare
+    blocks surface as ``status=failed`` without crashing
+    the scheduler.
+    """
+    import asyncio
+    from datetime import date
+
+    import pandas as pd
+
+    from backend.pipeline.sources.corporate_events import (
+        NseCorporateEventsSource,
+    )
+
+    _run_start = datetime.now(timezone.utc)
+
+    async def _run() -> int:
+        async with NseCorporateEventsSource() as src:
+            try:
+                actions = await src.fetch_recent(days=7)
+            except Exception as exc:
+                _logger.warning(
+                    "fetch_recent failed: %s",
+                    exc,
+                )
+                actions = pd.DataFrame()
+            try:
+                meetings = await src.fetch_board_meetings(
+                    days=7,
+                )
+            except Exception as exc:
+                _logger.warning(
+                    "fetch_board_meetings failed: %s",
+                    exc,
+                )
+                meetings = pd.DataFrame()
+        if actions.empty and meetings.empty:
+            return 0
+        combined = (
+            pd.concat([actions, meetings], ignore_index=True)
+            .drop_duplicates(
+                subset=[
+                    "ticker",
+                    "event_date",
+                    "event_type",
+                ],
+            )
+            .reset_index(drop=True)
+        )
+        if combined.empty:
+            return 0
+        return repo.insert_corporate_events(
+            combined,
+            date.today(),
+        )
+
+    try:
+        n = asyncio.run(_run())
+    except Exception as exc:  # noqa: BLE001
+        _logger.exception(
+            "corporate_events_daily failed: %s",
+            exc,
+        )
+        _finalize_run(
+            repo,
+            run_id,
+            0,
+            0,
+            [str(exc)],
+            cancelled=False,
+            started_at=_run_start,
+        )
+        return
+
+    repo.update_scheduler_run(
+        run_id,
+        {"tickers_total": n, "tickers_done": n},
+    )
+    _finalize_run(
+        repo,
+        run_id,
+        n,
+        n,
+        [],
+        cancelled=False,
+        started_at=_run_start,
+    )
+
+
+@register_job("promoter_holdings_quarterly")
+def execute_promoter_holdings_quarterly(
+    scope: str,
+    run_id: str,
+    repo,
+    cancel_event=None,
+    **kwargs,
+) -> None:
+    """Fetch BSE shareholding patterns for the latest quarter.
+
+    Runs on the 1st of Feb / May / Aug / Nov at 04:00
+    IST — BSE filings typically lag the quarter end by
+    21 days.  Iterates the active stock_master tickers
+    that have a known BSE scrip code; sequential to
+    keep BSE rate-limit happy.
+
+    NOTE — currently subject to BSE Cloudflare blocks
+    from non-allowlisted IPs (see AA-3 follow-up).  The
+    job is wired so that once an allowlisted egress is
+    in place (residential proxy / paid API), zero code
+    changes are needed.
+    """
+    import asyncio
+
+    import pandas as pd
+
+    from backend.pipeline.sources.promoter_holdings import (
+        BseShareholdingSource,
+        latest_quarter_end,
+    )
+
+    _run_start = datetime.now(timezone.utc)
+
+    async def _run() -> int:
+        # Source the BSE-scrip-code ↔ ticker map from
+        # stock_master.  Tickers without a scrip code
+        # are skipped.
+        try:
+            mapping = repo.get_bse_scrip_code_map()
+        except AttributeError:
+            mapping = {}
+        if not mapping:
+            _logger.info(
+                "No BSE scrip-code mapping found in "
+                "stock_master — skipping quarterly "
+                "promoter ingest.",
+            )
+            return 0
+
+        all_rows: list[pd.DataFrame] = []
+        async with BseShareholdingSource() as src:
+            for ticker, scrip in mapping.items():
+                if cancel_event and cancel_event.is_set():
+                    break
+                try:
+                    df = await src.fetch_quarterly(
+                        scrip,
+                        ticker,
+                    )
+                    if not df.empty:
+                        all_rows.append(df)
+                except Exception as exc:
+                    _logger.warning(
+                        "BSE shareholding skip %s: %s",
+                        ticker,
+                        exc,
+                    )
+                    continue
+                await asyncio.sleep(0.5)
+
+        if not all_rows:
+            return 0
+        combined = pd.concat(
+            all_rows,
+            ignore_index=True,
+        )
+        return repo.insert_promoter_holdings(
+            combined,
+            latest_quarter_end(),
+        )
+
+    try:
+        n = asyncio.run(_run())
+    except Exception as exc:  # noqa: BLE001
+        _logger.exception(
+            "promoter_holdings_quarterly failed: %s",
+            exc,
+        )
+        _finalize_run(
+            repo,
+            run_id,
+            0,
+            0,
+            [str(exc)],
+            cancelled=False,
+            started_at=_run_start,
+        )
+        return
+
+    repo.update_scheduler_run(
+        run_id,
+        {"tickers_total": n, "tickers_done": n},
+    )
+    _finalize_run(
+        repo,
+        run_id,
+        n,
+        n,
+        [],
+        cancelled=False,
         started_at=_run_start,
     )

@@ -2,6 +2,97 @@
 
 ---
 
+## 2026-05-04 — Sprint 9 carry-overs (ASETPLTFRM-357) — items 1 + 5 shipped, items 2 + 4 spun out
+
+**Scope**: closed two of the five post-merge follow-ups bundled in ASETPLTFRM-357 (8 SP) directly on `feature/sprint9` so they land in the same squash PR as the AA epic. Spun the two external/passive items into their own backlog stories so -357 can transition Done.
+
+### Items completed in code
+
+| Item | Summary | Files |
+|---|---|---|
+| #1 — pytest in CI | `pytest==8.3.4` baked into `backend/requirements-dev.txt`; `Dockerfile.backend` builder stage now installs `requirements-dev.txt`; `tests/` + `pyproject.toml` copied into runtime image; new `backend-test` job in `.github/workflows/ci.yml` runs `pytest tests/backend -q --maxfail=5`; `qa`/`release`/`main` jobs gated via `needs: [backend-test]`. `.dockerignore` allow-lists `tests/`. `pyproject.toml` adds `asyncio_mode = "auto"` + `asyncio_default_fixture_loop_scope = "function"`. | `Dockerfile.backend`, `backend/requirements-dev.txt`, `pyproject.toml`, `.github/workflows/ci.yml`, `.dockerignore` |
+| #5 — ETF classification | Pipeline path now calls `_detect_ticker_type(store_as)` and passes it into `upsert_registry()` — bug was that `backend/pipeline/jobs/ohlcv.py:205-217` and `scripts/bulk_download_ohlcv.py:171` omitted the kwarg, so every refresh defaulted ETFs to `ticker_type='stock'`. Helper already existed at `backend/tools/_stock_registry.py:143` (joins `stock_master` ↔ `stock_tags` on `tag='etf'`); reused, no new abstraction. New `tests/backend/test_etf_classification.py` (3 cases: detect ETF, default to stock, `_filter_tickers` returns ETFs). Added §3.7 to `docs/backend/advanced-analytics-rollout.md` with the one-shot cutover steps (`seed --csv data/universe/nse_etfs.csv`, restart backend, `UPDATE stock_registry SET ticker_type='etf'` SQL, repro snippet for verification). | `backend/pipeline/jobs/ohlcv.py`, `scripts/bulk_download_ohlcv.py`, `tests/backend/test_etf_classification.py`, `docs/backend/advanced-analytics-rollout.md` |
+
+### Items spun out
+
+- **ASETPLTFRM-358** — *AA-Followup-Infra: BSE shareholding endpoint allowlist / proxy / paid API* — 3 SP, Medium, parent ASETPLTFRM-340. External infra (Cloudflare bot deflection); not local code.
+- **ASETPLTFRM-359** — *AA-Followup-Monitor: 3y/5y CAGR depth — re-check at Q12 (~6 months)* — 1 SP, Low, parent ASETPLTFRM-340. Passive monitoring (re-check ~2026-11-04).
+
+### Item carried into cutover
+
+- **#3 — 6-month bhavcopy backfill** — runs as part of the AA epic cutover per `docs/backend/advanced-analytics-rollout.md` §3.3. No code change.
+
+### Verification
+
+- `docker compose build backend` → image rebuilt; `python -m pytest --version` → `pytest 8.3.4`.
+- `pytest tests/backend/test_etf_classification.py` → 3/3 green in 0.33 s.
+- `pytest tests/backend/test_advanced_analytics_routes.py tests/backend/test_emv_14.py tests/backend/pipeline/test_bhavcopy.py` → 27/27 green in 0.78 s (no AA-12 regression).
+- 11 pre-existing test failures observed in `tests/backend` (e.g. `test_dashboard_routes.py::TestWatchlist::test_with_data` returns real AAPL price 280.14 vs mocked 152.0; `test_auth_api.py::TestAuthHealth::test_health_returns_healthy` expects `InMemoryTokenStore` but dev container uses `RedisTokenStore`). Reproducible with `asyncio_mode=strict` → confirmed pre-existing, unrelated to -357.
+- `curl http://localhost:8181/v1/health` → `{"status":"ok","postgresql":"ok"}` after backend recreate (new `_detect_ticker_type` import resolves cleanly).
+
+### Sprint 9 status now
+
+- Epic ASETPLTFRM-340: 16 / 16 stories Done, plus -357 carry-overs landing in this same squash PR; epic ready to transition Done after merge.
+- New backlog: ASETPLTFRM-358 + ASETPLTFRM-359 (sprint-9-spawned, not in Sprint 9 commit).
+
+### Carry-over only — pre-existing test failures (not -357)
+
+`tests/backend/` has 11 known failures unrelated to ASETPLTFRM-357 (mock-patching + env-coupled assertions). They reproduce both with the new `asyncio_mode=auto` and the previous `strict` default. Track separately if/when CI starts blocking on them; for now the new `backend-test` CI job will surface them and they should be fixed in a dedicated test-hygiene ticket.
+
+---
+
+## 2026-05-02 — Sprint 9 Advanced Analytics — full epic landed (ASETPLTFRM-340 → 14/16 stories Done · 71/71 SP)
+
+**Scope**: shipped the entire `/advanced-analytics` epic in two adjacent sessions (data layer + scheduled jobs done 2026-05-02 morning, all 8 backend/frontend/test/perf/docs stories done 2026-05-02 evening). Pro + superuser users now have a 7-tab screener page powered by NSE bhavcopy delivery data, EMV-14, multi-year fundamentals, promoter holdings, and a corporate-events feed. Branch: `feature/sprint9` (one squash-merge planned).
+
+### Stories shipped this session (8 / 32 SP)
+
+| # | Story | SP | Notes |
+|---|---|---:|---|
+| AA-7 (347) | `/v1/advanced-analytics/` — 7 endpoints + Pydantic models + Redis cache + scope guard | 13 | 8 batched DuckDB reads/request, EMV-14 inline (no Iceberg col per AA-1 deviation), per-user cache key, `stale_tickers` chip data |
+| AA-9 (349) | Frontend nav entry + `proOrSuperuserOnly` gating | 2 | Sidebar + NavigationMenu.canSeeItem, browser-verified for both roles |
+| AA-10 (350) | RSC route + Suspense LCP fallback + tab strip + URL sync + SWR hook | 5 | `<h1>` SSR fallback, server pre-fetch via `serverApiOrNull` for first tab |
+| AA-11 (351) | 7 tab components + shared `<AdvancedAnalyticsTable />` + StaleTickerChip extraction | 8 | Single shared table parameterised by report + column catalog; 56 columns × 7 tabs × 14 default cols/tab; PLTrendWidget refactored to reuse the chip |
+| AA-12 (352) | Backend pytest — 14 endpoint cases + bhavcopy + EMV-14 | 4 | 27 cases pass in 0.6 s; mocks `_scoped_tickers`, `_safe_query`, `get_cache` so no Iceberg / Redis / PG required |
+| AA-13 (353) | E2E Playwright POM + spec | 3 | 5 cases pass in 12 s @ 1 worker (`frontend-chromium`, superuser fixture); spec named `aa-page.spec.ts` to dodge the greedy `analytics.*` testMatch |
+| AA-14 (354) | Lighthouse perf audit | 2 | Score 100, LCP 0 ms, FCP 136 ms, TBT 0 ms, CLS 0.000 — well under §5.15 `/analytics/*` budget |
+| AA-15+16 (355+356) | Docs + Production rollout SOP | 2 | New `docs/backend/advanced-analytics.md` + `advanced-analytics-rollout.md`; new shared Serena memory `project_advanced_analytics`; CLAUDE.md §9 row added |
+
+Combined with the morning's 7 data-layer/pipeline/cache stories (AA-1 through AA-6 + AA-8, all already Done with detailed Jira impl comments), the Sprint 9 epic is now **14/16 stories Done · 71/71 SP** — full feature ready to commit + PR. Nothing committed yet per the session direction to bundle the whole epic into one squash merge.
+
+### Files added (45 new) + modified (8) — diff still uncommitted
+
+Backend (new): `backend/advanced_analytics_routes.py`, `backend/advanced_analytics_models.py`, plus the 4 new pipeline files from the morning (`backend/pipeline/jobs/{bhavcopy,fundamentals_snapshot}.py`, `backend/pipeline/sources/{corporate_events,promoter_holdings}.py`).
+
+Backend (modified): `stocks/create_tables.py` (4 schemas + emv_14 deferred), `stocks/repository.py` (insert helpers + cache map), `backend/pipeline/sources/nse.py` (`fetch_bhavcopy`), `backend/pipeline/runner.py` (CLI), `backend/jobs/executor.py` (4 `@register_job` decorators), `backend/tools/_analysis_indicators.py` (compute_emv_14 helper), `backend/routes.py` (router include).
+
+Frontend (new): `frontend/app/(authenticated)/advanced-analytics/{page.tsx, loading.tsx, AdvancedAnalyticsClient.tsx}`, `frontend/components/advanced-analytics/{AdvancedAnalyticsTable.tsx, columnCatalogs.ts, *Tab.tsx (×7)}`, `frontend/components/common/StaleTickerChip.tsx`, `frontend/hooks/useAdvancedAnalyticsData.ts`, `frontend/lib/types/advancedAnalytics.ts`.
+
+Frontend (modified): `frontend/lib/constants.tsx` (View union + NavItem.proOrSuperuserOnly + NAV_ITEMS insert), `frontend/components/{NavigationMenu,Sidebar}.tsx` (canSeeItem branch), `frontend/components/widgets/PLTrendWidget.tsx` (StaleTickerChip extraction).
+
+Tests (new): `tests/backend/test_advanced_analytics_routes.py`, `tests/backend/test_emv_14.py`, `tests/backend/pipeline/test_bhavcopy.py` + `__init__.py`. E2E: `e2e/utils/selectors.ts` (registry extension), `e2e/pages/frontend/advanced-analytics.page.ts`, `e2e/tests/frontend/aa-page.spec.ts`. Perf: `scripts/perf-check-auth.js` (added `/advanced-analytics` to ROUTES list).
+
+Docs: `docs/backend/advanced-analytics.md`, `docs/backend/advanced-analytics-rollout.md`, `mkdocs.yml` (nav slot), `CLAUDE.md` §9 row, `.serena/memories/shared/architecture/project_advanced_analytics.md`.
+
+### Live verification snapshot
+
+- Backend `/openapi.json` lists all 7 `/v1/advanced-analytics/<report>` endpoints.
+- Cold-call `/top-50-delivery-by-qty` returns 50 rows in ~1.4 s (DuckDB-bound); warm hit returns identical body in 1.9 ms (cache).
+- Browser as superuser: nav item present between Analytics + Admin, `/advanced-analytics` page renders with all 7 tabs, tab switch syncs URL, table populated with formatted cells (Cr/L/k notional units, percent / multiplier formatters), pagination works, stale chip shows "812 tickers w/ stale inputs" for the current dev catalog.
+- Browser as general: nav item hidden, backend returns 403 across all 7 endpoints.
+- Pytest 27/27 green in container (had to `pip install pytest pytest-asyncio` — backend image needs them baked in for CI).
+- Playwright 5/5 + 2 setup green in 12.1 s @ 1 worker.
+- Lighthouse `/advanced-analytics` Score 100, LCP 0 ms, FCP 136 ms, CLS 0.000.
+
+### Carry-overs / production-only items
+
+- **Pytest in CI**: backend image lacks `pytest` + `pytest-asyncio` baked in. Add to `requirements-dev.txt` (or whichever CI install step) before AA-12 runs in CI.
+- **Promoter holdings**: BSE shareholding endpoint is Cloudflare-blocked from the dev IP. Production needs allowlisted egress / proxy / paid API to populate `stocks.promoter_holdings`. Until then the chip surfaces `missing_promoter` for every ticker — expected, not a regression.
+- **6-month bhavcopy backfill** is part of the rollout SOP (`docs/backend/advanced-analytics-rollout.md` §3.3) — ~6 minutes sequential.
+- **3 y / 5 y CAGR coverage**: 0/716 today because `quarterly_results` only averages 4.9 quarters per ticker. Auto-fills as quarterly history grows; no AA code change needed.
+
+---
+
 ## 2026-04-29 — Sprint 9 candidate: recommendation history & performance analytics
 
 **Scope**: groomed + shipped a 14-month cohort-bucketed performance view for recommendations. Latest run still surfaces via the dashboard widget unchanged; older recs explorable via a new "Performance" sub-tab inside `/analytics/analysis?tab=recommendations`. New backend endpoint, retention cleanup job, frontend sub-tab. Branch: `feature/recommendation-performance-history` (off `dev`).

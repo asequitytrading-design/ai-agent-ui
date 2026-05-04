@@ -60,9 +60,8 @@ from typing import Any
 
 import pandas as pd
 import pyarrow as pa
-from pyiceberg.exceptions import CommitFailedException
-
 from market_utils import safe_str
+from pyiceberg.exceptions import CommitFailedException
 
 _logger = logging.getLogger(__name__)
 
@@ -79,6 +78,10 @@ _CHAT_AUDIT_LOG = f"{_NAMESPACE}.chat_audit_log"
 _PORTFOLIO = f"{_NAMESPACE}.portfolio_transactions"
 # scheduler_runs migrated to PostgreSQL (ASETPLTFRM-301)
 _PIOTROSKI_SCORES = f"{_NAMESPACE}.piotroski_scores"
+_NSE_DELIVERY = f"{_NAMESPACE}.nse_delivery"
+_PROMOTER_HOLDINGS = f"{_NAMESPACE}.promoter_holdings"
+_CORPORATE_EVENTS = f"{_NAMESPACE}.corporate_events"
+_FUNDAMENTALS_SNAPSHOT = f"{_NAMESPACE}.fundamentals_snapshot"
 
 
 def _run_pg(async_fn):
@@ -143,13 +146,13 @@ def _pg_session():
     Returns:
         An ``AsyncSession`` async context manager.
     """
+    from config import get_settings
     from sqlalchemy.ext.asyncio import (
         AsyncSession,
         async_sessionmaker,
         create_async_engine,
     )
     from sqlalchemy.pool import NullPool
-    from config import get_settings
 
     engine = create_async_engine(
         get_settings().database_url,
@@ -567,9 +570,7 @@ class StockRepository:
         # to pick the latest write when multiple rows
         # share the same date.
         sort_col = (
-            "computed_at"
-            if "computed_at" in df.columns
-            else "analysis_date"
+            "computed_at" if "computed_at" in df.columns else "analysis_date"
         )
         if sort_col in df.columns:
             df = df.sort_values(sort_col)
@@ -620,8 +621,7 @@ class StockRepository:
             return df
         except Exception as exc:
             _logger.debug(
-                "DuckDB scan_two_filters failed "
-                "for %s: %s",
+                "DuckDB scan_two_filters failed " "for %s: %s",
                 identifier,
                 exc,
             )
@@ -654,13 +654,11 @@ class StockRepository:
             df = self._table_to_df(identifier)
             if df.empty:
                 return df
-            return df[
-                (df[col1] == val1)
-                & (df[col2] == val2)
-            ].copy()
+            return df[(df[col1] == val1) & (df[col2] == val2)].copy()
 
     def _load_table_and_scan(
-        self, identifier: str,
+        self,
+        identifier: str,
     ) -> tuple[Any, pd.DataFrame]:
         """Load a table and materialise its contents,
         returning both.
@@ -720,10 +718,7 @@ class StockRepository:
             cols = "*"
             if selected_fields:
                 cols = ", ".join(selected_fields)
-            sql = (
-                f"SELECT {cols} FROM {view}"
-                f" WHERE ticker = ?"
-            )
+            sql = f"SELECT {cols} FROM {view}" f" WHERE ticker = ?"
             params: list = [ticker]
             if start is not None:
                 sql += f" AND {date_col} >= ?"
@@ -733,13 +728,14 @@ class StockRepository:
                 params.append(end)
             sql += f" ORDER BY {date_col}"
             df = query_iceberg_df(
-                identifier, sql, params,
+                identifier,
+                sql,
+                params,
             )
             return df
         except Exception as exc:
             _logger.debug(
-                "DuckDB ticker_date_range failed "
-                "for %s/%s: %s",
+                "DuckDB ticker_date_range failed " "for %s/%s: %s",
                 identifier,
                 ticker,
                 exc,
@@ -765,14 +761,16 @@ class StockRepository:
                 row_filter = And(
                     row_filter,
                     GreaterThanOrEqual(
-                        date_col, start,
+                        date_col,
+                        start,
                     ),
                 )
             if end is not None:
                 row_filter = And(
                     row_filter,
                     LessThanOrEqual(
-                        date_col, end,
+                        date_col,
+                        end,
                     ),
                 )
 
@@ -780,9 +778,7 @@ class StockRepository:
                 "row_filter": row_filter,
             }
             if selected_fields:
-                scan_kwargs["selected_fields"] = (
-                    selected_fields
-                )
+                scan_kwargs["selected_fields"] = selected_fields
             return tbl.scan(
                 **scan_kwargs,
             ).to_pandas()
@@ -856,19 +852,17 @@ class StockRepository:
 
             if clauses:
                 where = " AND ".join(clauses)
-                sql = (
-                    f"SELECT * FROM {view}"
-                    f" WHERE {where}"
-                )
+                sql = f"SELECT * FROM {view}" f" WHERE {where}"
             else:
                 sql = f"SELECT * FROM {view}"
             return query_iceberg_df(
-                identifier, sql, params,
+                identifier,
+                sql,
+                params,
             )
         except Exception as exc:
             _logger.debug(
-                "DuckDB date_range failed for "
-                "%s: %s",
+                "DuckDB date_range failed for " "%s: %s",
                 identifier,
                 exc,
             )
@@ -891,7 +885,8 @@ class StockRepository:
             if start is not None:
                 filters.append(
                     GreaterThanOrEqual(
-                        date_col, start,
+                        date_col,
+                        start,
                     ),
                 )
             if end is not None:
@@ -901,7 +896,8 @@ class StockRepository:
 
             if len(filters) == 2:
                 row_filter = And(
-                    filters[0], filters[1],
+                    filters[0],
+                    filters[1],
                 )
             elif len(filters) == 1:
                 row_filter = filters[0]
@@ -913,8 +909,7 @@ class StockRepository:
             ).to_pandas()
         except Exception as exc:
             _logger.warning(
-                "Iceberg date-range scan failed "
-                "for %s (%s); falling back.",
+                "Iceberg date-range scan failed " "for %s (%s); falling back.",
                 identifier,
                 exc,
             )
@@ -977,6 +972,7 @@ class StockRepository:
                         from backend.db.duckdb_engine import (
                             invalidate_metadata,
                         )
+
                         invalidate_metadata(identifier)
                     except Exception:
                         pass
@@ -1008,12 +1004,14 @@ class StockRepository:
             "cache:dash:compare:*",
             "cache:insights:screener:*",
             "cache:insights:correlation:*",
+            "cache:advanced_analytics:*",
         ],
         "stocks.technical_indicators": [
             "cache:chart:indicators:*",
             "cache:dash:analysis:*",
             "cache:dash:home:*",
             "cache:insights:screener:*",
+            "cache:advanced_analytics:*",
         ],
         "stocks.analysis_summary": [
             "cache:dash:analysis:*",
@@ -1054,6 +1052,21 @@ class StockRepository:
         ],
         "stocks.registry": [
             "cache:dash:registry",
+        ],
+        # Sprint 9 Advanced Analytics — every write to
+        # the new tables fans out to invalidate every
+        # /v1/advanced-analytics/* cached response.
+        "stocks.nse_delivery": [
+            "cache:advanced_analytics:*",
+        ],
+        "stocks.promoter_holdings": [
+            "cache:advanced_analytics:*",
+        ],
+        "stocks.corporate_events": [
+            "cache:advanced_analytics:*",
+        ],
+        "stocks.fundamentals_snapshot": [
+            "cache:advanced_analytics:*",
         ],
     }
 
@@ -1182,12 +1195,14 @@ class StockRepository:
             otherwise ``None``.
         """
         df = self._scan_ticker(
-            _COMPANY_INFO, ticker.upper(),
+            _COMPANY_INFO,
+            ticker.upper(),
         )
         if df.empty:
             return None
         latest = df.sort_values(
-            "fetched_at", ascending=False,
+            "fetched_at",
+            ascending=False,
         ).iloc[0]
         fetched_at = latest.get("fetched_at")
         if fetched_at is None:
@@ -1224,14 +1239,12 @@ class StockRepository:
 
             df = query_iceberg_df(
                 _COMPANY_INFO,
-                "SELECT * FROM company_info"
-                " WHERE sector = ?",
+                "SELECT * FROM company_info" " WHERE sector = ?",
                 [sector],
             )
         except Exception as exc:
             _logger.debug(
-                "DuckDB get_stocks_by_sector "
-                "failed: %s",
+                "DuckDB get_stocks_by_sector " "failed: %s",
                 exc,
             )
         # PyIceberg fallback
@@ -1249,13 +1262,13 @@ class StockRepository:
                     )
                 df = tbl.scan(
                     row_filter=EqualTo(
-                        "sector", sector,
+                        "sector",
+                        sector,
                     ),
                 ).to_pandas()
             except Exception as exc:
                 _logger.warning(
-                    "Sector predicate failed "
-                    "for '%s' (%s); full scan.",
+                    "Sector predicate failed " "for '%s' (%s); full scan.",
                     sector,
                     exc,
                 )
@@ -1263,10 +1276,7 @@ class StockRepository:
                     _COMPANY_INFO,
                 )
                 if not df.empty:
-                    df = df[
-                        df["sector"].str.lower()
-                        == sector.lower()
-                    ].copy()
+                    df = df[df["sector"].str.lower() == sector.lower()].copy()
 
         if df.empty:
             return df
@@ -1315,8 +1325,7 @@ class StockRepository:
             tbl.delete(f"ticker = '{ticker}'")
         except Exception:
             _logger.debug(
-                "company_info delete before upsert"
-                " failed for %s",
+                "company_info delete before upsert" " failed for %s",
                 ticker,
             )
         # Sanitise strings so NaN / whitespace never
@@ -1460,9 +1469,7 @@ class StockRepository:
         # Once the evolution ships, the column persists
         # on subsequent writes.
         try:
-            _existing = {
-                f.name for f in tbl.schema().fields
-            }
+            _existing = {f.name for f in tbl.schema().fields}
             if "peg_ratio_yf" not in _existing:
                 row = row.drop_columns(["peg_ratio_yf"])
         except Exception:
@@ -1573,10 +1580,7 @@ class StockRepository:
                 [ticker],
             )
             if not edf.empty:
-                existing_dates = {
-                    _to_date(d)
-                    for d in edf["date"]
-                }
+                existing_dates = {_to_date(d) for d in edf["date"]}
         except Exception:
             pass
         # PyIceberg fallback. Also exclude NaN-close
@@ -1601,29 +1605,21 @@ class StockRepository:
                 ).to_arrow()
                 if len(existing_arrow) > 0:
                     existing_dates = {
-                        _to_date(d)
-                        for d in existing_arrow[
-                            "date"
-                        ].to_pylist()
+                        _to_date(d) for d in existing_arrow["date"].to_pylist()
                     }
             except Exception as exc:
                 _logger.warning(
-                    "OHLCV dedup scan failed for "
-                    "%s (%s); full scan.",
+                    "OHLCV dedup scan failed for " "%s (%s); full scan.",
                     ticker,
                     exc,
                 )
                 full_df = tbl.scan().to_pandas()
                 if not full_df.empty:
-                    mask = (
-                        (full_df["ticker"] == ticker)
-                        & full_df["close"].notna()
-                    )
+                    mask = (full_df["ticker"] == ticker) & full_df[
+                        "close"
+                    ].notna()
                     existing_dates = {
-                        _to_date(d)
-                        for d in full_df.loc[
-                            mask, "date"
-                        ]
+                        _to_date(d) for d in full_df.loc[mask, "date"]
                     }
 
         # Fix #3: vectorised new-row selection using boolean mask
@@ -1686,14 +1682,12 @@ class StockRepository:
         # transition.  No-op when there are no NaN rows
         # to clean up (common case).
         try:
-            from pyiceberg.expressions import (
-                And as _And,
-                EqualTo as _EqualTo,
-                In as _In,
-                IsNaN as _IsNaN,
-                IsNull as _IsNull,
-                Or as _Or,
-            )
+            from pyiceberg.expressions import And as _And
+            from pyiceberg.expressions import EqualTo as _EqualTo
+            from pyiceberg.expressions import In as _In
+            from pyiceberg.expressions import IsNaN as _IsNaN
+            from pyiceberg.expressions import IsNull as _IsNull
+            from pyiceberg.expressions import Or as _Or
 
             self._delete_rows(
                 _OHLCV,
@@ -1708,8 +1702,8 @@ class StockRepository:
             )
         except Exception:
             _logger.debug(
-                "NaN pre-delete failed for %s "
-                "(non-fatal)", ticker,
+                "NaN pre-delete failed for %s " "(non-fatal)",
+                ticker,
                 exc_info=True,
             )
 
@@ -1876,6 +1870,420 @@ class StockRepository:
         return updated
 
     # ------------------------------------------------------------------
+    # NSE bhavcopy delivery (Sprint 9 Advanced Analytics)
+    # ------------------------------------------------------------------
+
+    def insert_nse_delivery(
+        self,
+        df: pd.DataFrame,
+        d: date,
+    ) -> int:
+        """Insert NSE bhavcopy delivery rows for date *d*.
+
+        Idempotent for the trading day: scoped pre-delete
+        based on the **actual** date(s) present in *df*
+        before bulk append.  This handles the holiday-
+        redirect case where NSE serves the prior trading
+        day's data when *d* itself is a market holiday
+        (e.g. requesting 2026-05-01 — Labour Day —
+        returns 2026-04-30 rows).  Single Iceberg commit
+        per call (§4.1 #2 — no per-ticker hot loop).
+
+        Args:
+            df: DataFrame from
+                :meth:`NseSource.fetch_bhavcopy` with
+                columns ``ticker``, ``date``,
+                ``deliverable_qty``, ``delivery_pct``,
+                ``traded_qty``, ``traded_value``.
+            d: Trading date the caller requested
+                (logged; the scoped delete uses the
+                dates inside *df*).
+
+        Returns:
+            Number of rows written.  ``0`` if *df* is
+            empty.
+        """
+        if df.empty:
+            return 0
+
+        from pyiceberg.expressions import In
+
+        now = _now_utc()
+        n = len(df)
+        row_dates = [_to_date(v) for v in df["date"]]
+        unique_dates = sorted({dt for dt in row_dates if dt is not None})
+
+        arrow_tbl = pa.table(
+            {
+                "ticker": pa.array(
+                    [str(t) for t in df["ticker"]],
+                    pa.string(),
+                ),
+                "date": pa.array(row_dates, pa.date32()),
+                "deliverable_qty": pa.array(
+                    [_safe_int(v) for v in df["deliverable_qty"]],
+                    pa.int64(),
+                ),
+                "delivery_pct": pa.array(
+                    [_safe_float(v) for v in df["delivery_pct"]],
+                    pa.float64(),
+                ),
+                "traded_qty": pa.array(
+                    [_safe_int(v) for v in df["traded_qty"]],
+                    pa.int64(),
+                ),
+                "traded_value": pa.array(
+                    [_safe_float(v) for v in df["traded_value"]],
+                    pa.float64(),
+                ),
+                "ingested_at": pa.array(
+                    [now] * n,
+                    pa.timestamp("us"),
+                ),
+            }
+        )
+        # Scoped pre-delete keyed off the dates actually
+        # present in *df*, not *d* — handles the holiday-
+        # redirect case where NSE returns the prior trading
+        # day for a non-trading *d* (e.g. Labour Day).
+        if unique_dates:
+            self._delete_rows(
+                _NSE_DELIVERY,
+                In("date", unique_dates),
+            )
+        self._append_rows(_NSE_DELIVERY, arrow_tbl)
+        if unique_dates and unique_dates != [d]:
+            _logger.info(
+                "Inserted %d nse_delivery rows for "
+                "requested %s — actual data dates %s",
+                n,
+                d,
+                unique_dates,
+            )
+        else:
+            _logger.info(
+                "Inserted %d nse_delivery rows for %s",
+                n,
+                d,
+            )
+        return n
+
+    # ------------------------------------------------------------------
+    # Corporate events (Sprint 9 Advanced Analytics)
+    # ------------------------------------------------------------------
+
+    def insert_corporate_events(
+        self,
+        df: pd.DataFrame,
+        ingest_d: date,
+    ) -> int:
+        """Append corporate-event rows.
+
+        Pre-deletes via ``In("event_date", unique_dates)``
+        for the dates covered by *df* so a re-run during
+        the same day cleanly replaces prior partial
+        fetches.
+
+        Args:
+            df: DataFrame with columns ``ticker``,
+                ``event_date``, ``event_type``,
+                ``event_label``.
+            ingest_d: Calendar date of this ingest run
+                (logged only).
+
+        Returns:
+            Number of rows written.
+        """
+        if df.empty:
+            return 0
+
+        from pyiceberg.expressions import In
+
+        now = _now_utc()
+        n = len(df)
+        event_dates = sorted({_to_date(v) for v in df["event_date"] if v})
+        event_dates = [d for d in event_dates if d is not None]
+
+        arrow_tbl = pa.table(
+            {
+                "ticker": pa.array(
+                    [str(t) for t in df["ticker"]],
+                    pa.string(),
+                ),
+                "event_date": pa.array(
+                    [_to_date(v) for v in df["event_date"]],
+                    pa.date32(),
+                ),
+                "event_type": pa.array(
+                    [str(t) for t in df["event_type"]],
+                    pa.string(),
+                ),
+                "event_label": pa.array(
+                    [
+                        (str(v)[:200] if v is not None else None)
+                        for v in df["event_label"]
+                    ],
+                    pa.string(),
+                ),
+                "ingested_at": pa.array(
+                    [now] * n,
+                    pa.timestamp("us"),
+                ),
+            }
+        )
+        if event_dates:
+            self._delete_rows(
+                _CORPORATE_EVENTS,
+                In("event_date", event_dates),
+            )
+        self._append_rows(_CORPORATE_EVENTS, arrow_tbl)
+        _logger.info(
+            "Inserted %d corporate_events rows "
+            "(ingest_date=%s, covers %d event dates)",
+            n,
+            ingest_d,
+            len(event_dates),
+        )
+        return n
+
+    # ------------------------------------------------------------------
+    # Promoter holdings (Sprint 9 Advanced Analytics)
+    # ------------------------------------------------------------------
+
+    def insert_promoter_holdings(
+        self,
+        df: pd.DataFrame,
+        quarter_end_d: date,
+    ) -> int:
+        """Append promoter-holding rows.
+
+        Idempotent for the filing quarter via scoped
+        pre-delete on ``quarter_end``.
+
+        Args:
+            df: DataFrame from
+                :class:`BseShareholdingSource` with
+                columns ``ticker``, ``quarter_end``,
+                ``prom_hld_pct``, ``pledged_pct``,
+                ``chng_qoq``, ``source``.
+            quarter_end_d: Latest quarter-end date.
+
+        Returns:
+            Number of rows written.
+        """
+        if df.empty:
+            return 0
+
+        from pyiceberg.expressions import In
+
+        now = _now_utc()
+        n = len(df)
+        unique_qtrs = sorted({_to_date(v) for v in df["quarter_end"] if v})
+        unique_qtrs = [d for d in unique_qtrs if d is not None]
+
+        arrow_tbl = pa.table(
+            {
+                "ticker": pa.array(
+                    [str(t) for t in df["ticker"]],
+                    pa.string(),
+                ),
+                "quarter_end": pa.array(
+                    [_to_date(v) for v in df["quarter_end"]],
+                    pa.date32(),
+                ),
+                "prom_hld_pct": pa.array(
+                    [_safe_float(v) for v in df["prom_hld_pct"]],
+                    pa.float64(),
+                ),
+                "pledged_pct": pa.array(
+                    [_safe_float(v) for v in df["pledged_pct"]],
+                    pa.float64(),
+                ),
+                "chng_qoq": pa.array(
+                    [_safe_float(v) for v in df["chng_qoq"]],
+                    pa.float64(),
+                ),
+                "source": pa.array(
+                    [
+                        (str(v) if v is not None else None)
+                        for v in df["source"]
+                    ],
+                    pa.string(),
+                ),
+                "ingested_at": pa.array(
+                    [now] * n,
+                    pa.timestamp("us"),
+                ),
+            }
+        )
+        if unique_qtrs:
+            self._delete_rows(
+                _PROMOTER_HOLDINGS,
+                In("quarter_end", unique_qtrs),
+            )
+        self._append_rows(
+            _PROMOTER_HOLDINGS,
+            arrow_tbl,
+        )
+        _logger.info(
+            "Inserted %d promoter_holdings rows "
+            "(quarter_end_d=%s, covers %d quarters)",
+            n,
+            quarter_end_d,
+            len(unique_qtrs),
+        )
+        return n
+
+    def get_bse_scrip_code_map(self) -> dict[str, str]:
+        """Return ``{ticker: bse_scrip_code}``.
+
+        Reads PG ``stock_master`` and returns a dict
+        keyed by canonical ticker (``.NS`` form) whose
+        value is the BSE numeric scrip code.  Tickers
+        without a populated ``bse_code`` column are
+        excluded.  Used by
+        :func:`execute_promoter_holdings_quarterly`.
+        """
+
+        async def _query() -> dict[str, str]:
+            from sqlalchemy import select
+
+            from backend.db.engine import (
+                get_session_factory,
+            )
+            from backend.db.models.stock_master import (
+                StockMaster,
+            )
+
+            factory = get_session_factory()
+            async with factory() as session:
+                result = await session.execute(
+                    select(StockMaster),
+                )
+                rows = list(result.scalars().all())
+
+            mapping: dict[str, str] = {}
+            for r in rows:
+                bse_code = getattr(r, "bse_code", None)
+                if not bse_code:
+                    continue
+                ticker = getattr(r, "yf_ticker", None) or getattr(
+                    r, "symbol", ""
+                )
+                if not ticker:
+                    continue
+                if not ticker.endswith((".NS", ".BO")):
+                    ticker = f"{ticker}.NS"
+                mapping[ticker] = str(bse_code)
+            return mapping
+
+        try:
+            return _run_pg(_query)
+        except Exception:
+            _logger.warning(
+                "get_bse_scrip_code_map failed; " "returning empty mapping.",
+                exc_info=True,
+            )
+            return {}
+
+    # ------------------------------------------------------------------
+    # Fundamentals snapshot (Sprint 9 Advanced Analytics)
+    # ------------------------------------------------------------------
+
+    def insert_fundamentals_snapshot(
+        self,
+        df: pd.DataFrame,
+        snapshot_d: date,
+    ) -> int:
+        """Insert a daily fundamentals-snapshot batch.
+
+        Idempotent: scoped pre-delete on ``snapshot_date``
+        before bulk append.  The aggregator emits one row
+        per ticker; the table holds the latest snapshot
+        plus a short history for trending (retention is
+        managed by the daily job — old snapshots roll off
+        beyond 30 days).  Single Iceberg commit per call.
+
+        Args:
+            df: DataFrame from
+                :func:`backend.pipeline.jobs
+                .fundamentals_snapshot._build_snapshot`
+                with columns matching the
+                ``stocks.fundamentals_snapshot`` schema.
+            snapshot_d: Calendar date for this snapshot.
+
+        Returns:
+            Number of rows written.  ``0`` if *df* is
+            empty.
+        """
+        if df.empty:
+            return 0
+
+        from pyiceberg.expressions import EqualTo
+
+        now = _now_utc()
+        n = len(df)
+        arrow_tbl = pa.table(
+            {
+                "ticker": pa.array(
+                    [str(t) for t in df["ticker"]],
+                    pa.string(),
+                ),
+                "snapshot_date": pa.array(
+                    [_to_date(v) for v in df["snapshot_date"]],
+                    pa.date32(),
+                ),
+                "sales_3y_cagr": pa.array(
+                    [_safe_float(v) for v in df["sales_3y_cagr"]],
+                    pa.float64(),
+                ),
+                "prft_3y_cagr": pa.array(
+                    [_safe_float(v) for v in df["prft_3y_cagr"]],
+                    pa.float64(),
+                ),
+                "sales_5y_cagr": pa.array(
+                    [_safe_float(v) for v in df["sales_5y_cagr"]],
+                    pa.float64(),
+                ),
+                "prft_5y_cagr": pa.array(
+                    [_safe_float(v) for v in df["prft_5y_cagr"]],
+                    pa.float64(),
+                ),
+                "yoy_qtr_prft": pa.array(
+                    [_safe_float(v) for v in df["yoy_qtr_prft"]],
+                    pa.float64(),
+                ),
+                "yoy_qtr_sales": pa.array(
+                    [_safe_float(v) for v in df["yoy_qtr_sales"]],
+                    pa.float64(),
+                ),
+                "debt_to_eq": pa.array(
+                    [_safe_float(v) for v in df["debt_to_eq"]],
+                    pa.float64(),
+                ),
+                "roce": pa.array(
+                    [_safe_float(v) for v in df["roce"]],
+                    pa.float64(),
+                ),
+                "ingested_at": pa.array(
+                    [now] * n,
+                    pa.timestamp("us"),
+                ),
+            }
+        )
+        self._delete_rows(
+            _FUNDAMENTALS_SNAPSHOT,
+            EqualTo("snapshot_date", snapshot_d),
+        )
+        self._append_rows(_FUNDAMENTALS_SNAPSHOT, arrow_tbl)
+        _logger.info(
+            "Inserted %d fundamentals_snapshot rows for %s",
+            n,
+            snapshot_d,
+        )
+        return n
+
+    # ------------------------------------------------------------------
     # Dividends
     # ------------------------------------------------------------------
 
@@ -1912,15 +2320,11 @@ class StockRepository:
 
             edf = query_iceberg_df(
                 _DIVIDENDS,
-                "SELECT ex_date FROM dividends"
-                " WHERE ticker = ?",
+                "SELECT ex_date FROM dividends" " WHERE ticker = ?",
                 [ticker],
             )
             if not edf.empty:
-                existing_dates = {
-                    _to_date(d)
-                    for d in edf["ex_date"]
-                }
+                existing_dates = {_to_date(d) for d in edf["ex_date"]}
         except Exception:
             pass
         # PyIceberg fallback
@@ -1932,34 +2336,27 @@ class StockRepository:
 
                 existing_arrow = tbl.scan(
                     row_filter=EqualTo(
-                        "ticker", ticker,
+                        "ticker",
+                        ticker,
                     ),
                     selected_fields=("ex_date",),
                 ).to_arrow()
                 if len(existing_arrow) > 0:
                     existing_dates = {
                         _to_date(d)
-                        for d in existing_arrow[
-                            "ex_date"
-                        ].to_pylist()
+                        for d in existing_arrow["ex_date"].to_pylist()
                     }
             except Exception as exc:
                 _logger.warning(
-                    "Dividends dedup scan failed "
-                    "for %s (%s); full scan.",
+                    "Dividends dedup scan failed " "for %s (%s); full scan.",
                     ticker,
                     exc,
                 )
                 full_df = tbl.scan().to_pandas()
                 if not full_df.empty:
-                    mask = (
-                        full_df["ticker"] == ticker
-                    )
+                    mask = full_df["ticker"] == ticker
                     existing_dates = {
-                        _to_date(d)
-                        for d in full_df.loc[
-                            mask, "ex_date"
-                        ]
+                        _to_date(d) for d in full_df.loc[mask, "ex_date"]
                     }
 
         now = _now_utc()
@@ -2250,8 +2647,7 @@ class StockRepository:
             )
         except Exception:
             _logger.debug(
-                "Delete before upsert failed for "
-                "analysis_summary/%s",
+                "Delete before upsert failed for " "analysis_summary/%s",
                 ticker,
                 exc_info=True,
             )
@@ -2279,9 +2675,7 @@ class StockRepository:
         if df.empty:
             return None
         sort_col = (
-            "computed_at"
-            if "computed_at" in df.columns
-            else "analysis_date"
+            "computed_at" if "computed_at" in df.columns else "analysis_date"
         )
         return (
             df.sort_values(
@@ -2464,14 +2858,15 @@ class StockRepository:
         )
         if df.empty:
             return None
-        sort_col = (
-            "computed_at"
-            if "computed_at" in df.columns
-            else "run_date"
+        sort_col = "computed_at" if "computed_at" in df.columns else "run_date"
+        return (
+            df.sort_values(
+                sort_col,
+                ascending=False,
+            )
+            .iloc[0]
+            .to_dict()
         )
-        return df.sort_values(
-            sort_col, ascending=False,
-        ).iloc[0].to_dict()
 
     def get_all_latest_forecast_runs(
         self, horizon_months: int
@@ -2679,9 +3074,7 @@ class StockRepository:
                     "confidence_score": _safe_float(
                         rd.get("confidence_score"),
                     ),
-                    "confidence_components": rd.get(
-                        "confidence_components"
-                    ),
+                    "confidence_components": rd.get("confidence_components"),
                 }
             )
         tbl = self._load_table(_FORECAST_RUNS)
@@ -2759,13 +3152,13 @@ class StockRepository:
             schema = tbl.schema().as_arrow()
             df = pd.DataFrame(all_rows)
             arrow = pa.Table.from_pandas(
-                df, schema=schema,
+                df,
+                schema=schema,
             )
             self._append_rows(_FORECASTS, arrow)
 
         _logger.info(
-            "forecast_series batch: %d tickers, "
-            "%d rows",
+            "forecast_series batch: %d tickers, " "%d rows",
             len(tickers_in_batch),
             len(all_rows),
         )
@@ -3132,17 +3525,11 @@ class StockRepository:
                     pa.int64(),
                 ),
                 "sector": pa.array(
-                    [
-                        safe_str(s.get("sector"))
-                        for s in scores
-                    ],
+                    [safe_str(s.get("sector")) for s in scores],
                     pa.string(),
                 ),
                 "industry": pa.array(
-                    [
-                        safe_str(s.get("industry"))
-                        for s in scores
-                    ],
+                    [safe_str(s.get("industry")) for s in scores],
                     pa.string(),
                 ),
                 "company_name": pa.array(
@@ -3158,9 +3545,7 @@ class StockRepository:
         # Delete previous scores for same tickers
         # (scoped, not whole-date) so India and US
         # pipelines don't overwrite each other.
-        tickers_in_batch = {
-            s["ticker"] for s in scores
-        }
+        tickers_in_batch = {s["ticker"] for s in scores}
         if tickers_in_batch:
             from pyiceberg.expressions import (
                 In,
@@ -3217,16 +3602,19 @@ class StockRepository:
         the entire table.
         """
         df = self._scan_tickers(
-            _PIOTROSKI_SCORES, tickers,
+            _PIOTROSKI_SCORES,
+            tickers,
         )
         if df.empty:
             return {}
         if "score_date" in df.columns:
             df = df.sort_values(
-                "score_date", ascending=False,
+                "score_date",
+                ascending=False,
             )
             df = df.drop_duplicates(
-                subset=["ticker"], keep="first",
+                subset=["ticker"],
+                keep="first",
             )
         result: dict[str, dict] = {}
         for row in df.to_dict(orient="records"):
@@ -3244,25 +3632,22 @@ class StockRepository:
         Single batch scan instead of N individual reads.
         """
         df = self._scan_tickers(
-            _QUARTERLY_RESULTS, tickers,
+            _QUARTERLY_RESULTS,
+            tickers,
         )
         if df.empty:
             return {}
         # Sort descending by quarter_end, keep top 2
         sort_col = (
-            "quarter_end"
-            if "quarter_end" in df.columns
-            else df.columns[1]
+            "quarter_end" if "quarter_end" in df.columns else df.columns[1]
         )
         df = df.sort_values(
-            [sort_col], ascending=False,
+            [sort_col],
+            ascending=False,
         )
         result: dict[str, list[dict]] = {}
         for t, grp in df.groupby("ticker"):
-            rows = (
-                grp.head(2)
-                .to_dict(orient="records")
-            )
+            rows = grp.head(2).to_dict(orient="records")
             if rows:
                 result[str(t)] = rows
         return result
@@ -3552,10 +3937,7 @@ class StockRepository:
                 type=pa.string(),
             ),
             "key_source": pa.array(
-                [
-                    e.get("key_source", "platform")
-                    for e in events
-                ],
+                [e.get("key_source", "platform") for e in events],
                 type=pa.string(),
             ),
         }
@@ -3703,9 +4085,7 @@ class StockRepository:
             # the truly latest run when multiple runs
             # share the same run_date.
             sort_col = (
-                "computed_at"
-                if "computed_at" in df.columns
-                else "run_date"
+                "computed_at" if "computed_at" in df.columns else "run_date"
             )
             idx = df.groupby("ticker")[sort_col].idxmax()
             return df.loc[idx].reset_index(drop=True)
@@ -3779,8 +4159,7 @@ class StockRepository:
         }
         try:
             cutoff_date = (
-                datetime.now(tz=timezone.utc)
-                - timedelta(days=days)
+                datetime.now(tz=timezone.utc) - timedelta(days=days)
             ).date()
             df = pd.DataFrame()
             # DuckDB fast path
@@ -3789,10 +4168,7 @@ class StockRepository:
                     query_iceberg_df,
                 )
 
-                sql = (
-                    "SELECT * FROM llm_usage"
-                    " WHERE request_date >= ?"
-                )
+                sql = "SELECT * FROM llm_usage" " WHERE request_date >= ?"
                 params: list = [cutoff_date]
                 if user_id is not None:
                     sql += " AND user_id = ?"
@@ -3812,11 +4188,9 @@ class StockRepository:
                         GreaterThanOrEqual,
                     )
 
-                    row_filter: Any = (
-                        GreaterThanOrEqual(
-                            "request_date",
-                            cutoff_date,
-                        )
+                    row_filter: Any = GreaterThanOrEqual(
+                        "request_date",
+                        cutoff_date,
                     )
                     if user_id is not None:
                         from pyiceberg.expressions import (
@@ -3826,15 +4200,14 @@ class StockRepository:
                         row_filter = And(
                             row_filter,
                             EqualTo(
-                                "user_id", user_id,
+                                "user_id",
+                                user_id,
                             ),
                         )
                     tbl = self._load_table(
                         self._LLM_USAGE,
                     )
-                    if self._LLM_USAGE in (
-                        self._dirty_tables
-                    ):
+                    if self._LLM_USAGE in (self._dirty_tables):
                         tbl.refresh()
                         self._dirty_tables.discard(
                             self._LLM_USAGE,
@@ -3846,13 +4219,8 @@ class StockRepository:
                     df = self._table_to_df(
                         self._LLM_USAGE,
                     )
-                    if (
-                        not df.empty
-                        and user_id is not None
-                    ):
-                        df = df[
-                            df["user_id"] == user_id
-                        ]
+                    if not df.empty and user_id is not None:
+                        df = df[df["user_id"] == user_id]
             if df.empty:
                 return empty
 
@@ -3882,9 +4250,7 @@ class StockRepository:
             # otherwise surface as a row on the usage table.
             req_df = df
             if "event_type" in df.columns:
-                req_df = df[
-                    df["event_type"] == "request"
-                ]
+                req_df = df[df["event_type"] == "request"]
             if "model" in req_df.columns:
                 for model, grp in req_df.groupby("model"):
                     prov = ""
@@ -3895,9 +4261,7 @@ class StockRepository:
                             else ""
                         )
                     last_used = None
-                    if ts_col and not grp[
-                        ts_col
-                    ].dropna().empty:
+                    if ts_col and not grp[ts_col].dropna().empty:
                         # Emit ISO 8601 UTC with the ``Z``
                         # suffix so the frontend's
                         # ``new Date()`` parses it as UTC
@@ -3913,9 +4277,7 @@ class StockRepository:
                             )
                         except (TypeError, AttributeError):
                             last_used = (
-                                f"{_ts}Z"
-                                if "Z" not in str(_ts)
-                                else str(_ts)
+                                f"{_ts}Z" if "Z" not in str(_ts) else str(_ts)
                             )
                     # Split requests by key source. Legacy
                     # rows (no column or null) count as
@@ -3943,14 +4305,16 @@ class StockRepository:
                             grp["estimated_cost_usd"].sum(skipna=True)
                         ),
                         "provider": str(prov),
-                        "input_tokens": int(
-                            grp["prompt_tokens"].sum(skipna=True)
-                        ) if has_input else 0,
-                        "output_tokens": int(
-                            grp[
-                                "completion_tokens"
-                            ].sum(skipna=True)
-                        ) if has_output else 0,
+                        "input_tokens": (
+                            int(grp["prompt_tokens"].sum(skipna=True))
+                            if has_input
+                            else 0
+                        ),
+                        "output_tokens": (
+                            int(grp["completion_tokens"].sum(skipna=True))
+                            if has_output
+                            else 0
+                        ),
                         "last_used_at": last_used,
                     }
 
@@ -4030,8 +4394,7 @@ class StockRepository:
             )
         except Exception as exc:
             _logger.debug(
-                "DuckDB portfolio_holdings "
-                "failed: %s",
+                "DuckDB portfolio_holdings " "failed: %s",
                 exc,
             )
         # PyIceberg fallback
@@ -4046,7 +4409,8 @@ class StockRepository:
                 df = tbl.scan(
                     row_filter=And(
                         EqualTo(
-                            "user_id", user_id,
+                            "user_id",
+                            user_id,
                         ),
                         EqualTo("side", "BUY"),
                     ),
@@ -4054,10 +4418,7 @@ class StockRepository:
             except Exception:
                 df = self._table_to_df(_PORTFOLIO)
                 if not df.empty:
-                    df = df[
-                        (df["user_id"] == user_id)
-                        & (df["side"] == "BUY")
-                    ]
+                    df = df[(df["user_id"] == user_id) & (df["side"] == "BUY")]
 
         if df.empty:
             return pd.DataFrame(
@@ -4100,17 +4461,14 @@ class StockRepository:
 
             df = query_iceberg_df(
                 _PORTFOLIO,
-                "SELECT * FROM"
-                " portfolio_transactions"
-                " WHERE user_id = ?",
+                "SELECT * FROM" " portfolio_transactions" " WHERE user_id = ?",
                 [user_id],
             )
             if not df.empty:
                 return df
         except Exception as exc:
             _logger.debug(
-                "DuckDB portfolio_transactions "
-                "failed: %s",
+                "DuckDB portfolio_transactions " "failed: %s",
                 exc,
             )
         # PyIceberg fallback
@@ -4130,9 +4488,7 @@ class StockRepository:
             df = self._table_to_df(_PORTFOLIO)
             if df.empty:
                 return df
-            return df[
-                df["user_id"] == user_id
-            ].copy()
+            return df[df["user_id"] == user_id].copy()
 
     def add_portfolio_transaction(
         self,
@@ -4538,8 +4894,7 @@ class StockRepository:
 
                 df = query_iceberg_df(
                     _CHAT_AUDIT_LOG,
-                    "SELECT * FROM chat_audit_log"
-                    " WHERE user_id = ?",
+                    "SELECT * FROM chat_audit_log" " WHERE user_id = ?",
                     [user_id],
                 )
             except Exception:
@@ -4553,9 +4908,7 @@ class StockRepository:
                 tbl = self._load_table(
                     _CHAT_AUDIT_LOG,
                 )
-                if _CHAT_AUDIT_LOG in (
-                    self._dirty_tables
-                ):
+                if _CHAT_AUDIT_LOG in (self._dirty_tables):
                     tbl.refresh()
                     self._dirty_tables.discard(
                         _CHAT_AUDIT_LOG,
@@ -4568,8 +4921,7 @@ class StockRepository:
                 ).to_pandas()
         except Exception as exc:
             _logger.warning(
-                "list_chat_sessions scan "
-                "failed: %s",
+                "list_chat_sessions scan " "failed: %s",
                 exc,
             )
             df = self._table_to_df(
@@ -4678,9 +5030,7 @@ class StockRepository:
                 tbl = self._load_table(
                     _CHAT_AUDIT_LOG,
                 )
-                if _CHAT_AUDIT_LOG in (
-                    self._dirty_tables
-                ):
+                if _CHAT_AUDIT_LOG in (self._dirty_tables):
                     tbl.refresh()
                     self._dirty_tables.discard(
                         _CHAT_AUDIT_LOG,
@@ -4688,7 +5038,8 @@ class StockRepository:
                 df = tbl.scan(
                     row_filter=And(
                         EqualTo(
-                            "user_id", user_id,
+                            "user_id",
+                            user_id,
                         ),
                         EqualTo(
                             "session_id",
@@ -4698,8 +5049,7 @@ class StockRepository:
                 ).to_pandas()
         except Exception as exc:
             _logger.warning(
-                "get_chat_session_detail scan "
-                "failed: %s",
+                "get_chat_session_detail scan " "failed: %s",
                 exc,
             )
             df = self._table_to_df(
@@ -5027,8 +5377,7 @@ class StockRepository:
             )
         except Exception:
             _logger.debug(
-                "Delete before upsert failed for "
-                "sentiment_scores/%s",
+                "Delete before upsert failed for " "sentiment_scores/%s",
                 ticker,
                 exc_info=True,
             )
@@ -5077,9 +5426,7 @@ class StockRepository:
         Returns:
             pandas DataFrame with registry rows.
         """
-        from backend.db.pg_stocks import (
-            get_registry as pg_get,
-        )
+        from backend.db.pg_stocks import get_registry as pg_get
 
         async def _call():
             async with _pg_session() as s:
@@ -5100,9 +5447,7 @@ class StockRepository:
             ``ticker``, ``last_fetch_date``, ``total_rows``,
             ``date_range``, ``market``, ``file_path``.
         """
-        from backend.db.pg_stocks import (
-            get_registry as pg_get,
-        )
+        from backend.db.pg_stocks import get_registry as pg_get
 
         async def _call():
             async with _pg_session() as s:
@@ -5158,9 +5503,7 @@ class StockRepository:
         Returns:
             Registry entry dict or ``None``.
         """
-        from backend.db.pg_stocks import (
-            get_registry as pg_get,
-        )
+        from backend.db.pg_stocks import get_registry as pg_get
 
         async def _call():
             async with _pg_session() as s:
@@ -5223,9 +5566,7 @@ class StockRepository:
             ticker_type: ``"stock"``, ``"index"``,
                 or ``"commodity"``.
         """
-        from backend.db.pg_stocks import (
-            upsert_registry as pg_upsert,
-        )
+        from backend.db.pg_stocks import upsert_registry as pg_upsert
 
         data = {
             "ticker": ticker,
@@ -5251,9 +5592,7 @@ class StockRepository:
 
     def get_scheduled_jobs(self) -> list[dict]:
         """Return all scheduled job definitions."""
-        from backend.db.pg_stocks import (
-            get_scheduled_jobs as pg_jobs,
-        )
+        from backend.db.pg_stocks import get_scheduled_jobs as pg_jobs
 
         async def _call():
             async with _pg_session() as s:
@@ -5273,9 +5612,7 @@ class StockRepository:
         job: dict,
     ) -> None:
         """Insert or update a scheduled job."""
-        from backend.db.pg_stocks import (
-            upsert_scheduled_job as pg_upsert,
-        )
+        from backend.db.pg_stocks import upsert_scheduled_job as pg_upsert
 
         async def _call():
             async with _pg_session() as s:
@@ -5294,9 +5631,7 @@ class StockRepository:
         job_id: str,
     ) -> None:
         """Delete a scheduled job by ID."""
-        from backend.db.pg_stocks import (
-            delete_scheduled_job as pg_del,
-        )
+        from backend.db.pg_stocks import delete_scheduled_job as pg_del
 
         async def _call():
             async with _pg_session() as s:
@@ -5315,9 +5650,7 @@ class StockRepository:
 
     def get_pipelines(self) -> list[dict]:
         """Return all pipeline definitions + steps."""
-        from backend.db.pg_stocks import (
-            get_pipelines as pg_pipelines,
-        )
+        from backend.db.pg_stocks import get_pipelines as pg_pipelines
 
         async def _call():
             async with _pg_session() as s:
@@ -5337,9 +5670,7 @@ class StockRepository:
         data: dict,
     ) -> None:
         """Insert or update a pipeline + steps."""
-        from backend.db.pg_stocks import (
-            upsert_pipeline as pg_upsert,
-        )
+        from backend.db.pg_stocks import upsert_pipeline as pg_upsert
 
         async def _call():
             async with _pg_session() as s:
@@ -5358,9 +5689,7 @@ class StockRepository:
         pipeline_id: str,
     ) -> None:
         """Delete a pipeline by ID."""
-        from backend.db.pg_stocks import (
-            delete_pipeline as pg_del,
-        )
+        from backend.db.pg_stocks import delete_pipeline as pg_del
 
         async def _call():
             async with _pg_session() as s:
@@ -5382,9 +5711,7 @@ class StockRepository:
         run: dict,
     ) -> None:
         """Insert a single scheduler run record."""
-        from backend.db.pg_stocks import (
-            insert_scheduler_run as pg_insert,
-        )
+        from backend.db.pg_stocks import insert_scheduler_run as pg_insert
 
         async def _call():
             async with _pg_session() as s:
@@ -5404,9 +5731,7 @@ class StockRepository:
         updates: dict,
     ) -> None:
         """Update fields on an existing run."""
-        from backend.db.pg_stocks import (
-            update_scheduler_run_pg as pg_update,
-        )
+        from backend.db.pg_stocks import update_scheduler_run_pg as pg_update
 
         async def _call():
             async with _pg_session() as s:
@@ -5432,9 +5757,7 @@ class StockRepository:
         limit: int | None = None,
     ) -> list[dict]:
         """Return scheduler runs with filters."""
-        from backend.db.pg_stocks import (
-            get_scheduler_runs_pg as pg_get,
-        )
+        from backend.db.pg_stocks import get_scheduler_runs_pg as pg_get
 
         async def _call():
             async with _pg_session() as s:
@@ -5465,9 +5788,7 @@ class StockRepository:
         run_id: str,
     ) -> dict | None:
         """Return a single scheduler run."""
-        from backend.db.pg_stocks import (
-            get_scheduler_run_by_id as pg_get,
-        )
+        from backend.db.pg_stocks import get_scheduler_run_by_id as pg_get
 
         async def _call():
             async with _pg_session() as s:
@@ -5485,9 +5806,7 @@ class StockRepository:
 
     def get_scheduler_run_stats(self) -> dict:
         """Return aggregate stats for dashboard."""
-        from backend.db.pg_stocks import (
-            get_scheduler_run_stats_pg as pg_stats,
-        )
+        from backend.db.pg_stocks import get_scheduler_run_stats_pg as pg_stats
 
         async def _call():
             async with _pg_session() as s:
@@ -5512,14 +5831,13 @@ class StockRepository:
         pipeline_run_id: str,
     ) -> list[dict]:
         """Return all runs for a pipeline_run_id."""
-        from backend.db.pg_stocks import (
-            get_pipeline_run_status_pg as pg_get,
-        )
+        from backend.db.pg_stocks import get_pipeline_run_status_pg as pg_get
 
         async def _call():
             async with _pg_session() as s:
                 return await pg_get(
-                    s, pipeline_run_id,
+                    s,
+                    pipeline_run_id,
                 )
 
         try:
@@ -5536,9 +5854,7 @@ class StockRepository:
         pipeline_id: str,
     ) -> str | None:
         """Get latest pipeline_run_id for a pipeline."""
-        from backend.db.pg_stocks import (
-            get_last_pipeline_run_id_pg as pg_get,
-        )
+        from backend.db.pg_stocks import get_last_pipeline_run_id_pg as pg_get
 
         async def _call():
             async with _pg_session() as s:
@@ -5558,9 +5874,7 @@ class StockRepository:
         job_id: str,
     ) -> dict | None:
         """Return the most recent run for a job."""
-        from backend.db.pg_stocks import (
-            get_last_run_for_job_pg as pg_get,
-        )
+        from backend.db.pg_stocks import get_last_run_for_job_pg as pg_get
 
         async def _call():
             async with _pg_session() as s:

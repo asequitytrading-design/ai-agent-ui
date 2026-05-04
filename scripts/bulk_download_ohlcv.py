@@ -138,6 +138,7 @@ async def _write_to_iceberg(
     """
     from backend.db.engine import get_session_factory
     from backend.db.pg_stocks import upsert_registry
+    from backend.tools._stock_registry import _detect_ticker_type
     from backend.tools._stock_shared import _require_repo
 
     repo = _require_repo()
@@ -175,6 +176,7 @@ async def _write_to_iceberg(
                     "date_range_start": df_min,
                     "date_range_end": df_max,
                     "market": "india",
+                    "ticker_type": _detect_ticker_type(store_as),
                 })
 
             written += 1
