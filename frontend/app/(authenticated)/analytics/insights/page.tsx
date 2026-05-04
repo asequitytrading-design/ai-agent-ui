@@ -1994,9 +1994,394 @@ interface ScreenField {
   category: string;
 }
 
+// ScreenQL Tables sub-mode — query a single Iceberg table
+// directly. Shares the DSL grammar but with a per-table
+// column whitelist (TABLE_CATALOG on the backend). Hard
+// LIMIT cap (1000) and read-only — see screen_parser.py.
+interface TableColumnDef {
+  name: string;
+  type: string;
+}
+interface TableDef {
+  name: string;
+  iceberg: string;
+  columns: TableColumnDef[];
+}
+
+function TableQueryMode() {
+  const [tables, setTables] = useState<TableDef[]>([]);
+  const [selected, setSelected] = useState<string>("");
+  const [whereText, setWhereText] = useState<string>("");
+  const [sortBy, setSortBy] = useState<string>("");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">(
+    "desc",
+  );
+  const [limit, setLimit] = useState<number>(100);
+  const [results, setResults] = useState<{
+    rows: Record<string, unknown>[];
+    total: number;
+    columns: string[];
+    table: string;
+  } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string>("");
+
+  // Fetch table catalog once.
+  useEffect(() => {
+    (async () => {
+      try {
+        const { apiFetch } = await import(
+          "@/lib/apiFetch"
+        );
+        const API_URL = `${
+          process.env.NEXT_PUBLIC_BACKEND_URL ??
+          "http://localhost:8181"
+        }/v1`;
+        const res = await apiFetch(
+          `${API_URL}/insights/screen/tables`,
+        );
+        if (!res.ok) return;
+        const d = await res.json();
+        const ts = (d.tables ?? []) as TableDef[];
+        setTables(ts);
+        if (ts.length > 0 && !selected) {
+          setSelected(ts[0].name);
+        }
+      } catch {
+        /* swallow — UI shows empty dropdown */
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const currentTable = useMemo(
+    () => tables.find((t) => t.name === selected),
+    [tables, selected],
+  );
+
+  const runTableQuery = useCallback(async () => {
+    if (!selected) return;
+    setLoading(true);
+    setError("");
+    try {
+      const { apiFetch } = await import(
+        "@/lib/apiFetch"
+      );
+      const API_URL = `${
+        process.env.NEXT_PUBLIC_BACKEND_URL ??
+        "http://localhost:8181"
+      }/v1`;
+      const res = await apiFetch(
+        `${API_URL}/insights/screen/table`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            table: selected,
+            where: whereText,
+            sort_by: sortBy || null,
+            sort_dir: sortDir,
+            limit,
+            offset: 0,
+          }),
+        },
+      );
+      if (!res.ok) {
+        const err = await res.json();
+        setError(err.detail ?? "Query failed");
+        setResults(null);
+      } else {
+        setResults(await res.json());
+      }
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "Query failed",
+      );
+      setResults(null);
+    }
+    setLoading(false);
+  }, [selected, whereText, sortBy, sortDir, limit]);
+
+  const dynamicCols = useMemo<
+    Column<Record<string, unknown>>[]
+  >(() => {
+    if (!results || !currentTable) return [];
+    return currentTable.columns.map((c) => ({
+      key: c.name,
+      label: c.name,
+      numeric: c.type === "number",
+      render: (r: Record<string, unknown>) => {
+        const v = r[c.name];
+        if (v == null) return "—";
+        if (typeof v === "number") {
+          return v.toFixed(c.type === "number" ? 4 : 0);
+        }
+        return String(v);
+      },
+    }));
+  }, [results, currentTable]);
+
+  const csvCols = useMemo(
+    () =>
+      dynamicCols.map((c) => ({
+        key: c.key,
+        header: c.label,
+      })) as CsvColumn<Record<string, unknown>>[],
+    [dynamicCols],
+  );
+
+  return (
+    <div className="space-y-4">
+      <div
+        className="rounded-lg border border-amber-200
+          dark:border-amber-700/50 bg-amber-50/60
+          dark:bg-amber-900/10 px-3 py-2
+          text-xs text-amber-800 dark:text-amber-300"
+      >
+        <strong>Tables mode</strong> — query a single
+        Iceberg table directly. WHERE clause uses the
+        same DSL as Screen mode (e.g.{" "}
+        <code className="font-mono">
+          delivery_pct &gt; 70 AND ticker LIKE
+          &quot;RELIA&quot;
+        </code>
+        ). LIMIT capped at 1000.
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="block">
+          <span
+            className="text-xs font-medium text-gray-600
+              dark:text-gray-400 mb-1 block"
+          >
+            Table
+          </span>
+          <select
+            value={selected}
+            onChange={(e) => setSelected(e.target.value)}
+            data-testid="screenql-table-select"
+            className="w-full rounded-md border
+              border-gray-300 dark:border-gray-600
+              bg-white dark:bg-gray-800 px-2 py-1.5
+              text-sm text-gray-700 dark:text-gray-200"
+          >
+            {tables.map((t) => (
+              <option key={t.name} value={t.name}>
+                {t.iceberg}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="block">
+          <span
+            className="text-xs font-medium text-gray-600
+              dark:text-gray-400 mb-1 block"
+          >
+            Sort by
+          </span>
+          <div className="flex gap-2">
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value)}
+              data-testid="screenql-table-sort-by"
+              className="flex-1 rounded-md border
+                border-gray-300 dark:border-gray-600
+                bg-white dark:bg-gray-800 px-2 py-1.5
+                text-sm text-gray-700 dark:text-gray-200"
+            >
+              <option value="">(default — ticker)</option>
+              {currentTable?.columns.map((c) => (
+                <option key={c.name} value={c.name}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+            <select
+              value={sortDir}
+              onChange={(e) =>
+                setSortDir(
+                  e.target.value as "asc" | "desc",
+                )
+              }
+              data-testid="screenql-table-sort-dir"
+              className="rounded-md border
+                border-gray-300 dark:border-gray-600
+                bg-white dark:bg-gray-800 px-2 py-1.5
+                text-sm text-gray-700 dark:text-gray-200"
+            >
+              <option value="desc">desc</option>
+              <option value="asc">asc</option>
+            </select>
+          </div>
+        </label>
+      </div>
+
+      {currentTable && (
+        <details
+          className="rounded-md border border-gray-200
+            dark:border-gray-700 bg-gray-50
+            dark:bg-gray-800/40 px-3 py-2"
+        >
+          <summary
+            className="cursor-pointer text-xs
+              font-semibold text-gray-700
+              dark:text-gray-300"
+          >
+            Columns ({currentTable.columns.length})
+          </summary>
+          <div
+            className="mt-2 grid grid-cols-2 sm:grid-cols-3
+              gap-x-4 gap-y-1 text-[11px] font-mono
+              text-gray-600 dark:text-gray-400"
+          >
+            {currentTable.columns.map((c) => (
+              <span key={c.name}>
+                {c.name}{" "}
+                <span className="text-gray-400">
+                  ({c.type})
+                </span>
+              </span>
+            ))}
+          </div>
+        </details>
+      )}
+
+      <div className="space-y-2">
+        <label className="block">
+          <span
+            className="text-xs font-medium text-gray-600
+              dark:text-gray-400 mb-1 block"
+          >
+            Where (optional)
+          </span>
+          <textarea
+            value={whereText}
+            onChange={(e) => setWhereText(e.target.value)}
+            onKeyDown={(e) => {
+              if (
+                e.key === "Enter" &&
+                (e.metaKey || e.ctrlKey)
+              ) {
+                e.preventDefault();
+                runTableQuery();
+              }
+            }}
+            placeholder='delivery_pct > 70 AND ticker LIKE "RELIA"'
+            rows={2}
+            data-testid="screenql-table-where"
+            className="w-full rounded-lg border
+              border-gray-300 dark:border-gray-600
+              bg-white dark:bg-gray-800 px-3 py-2
+              text-sm font-mono text-gray-700
+              dark:text-gray-200
+              placeholder:text-gray-400
+              focus:outline-none focus:ring-2
+              focus:ring-indigo-500/40 resize-y"
+          />
+        </label>
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="text-xs text-gray-600 dark:text-gray-400">
+            Limit:{" "}
+            <input
+              type="number"
+              min={1}
+              max={1000}
+              value={limit}
+              onChange={(e) =>
+                setLimit(
+                  Math.max(
+                    1,
+                    Math.min(
+                      1000,
+                      Number(e.target.value) || 100,
+                    ),
+                  ),
+                )
+              }
+              data-testid="screenql-table-limit"
+              className="ml-1 w-20 rounded-md border
+                border-gray-300 dark:border-gray-600
+                bg-white dark:bg-gray-800 px-2 py-0.5
+                text-sm font-mono text-right"
+            />
+          </label>
+          <button
+            onClick={runTableQuery}
+            disabled={loading || !selected}
+            data-testid="screenql-table-run"
+            className="px-4 py-1.5 text-sm font-medium
+              text-white bg-indigo-600 rounded-lg
+              hover:bg-indigo-700 disabled:opacity-50
+              disabled:cursor-not-allowed
+              transition-colors"
+          >
+            {loading ? "Running…" : "Run Table Query"}
+          </button>
+          {results && (
+            <span
+              className="text-xs font-medium
+                text-indigo-600 dark:text-indigo-400"
+            >
+              {results.rows.length} of {results.total} rows
+            </span>
+          )}
+        </div>
+      </div>
+
+      {error && (
+        <div
+          className="rounded-lg border border-red-200
+            dark:border-red-800 bg-red-50
+            dark:bg-red-900/20 px-4 py-2 text-sm
+            text-red-700 dark:text-red-400 flex
+            items-start gap-2"
+          data-testid="screenql-table-error"
+        >
+          <span className="shrink-0 mt-0.5">&#9888;</span>
+          <span>{error}</span>
+          <button
+            onClick={() => setError("")}
+            className="ml-auto shrink-0 text-red-400
+              hover:text-red-600"
+          >
+            &times;
+          </button>
+        </div>
+      )}
+
+      {results && dynamicCols.length > 0 && (
+        <InsightsTable<Record<string, unknown>>
+          columns={dynamicCols}
+          rows={
+            results.rows as Record<
+              string,
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              any
+            >[]
+          }
+          onDownload={(r) =>
+            downloadCsv(
+              r,
+              csvCols,
+              `${results.table}-rows`,
+            )
+          }
+        />
+      )}
+    </div>
+  );
+}
+
 function ScreenQLTab() {
   const searchParams = useSearchParams();
   const router = useRouter();
+  const [mode, setMode] = useState<"screen" | "tables">(
+    searchParams.get("mode") === "tables"
+      ? "tables"
+      : "screen",
+  );
   const [query, setQuery] = useState(
     searchParams.get("q") ?? "",
   );
@@ -2376,6 +2761,49 @@ function ScreenQLTab() {
 
   return (
     <div className="space-y-4">
+      {/* Mode toggle: Screen DSL vs Tables sub-mode */}
+      <div
+        className="inline-flex rounded-lg border
+          border-gray-300 dark:border-gray-600 p-0.5
+          bg-gray-50 dark:bg-gray-800"
+        data-testid="screenql-mode-toggle"
+        role="tablist"
+        aria-label="ScreenQL mode"
+      >
+        {(["screen", "tables"] as const).map((m) => {
+          const active = mode === m;
+          return (
+            <button
+              key={m}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              onClick={() => {
+                setMode(m);
+                router.replace(
+                  `/analytics/insights?tab=screenql${
+                    m === "tables" ? "&mode=tables" : ""
+                  }`,
+                  { scroll: false },
+                );
+              }}
+              data-testid={`screenql-mode-${m}`}
+              className={`px-3 py-1 text-xs font-medium
+                rounded-md transition-colors ${
+                  active
+                    ? "bg-white dark:bg-gray-900 text-indigo-600 dark:text-indigo-400 shadow-sm"
+                    : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                }`}
+            >
+              {m === "screen" ? "Screen" : "Tables"}
+            </button>
+          );
+        })}
+      </div>
+
+      {mode === "tables" && <TableQueryMode />}
+      {mode === "screen" && (
+      <>
       {/* Preset chips */}
       <div
         className="flex flex-wrap gap-2"
@@ -2595,6 +3023,8 @@ function ScreenQLTab() {
           No matching stocks found.
           Try adjusting your conditions.
         </div>
+      )}
+      </>
       )}
     </div>
   );

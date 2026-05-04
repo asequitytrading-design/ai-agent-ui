@@ -221,12 +221,119 @@ FIELD_CATALOG: dict[str, FieldDef] = {
         FieldType.NUMBER,
         "9M Target %", "Forecast",
     ),
+    # --- Bhavcopy Volume (5) — mirrors AA reports.
+    # Computed in `nd` CTE from nse_delivery's
+    # traded_qty over latest 25 trading days, anchored
+    # to MAX(date) FROM nse_delivery (handles weekends/
+    # holidays — see advanced_analytics §5.x).
+    "today_vol": FieldDef(
+        "nd", "today_vol", FieldType.NUMBER,
+        "Today Vol", "Bhavcopy Volume",
+    ),
+    "avg_20d_vol": FieldDef(
+        "nd", "avg_20d_vol", FieldType.NUMBER,
+        "Avg 20d Vol", "Bhavcopy Volume",
+    ),
+    "today_x_vol": FieldDef(
+        "nd", "today_x_vol", FieldType.NUMBER,
+        "Today × Vol (vs 20d)", "Bhavcopy Volume",
+    ),
+    "x_vol_10d": FieldDef(
+        "nd", "x_vol_10d", FieldType.NUMBER,
+        "× Vol (vs 10d)", "Bhavcopy Volume",
+    ),
+    "x_vol_20d": FieldDef(
+        "nd", "x_vol_20d", FieldType.NUMBER,
+        "× Vol (vs 20d)", "Bhavcopy Volume",
+    ),
+    # --- Bhavcopy Delivery (8) — same source.
+    # `today_dv` mirrors AA's naming = today's
+    # deliverable_qty (a count, not a value).
+    "today_dpc": FieldDef(
+        "nd", "today_dpc", FieldType.NUMBER,
+        "Today DPC %", "Bhavcopy Delivery",
+    ),
+    "current_dpc": FieldDef(
+        "nd", "current_dpc", FieldType.NUMBER,
+        "Current DPC %", "Bhavcopy Delivery",
+    ),
+    "avg_10d_dpc": FieldDef(
+        "nd", "avg_10d_dpc", FieldType.NUMBER,
+        "Avg 10d DPC %", "Bhavcopy Delivery",
+    ),
+    "avg_20d_dpc": FieldDef(
+        "nd", "avg_20d_dpc", FieldType.NUMBER,
+        "Avg 20d DPC %", "Bhavcopy Delivery",
+    ),
+    "today_dv": FieldDef(
+        "nd", "today_dv", FieldType.NUMBER,
+        "Today Delivery Qty", "Bhavcopy Delivery",
+    ),
+    "today_x_dv": FieldDef(
+        "nd", "today_x_dv", FieldType.NUMBER,
+        "Today × DV (vs 20d)", "Bhavcopy Delivery",
+    ),
+    "x_dv_10d": FieldDef(
+        "nd", "x_dv_10d", FieldType.NUMBER,
+        "× DV (vs 10d)", "Bhavcopy Delivery",
+    ),
+    "x_dv_20d": FieldDef(
+        "nd", "x_dv_20d", FieldType.NUMBER,
+        "× DV (vs 20d)", "Bhavcopy Delivery",
+    ),
+    # --- Fundamentals Snapshot (5) — daily aggregator
+    # over quarterly_results, table fundamentals_snapshot.
+    "sales_3y_cagr": FieldDef(
+        "fs", "sales_3y_cagr", FieldType.NUMBER,
+        "Sales 3y CAGR", "Fundamentals Snapshot",
+    ),
+    "prft_3y_cagr": FieldDef(
+        "fs", "prft_3y_cagr", FieldType.NUMBER,
+        "Profit 3y CAGR", "Fundamentals Snapshot",
+    ),
+    "roce": FieldDef(
+        "fs", "roce", FieldType.NUMBER,
+        "ROCE", "Fundamentals Snapshot",
+    ),
+    "debt_to_eq": FieldDef(
+        "fs", "debt_to_eq", FieldType.NUMBER,
+        "Debt / Equity", "Fundamentals Snapshot",
+    ),
+    "yoy_qtr_prft": FieldDef(
+        "fs", "yoy_qtr_prft", FieldType.NUMBER,
+        "YoY Qtr Profit Growth",
+        "Fundamentals Snapshot",
+    ),
+    # --- Promoter (3) — latest-quarter per ticker
+    # from BSE shareholding pattern.
+    "prom_hld_pct": FieldDef(
+        "ph", "prom_hld_pct", FieldType.NUMBER,
+        "Promoter Holding %", "Promoter",
+    ),
+    "pledged_pct": FieldDef(
+        "ph", "pledged_pct", FieldType.NUMBER,
+        "Pledged %", "Promoter",
+    ),
+    "chng_qoq": FieldDef(
+        "ph", "chng_qoq", FieldType.NUMBER,
+        "Δ Promoter % QoQ", "Promoter",
+    ),
+    # --- Events (2) — latest event per ticker from
+    # NSE corporate-actions feed.
+    "latest_event_type": FieldDef(
+        "ce", "event_type", FieldType.TEXT,
+        "Latest Event Type", "Events",
+    ),
+    "latest_event_date": FieldDef(
+        "ce", "event_date_str", FieldType.TEXT,
+        "Latest Event Date", "Events",
+    ),
 }
 
 NUMERIC_OPS = {">", "<", ">=", "<=", "=", "!="}
-TEXT_OPS = {"=", "!="}
+TEXT_OPS = {"=", "!=", "LIKE"}
 ARRAY_OPS = {"CONTAINS"}
-ALL_OPS = NUMERIC_OPS | ARRAY_OPS
+ALL_OPS = NUMERIC_OPS | ARRAY_OPS | {"LIKE"}
 
 
 def get_field_catalog_json() -> list[dict]:
@@ -264,6 +371,7 @@ class TokenType(Enum):
     LPAREN = auto()
     RPAREN = auto()
     CONTAINS = auto()
+    LIKE = auto()
     EOF = auto()
 
 
@@ -373,6 +481,10 @@ def tokenize(query: str) -> list[Token]:
                 tokens.append(Token(
                     TokenType.CONTAINS, "CONTAINS",
                     pos,
+                ))
+            elif upper == "LIKE":
+                tokens.append(Token(
+                    TokenType.LIKE, "LIKE", pos,
                 ))
             else:
                 tokens.append(Token(
@@ -507,6 +619,9 @@ class Parser:
         t = self._peek()
         if t.type == TokenType.CONTAINS:
             op = "CONTAINS"
+            self._advance()
+        elif t.type == TokenType.LIKE:
+            op = "LIKE"
             self._advance()
         elif t.type == TokenType.OP:
             op = t.value
@@ -711,6 +826,107 @@ _CTE_TEMPLATES: dict[str, str] = {
         "  SELECT * FROM qr_raw WHERE rn = 1\n"
         ")"
     ),
+    # Bhavcopy delivery aggregates — anchored to MAX(date)
+    # FROM nse_delivery so "today" matches the AA reports
+    # (handles weekends / public holidays). Single window
+    # pass over latest 25 days per ticker; aggregates +
+    # derived ratios in two stages.
+    "nd": (
+        "nd_anchor AS (\n"
+        "  SELECT MAX(date) AS as_of FROM nse_delivery\n"
+        "),\n"
+        "nd_raw AS (\n"
+        "  SELECT d.*, ROW_NUMBER() OVER (\n"
+        "    PARTITION BY d.ticker\n"
+        "    ORDER BY d.date DESC\n"
+        "  ) AS rn\n"
+        "  FROM nse_delivery d\n"
+        "  CROSS JOIN nd_anchor a\n"
+        "  WHERE d.date <= a.as_of\n"
+        "),\n"
+        "nd_agg AS (\n"
+        "  SELECT ticker,\n"
+        "    MAX(CASE WHEN rn=1 THEN delivery_pct END)\n"
+        "      AS today_dpc,\n"
+        "    AVG(CASE WHEN rn<=10 THEN delivery_pct END)\n"
+        "      AS avg_10d_dpc,\n"
+        "    AVG(CASE WHEN rn<=20 THEN delivery_pct END)\n"
+        "      AS avg_20d_dpc,\n"
+        "    MAX(CASE WHEN rn=1 THEN deliverable_qty END)\n"
+        "      AS today_dv,\n"
+        "    AVG(CASE WHEN rn<=10 THEN deliverable_qty END)\n"
+        "      AS avg_10d_dv,\n"
+        "    AVG(CASE WHEN rn<=20 THEN deliverable_qty END)\n"
+        "      AS avg_20d_dv,\n"
+        "    MAX(CASE WHEN rn=1 THEN traded_qty END)\n"
+        "      AS today_vol,\n"
+        "    AVG(CASE WHEN rn<=10 THEN traded_qty END)\n"
+        "      AS avg_10d_vol,\n"
+        "    AVG(CASE WHEN rn<=20 THEN traded_qty END)\n"
+        "      AS avg_20d_vol\n"
+        "  FROM nd_raw WHERE rn <= 25\n"
+        "  GROUP BY ticker\n"
+        "),\n"
+        "nd AS (\n"
+        "  SELECT *,\n"
+        "    today_dpc AS current_dpc,\n"
+        "    today_vol / NULLIF(avg_20d_vol, 0)\n"
+        "      AS today_x_vol,\n"
+        "    today_vol / NULLIF(avg_10d_vol, 0)\n"
+        "      AS x_vol_10d,\n"
+        "    today_vol / NULLIF(avg_20d_vol, 0)\n"
+        "      AS x_vol_20d,\n"
+        "    today_dv / NULLIF(avg_20d_dv, 0)\n"
+        "      AS today_x_dv,\n"
+        "    today_dv / NULLIF(avg_10d_dv, 0)\n"
+        "      AS x_dv_10d,\n"
+        "    today_dv / NULLIF(avg_20d_dv, 0)\n"
+        "      AS x_dv_20d\n"
+        "  FROM nd_agg\n"
+        ")"
+    ),
+    # Daily fundamentals snapshot — latest per ticker.
+    "fs": (
+        "fs_raw AS (\n"
+        "  SELECT *, ROW_NUMBER() OVER (\n"
+        "    PARTITION BY ticker\n"
+        "    ORDER BY snapshot_date DESC\n"
+        "  ) AS rn FROM fundamentals_snapshot\n"
+        "),\n"
+        "fs AS (\n"
+        "  SELECT * FROM fs_raw WHERE rn = 1\n"
+        ")"
+    ),
+    # Promoter holdings — latest quarter per ticker.
+    "ph": (
+        "ph_raw AS (\n"
+        "  SELECT *, ROW_NUMBER() OVER (\n"
+        "    PARTITION BY ticker\n"
+        "    ORDER BY quarter_end DESC\n"
+        "  ) AS rn FROM promoter_holdings\n"
+        "),\n"
+        "ph AS (\n"
+        "  SELECT * FROM ph_raw WHERE rn = 1\n"
+        ")"
+    ),
+    # Latest corporate event per ticker (the AA tab uses
+    # event_label || event_type; here we expose just the
+    # event_type for queryability + a string-coerced date
+    # so the TEXT-only operators apply consistently).
+    "ce": (
+        "ce_raw AS (\n"
+        "  SELECT *, ROW_NUMBER() OVER (\n"
+        "    PARTITION BY ticker\n"
+        "    ORDER BY event_date DESC\n"
+        "  ) AS rn FROM corporate_events\n"
+        "),\n"
+        "ce AS (\n"
+        "  SELECT ticker, event_type,\n"
+        "    CAST(event_date AS VARCHAR)\n"
+        "      AS event_date_str\n"
+        "  FROM ce_raw WHERE rn = 1\n"
+        ")"
+    ),
 }
 
 # Base columns always returned
@@ -767,6 +983,28 @@ def _build_where(
             f"EXISTS (SELECT 1 FROM st "
             f"WHERE st.ticker = ci.ticker "
             f"AND st.tag = ${idx})"
+        )
+
+    if c.operator == "LIKE":
+        # Case-insensitive substring search. Wrap the
+        # raw value with %s so the user types the bare
+        # substring (e.g. `ticker LIKE "RELIA"`).
+        # Underscore + backslash are SQL LIKE
+        # metacharacters; escape so the user-supplied
+        # string is treated literally.
+        raw = str(c.value)
+        escaped = (
+            raw.replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_")
+        )
+        params.append(f"%{escaped}%")
+        idx = len(params)
+        qual = f"{tbl}.{col}"
+        return (
+            f"({qual} IS NOT NULL AND "
+            f"LOWER({qual}) LIKE LOWER(${idx}) "
+            f"ESCAPE '\\')"
         )
 
     # NULL-safe: field IS NOT NULL AND field op $N
@@ -849,6 +1087,7 @@ def generate_sql(
     ctes: list[str] = []
     for alias in (
         "ci", "as_", "ps", "fr", "ss", "qr",
+        "nd", "fs", "ph", "ce",
     ):
         if alias in tables:
             ctes.append(_CTE_TEMPLATES[alias])
@@ -903,6 +1142,26 @@ def generate_sql(
         joins.append(
             "LEFT JOIN qr "
             "ON qr.ticker = ci.ticker",
+        )
+    if "nd" in tables:
+        joins.append(
+            "LEFT JOIN nd "
+            "ON nd.ticker = ci.ticker",
+        )
+    if "fs" in tables:
+        joins.append(
+            "LEFT JOIN fs "
+            "ON fs.ticker = ci.ticker",
+        )
+    if "ph" in tables:
+        joins.append(
+            "LEFT JOIN ph "
+            "ON ph.ticker = ci.ticker",
+        )
+    if "ce" in tables:
+        joins.append(
+            "LEFT JOIN ce "
+            "ON ce.ticker = ci.ticker",
         )
     join_str = "\n".join(joins)
 
@@ -965,4 +1224,346 @@ def generate_sql(
         params=params,
         columns_used=unique_fields,
         tables_used=tables,
+    )
+
+
+# ---------------------------------------------------------------
+# Tables sub-mode — query a single Iceberg table directly.
+# Reuses the same WHERE-clause parser (Parser class) but with a
+# per-table column whitelist instead of FIELD_CATALOG. Hard
+# LIMIT cap (1000) prevents accidental full-table scans.
+# ---------------------------------------------------------------
+
+TABLE_LIMIT_MAX = 1000
+TABLE_LIMIT_DEFAULT = 100
+
+# Per-table column whitelist. Columns are declared with their
+# logical type; date columns ride as TEXT (use `LIKE "2026-04"`
+# for substring time filters in v1; numeric range comes later).
+TABLE_CATALOG: dict[str, dict[str, FieldType]] = {
+    "nse_delivery": {
+        "ticker": FieldType.TEXT,
+        "date": FieldType.TEXT,
+        "deliverable_qty": FieldType.NUMBER,
+        "delivery_pct": FieldType.NUMBER,
+        "traded_qty": FieldType.NUMBER,
+        "traded_value": FieldType.NUMBER,
+    },
+    "fundamentals_snapshot": {
+        "ticker": FieldType.TEXT,
+        "snapshot_date": FieldType.TEXT,
+        "sales_3y_cagr": FieldType.NUMBER,
+        "prft_3y_cagr": FieldType.NUMBER,
+        "sales_5y_cagr": FieldType.NUMBER,
+        "prft_5y_cagr": FieldType.NUMBER,
+        "yoy_qtr_prft": FieldType.NUMBER,
+        "yoy_qtr_sales": FieldType.NUMBER,
+        "roce": FieldType.NUMBER,
+        "debt_to_eq": FieldType.NUMBER,
+    },
+    "corporate_events": {
+        "ticker": FieldType.TEXT,
+        "event_date": FieldType.TEXT,
+        "event_type": FieldType.TEXT,
+        "event_label": FieldType.TEXT,
+    },
+    "promoter_holdings": {
+        "ticker": FieldType.TEXT,
+        "quarter_end": FieldType.TEXT,
+        "prom_hld_pct": FieldType.NUMBER,
+        "pledged_pct": FieldType.NUMBER,
+        "chng_qoq": FieldType.NUMBER,
+        "source": FieldType.TEXT,
+    },
+    "ohlcv": {
+        "ticker": FieldType.TEXT,
+        "date": FieldType.TEXT,
+        "open": FieldType.NUMBER,
+        "high": FieldType.NUMBER,
+        "low": FieldType.NUMBER,
+        "close": FieldType.NUMBER,
+        "volume": FieldType.NUMBER,
+    },
+    "dividends": {
+        "ticker": FieldType.TEXT,
+        "ex_date": FieldType.TEXT,
+        "amount": FieldType.NUMBER,
+    },
+    "quarterly_results": {
+        "ticker": FieldType.TEXT,
+        "quarter_end": FieldType.TEXT,
+        "statement_type": FieldType.TEXT,
+        "revenue": FieldType.NUMBER,
+        "net_income": FieldType.NUMBER,
+        "eps_diluted": FieldType.NUMBER,
+    },
+}
+
+
+def get_table_catalog_json() -> list[dict]:
+    """Return the table-mode catalog for the frontend."""
+    out: list[dict] = []
+    for tbl, cols in TABLE_CATALOG.items():
+        out.append({
+            "name": tbl,
+            "iceberg": f"stocks.{tbl}",
+            "columns": [
+                {"name": c, "type": t.name.lower()}
+                for c, t in cols.items()
+            ],
+        })
+    return out
+
+
+def _build_table_field_map(
+    table: str,
+) -> dict[str, FieldDef]:
+    """Synthesize a field catalog for the picked table.
+
+    Lets us reuse the existing :class:`Parser` (which
+    validates against ``FIELD_CATALOG``) by swapping in a
+    per-table catalog. The :class:`FieldDef.table` value is
+    the actual physical table name so ``_build_where`` emits
+    ``nse_delivery.delivery_pct > $1`` correctly.
+    """
+    if table not in TABLE_CATALOG:
+        raise ScreenQLError(
+            f"Unknown table: {table}",
+        )
+    return {
+        col: FieldDef(
+            table=table,
+            column=col,
+            type=ftype,
+            label=col,
+            category=table,
+        )
+        for col, ftype in TABLE_CATALOG[table].items()
+    }
+
+
+def parse_table_query(
+    where: str, table: str,
+) -> ASTNode | None:
+    """Parse a Tables-mode WHERE clause.
+
+    Empty / whitespace-only ``where`` returns ``None`` (no
+    filter — the SQL generator emits an unfiltered SELECT
+    capped by ``LIMIT``). Otherwise the same DSL grammar
+    as the screen mode applies, but field names must
+    belong to the picked table.
+    """
+    if not where or not where.strip():
+        return None
+    field_map = _build_table_field_map(table)
+    tokens = tokenize(where)
+    # Patch _parse_condition's reference to FIELD_CATALOG
+    # via a module-level swap — Parser doesn't yet take
+    # a catalog arg. Restore on exit.
+    parser = _TableParser(tokens, field_map)
+    return parser.parse()
+
+
+class _TableParser(Parser):
+    """Parser variant that validates fields against a
+    table-scoped catalog instead of ``FIELD_CATALOG``."""
+
+    def __init__(
+        self,
+        tokens: list[Token],
+        catalog: dict[str, FieldDef],
+    ):
+        super().__init__(tokens)
+        self._catalog = catalog
+
+    def _parse_condition(self) -> Condition:
+        # Re-implement just the field-validation step;
+        # the rest (operator + value parse) is identical
+        # to the parent.
+        self._condition_count += 1
+        if self._condition_count > MAX_CONDITIONS:
+            raise ScreenQLError(
+                f"Maximum {MAX_CONDITIONS} "
+                f"conditions per query",
+            )
+
+        field_tok = self._expect(
+            TokenType.FIELD,
+            f"Expected field name at position "
+            f"{self._peek().pos}",
+        )
+        field_name = field_tok.value.lower()
+
+        if field_name not in self._catalog:
+            matches = difflib.get_close_matches(
+                field_name,
+                self._catalog.keys(),
+                n=1,
+                cutoff=0.6,
+            )
+            msg = f"Unknown column: {field_tok.value}"
+            if matches:
+                msg += f". Did you mean: {matches[0]}?"
+            raise ScreenQLError(msg, field_tok.pos)
+
+        fd = self._catalog[field_name]
+
+        t = self._peek()
+        if t.type == TokenType.CONTAINS:
+            op = "CONTAINS"
+            self._advance()
+        elif t.type == TokenType.LIKE:
+            op = "LIKE"
+            self._advance()
+        elif t.type == TokenType.OP:
+            op = t.value
+            self._advance()
+        else:
+            raise ScreenQLError(
+                f"Expected operator after "
+                f"'{field_name}' at position "
+                f"{t.pos}",
+                t.pos,
+            )
+
+        if fd.type == FieldType.NUMBER:
+            if op not in NUMERIC_OPS:
+                raise ScreenQLError(
+                    f"Cannot use {op} with number "
+                    f"column '{field_name}'",
+                    t.pos,
+                )
+        elif fd.type == FieldType.TEXT:
+            if op not in TEXT_OPS:
+                raise ScreenQLError(
+                    f"Cannot use {op} with text "
+                    f"column '{field_name}'. "
+                    f"Use =, !=, or LIKE",
+                    t.pos,
+                )
+
+        vt = self._peek()
+        if fd.type == FieldType.NUMBER:
+            if vt.type != TokenType.VALUE_NUM:
+                raise ScreenQLError(
+                    f"Expected number after "
+                    f"'{field_name} {op}' at "
+                    f"position {vt.pos}",
+                    vt.pos,
+                )
+            value = vt.value
+        else:
+            if vt.type != TokenType.VALUE_STR:
+                raise ScreenQLError(
+                    f'Expected quoted string after '
+                    f"'{field_name} {op}' at "
+                    f"position {vt.pos}",
+                    vt.pos,
+                )
+            value = vt.value
+        self._advance()
+        return Condition(field_name, op, value, fd)
+
+
+def generate_table_sql(
+    table: str,
+    ast: ASTNode | None,
+    sort_by: str | None = None,
+    sort_dir: str = "desc",
+    limit: int = TABLE_LIMIT_DEFAULT,
+    offset: int = 0,
+    ticker_filter: list[str] | None = None,
+) -> GeneratedQuery:
+    """Generate DuckDB SQL for the Tables sub-mode.
+
+    Single-table SELECT — no CTEs, no JOINs. *limit* is
+    clamped to ``TABLE_LIMIT_MAX``. *sort_by* must be one
+    of the table's columns; falls back to ``ticker`` if
+    not provided. *ticker_filter* (when given) injects
+    ``WHERE ticker IN (...)`` so general users still see
+    their watchlist + holdings only.
+    """
+    if table not in TABLE_CATALOG:
+        raise ScreenQLError(
+            f"Unknown table: {table}",
+        )
+    cols = TABLE_CATALOG[table]
+    limit_capped = max(
+        1, min(int(limit), TABLE_LIMIT_MAX),
+    )
+    offset_capped = max(0, int(offset))
+
+    params: list[Any] = []
+    where_clause = ""
+    if ast is not None:
+        where_clause = _build_where(ast, params)
+
+    # Ticker scope filter — only if the table has a
+    # ticker column (all whitelisted tables do, but
+    # be defensive).
+    if ticker_filter is not None and "ticker" in cols:
+        placeholders = ", ".join(
+            f"${len(params) + i + 1}"
+            for i in range(len(ticker_filter))
+        )
+        params.extend(ticker_filter)
+        scope = f"{table}.ticker IN ({placeholders})"
+        where_clause = (
+            f"({where_clause}) AND {scope}"
+            if where_clause
+            else scope
+        )
+
+    # SELECT projection — every whitelisted column,
+    # casting dates to VARCHAR so JSON serialization is
+    # deterministic.
+    select_parts: list[str] = []
+    for col, ftype in cols.items():
+        if ftype is FieldType.TEXT and (
+            "date" in col or col == "quarter_end"
+        ):
+            select_parts.append(
+                f"CAST({table}.{col} AS VARCHAR) AS {col}"
+            )
+        else:
+            select_parts.append(f"{table}.{col}")
+    select_str = ", ".join(select_parts)
+
+    # ORDER BY — fall back to ticker if sort_by not in
+    # the column whitelist.
+    if sort_by and sort_by in cols:
+        order_col = f"{table}.{sort_by}"
+    else:
+        order_col = f"{table}.ticker"
+    direction = (
+        "ASC" if sort_dir == "asc" else "DESC"
+    )
+
+    where_sql = (
+        f"WHERE {where_clause}\n" if where_clause else ""
+    )
+
+    params.append(limit_capped)
+    limit_idx = len(params)
+    params.append(offset_capped)
+    offset_idx = len(params)
+
+    sql = (
+        f"SELECT {select_str}\n"
+        f"FROM {table}\n"
+        f"{where_sql}"
+        f"ORDER BY {order_col} {direction} NULLS LAST\n"
+        f"LIMIT ${limit_idx} OFFSET ${offset_idx}"
+    )
+    count_sql = (
+        f"SELECT COUNT(*) AS cnt FROM {table}\n"
+        f"{where_sql}"
+    )
+
+    return GeneratedQuery(
+        sql=sql,
+        count_sql=count_sql,
+        params=params,
+        columns_used=list(cols.keys()),
+        tables_used={table},
     )
