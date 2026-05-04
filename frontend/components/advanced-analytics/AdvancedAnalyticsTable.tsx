@@ -82,9 +82,13 @@ export function AdvancedAnalyticsTable({ report, initialData }: Props) {
   const [page, setPage] = useState(1);
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
-  const [market, setMarket] = useState<MarketFilter>("all");
+  // Default scope: NSE-bhavcopy reports are India-only
+  // (delivery feed is NSE) and most users care about
+  // tradable stocks, not ETFs. Users can flip either
+  // dropdown to broaden the view.
+  const [market, setMarket] = useState<MarketFilter>("india");
   const [tickerType, setTickerType] =
-    useState<TickerTypeFilter>("all");
+    useState<TickerTypeFilter>("stock");
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
 
