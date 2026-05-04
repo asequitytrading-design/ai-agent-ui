@@ -204,6 +204,10 @@ def _safe_query(table: str, sql: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+_AS_OF_CACHE_KEY = "cache:aa:as_of"
+_AS_OF_TTL_S = 60
+
+
 def _effective_trading_date() -> date:
     """Return the most-recent date with NSE bhavcopy data.
 
@@ -215,25 +219,54 @@ def _effective_trading_date() -> date:
     or when OHLCV's bulk download is one day ahead of the
     delivery feed.
 
+    Cached for 60 s in Redis — the underlying ``MAX(date)``
+    DuckDB scan against ``stocks.nse_delivery`` (~50 k rows)
+    runs in seconds, so caching makes the cache-key check
+    cheap on every request. The 60 s TTL is short enough
+    that a fresh bhavcopy ingest is reflected on the next
+    page load.
+
     Falls back to ``date.today()`` when the delivery table
     is empty (cold start, dev with BSE-blocked sources,
     etc.) — behaves identically to the prior unanchored
     code in that case.
     """
+    cache = get_cache()
+    raw_cached = cache.get(_AS_OF_CACHE_KEY)
+    if raw_cached is not None:
+        try:
+            value = (
+                raw_cached.decode()
+                if isinstance(raw_cached, (bytes, bytearray))
+                else raw_cached
+            )
+            return date.fromisoformat(str(value))
+        except Exception:  # pragma: no cover — defensive
+            pass
+
     df = _safe_query(
         "stocks.nse_delivery",
         "SELECT MAX(date) AS d FROM nse_delivery",
     )
+    out: date
     if df.empty:
-        return date.today()
-    raw = df["d"].iloc[0]
-    if raw is None or pd.isna(raw):
-        return date.today()
-    if hasattr(raw, "date"):
-        return raw.date()
-    if isinstance(raw, date):
-        return raw
-    return date.today()
+        out = date.today()
+    else:
+        raw = df["d"].iloc[0]
+        if raw is None or pd.isna(raw):
+            out = date.today()
+        elif hasattr(raw, "date"):
+            out = raw.date()
+        elif isinstance(raw, date):
+            out = raw
+        else:
+            out = date.today()
+
+    try:
+        cache.set(_AS_OF_CACHE_KEY, out.isoformat(), ttl=_AS_OF_TTL_S)
+    except Exception:  # pragma: no cover — defensive
+        pass
+    return out
 
 
 def _load_ohlcv_25d(
@@ -764,6 +797,57 @@ def _build_all_rows(
 # ---------------------------------------------------------------
 
 
+async def _cached_full_rows(
+    user: UserContext, as_of: date,
+) -> list[AdvancedRow]:
+    """Return the full row list for *user* on *as_of*, cached.
+
+    The expensive part (8 batched DuckDB reads + Python row
+    composition over the user's scope) runs once per
+    ``(user_id, as_of)`` pair. Subsequent filter / sort /
+    page changes reuse the cached row list and apply all
+    transforms in-memory — no DuckDB round-trip.
+
+    Cache TTL = ``TTL_STABLE``; key embeds *as_of* so the
+    next bhavcopy day naturally invalidates the prior day's
+    cache entry.
+    """
+    import json
+
+    cache = get_cache()
+    ck = (
+        f"cache:aa:rows:{user.user_id}"
+        f":dt{as_of.isoformat()}"
+    )
+    blob = cache.get(ck)
+    if blob is not None:
+        try:
+            return [
+                AdvancedRow(**d)
+                for d in json.loads(blob)
+            ]
+        except Exception:  # pragma: no cover — defensive
+            _logger.warning(
+                "advanced_analytics row-cache parse failed",
+                exc_info=True,
+            )
+
+    tickers = await _scoped_tickers(user, "discovery")
+    rows = _build_all_rows(tickers, as_of)
+    try:
+        cache.set(
+            ck,
+            json.dumps([r.model_dump() for r in rows]),
+            ttl=TTL_STABLE,
+        )
+    except Exception:  # pragma: no cover — defensive
+        _logger.warning(
+            "advanced_analytics row-cache set failed",
+            exc_info=True,
+        )
+    return rows
+
+
 async def _compute_report(
     user: UserContext,
     report: ReportName,
@@ -775,32 +859,50 @@ async def _compute_report(
     ticker_type: TickerTypeFilter = "all",
     search: str = "",
 ) -> Response:
-    """Shared cache / scope / compute pipeline for all 7 endpoints."""
+    """Shared cache / scope / compute pipeline for all 7 endpoints.
+
+    Two cache layers:
+      1. Inner — full response keyed on every parameter
+         (cheap dedup for repeated identical requests).
+      2. Outer — full row list keyed on ``(user, as_of)``
+         only, so filter / sort / page changes reuse the
+         expensive DuckDB compute and apply transforms
+         in-memory.
+    """
     cache = get_cache()
     needle = search.strip().upper()
     # Anchor the report to the most-recent NSE bhavcopy day
     # so every ticker's "today" describes the same trading
     # session (handles weekends / public holidays / long
-    # weekends without per-report date logic). The cache
-    # key embeds *as_of* so a fresh bhavcopy ingest
-    # invalidates yesterday's responses automatically.
+    # weekends without per-report date logic).
     as_of = _effective_trading_date()
-    ck = (
+    inner_ck = (
         f"cache:advanced_analytics:{report}:{user.user_id}"
         f":m{market}:t{ticker_type}:q{needle}"
         f":dt{as_of.isoformat()}"
         f":p{page}:s{sort_key or 'default'}:{sort_dir}"
         f":ps{page_size}"
     )
-    hit = cache.get(ck)
+    hit = cache.get(inner_ck)
     if hit is not None:
         return Response(content=hit, media_type="application/json")
 
-    tickers = await _scoped_tickers(user, "discovery")
-    tickers = _filter_tickers(tickers, market, ticker_type)
+    # Outer cache hit returns instantly; miss runs the
+    # 8 DuckDB queries + row composition once.
+    full_rows = await _cached_full_rows(user, as_of)
+
+    # Apply market / ticker_type filter via the same helper
+    # that backs the legacy path (registry-aware, .NS-aware).
+    keep = set(
+        _filter_tickers(
+            [r.ticker for r in full_rows],
+            market,
+            ticker_type,
+        )
+    )
+    rows = [r for r in full_rows if r.ticker in keep]
     if needle:
-        tickers = [t for t in tickers if needle in t.upper()]
-    rows = _build_all_rows(tickers, as_of)
+        rows = [r for r in rows if needle in r.ticker.upper()]
 
     filtered = [r for r in rows if _passes_filter(r, report)]
     page_rows, total = _apply_sort_paginate(
@@ -830,7 +932,7 @@ async def _compute_report(
         stale_tickers=stale,
     )
     payload = body.model_dump_json()
-    cache.set(ck, payload, ttl=TTL_STABLE)
+    cache.set(inner_ck, payload, ttl=TTL_STABLE)
     return Response(content=payload, media_type="application/json")
 
 
