@@ -57,13 +57,15 @@ import {
 const DEFAULT_PAGE_SIZE = 25;
 const LOCKED_KEYS: string[] = ["ticker"];
 
-/** SMA 50 has crossed above SMA 200 — bullish golden-cross zone. */
-function isGoldenCross(row: AdvancedRow): boolean {
-  return (
-    row.sma_50 != null &&
-    row.sma_200 != null &&
-    row.sma_50 > row.sma_200
-  );
+/** Classify a row's golden-cross state.
+ *  "recent"      — cross happened ≤ 10 trading days ago (amber).
+ *  "established" — SMA 50 > SMA 200 but cross is older (light green).
+ *  null          — no golden cross. */
+function goldenCrossState(
+  row: AdvancedRow,
+): "recent" | "established" | null {
+  if (row.golden_cross_days_ago == null) return null;
+  return row.golden_cross_days_ago <= 10 ? "recent" : "established";
 }
 
 function stockAnalysisUrl(ticker: string): string {
@@ -349,20 +351,24 @@ export function AdvancedAnalyticsTable({ report, initialData }: Props) {
               </tr>
             ) : value && value.rows.length > 0 ? (
               value.rows.map((row) => {
-                const golden = isGoldenCross(row);
+                const gcState = goldenCrossState(row);
+                const rowTitle =
+                  gcState === "recent"
+                    ? `Golden Cross (${row.golden_cross_days_ago}d ago): SMA 50 just crossed above SMA 200`
+                    : gcState === "established"
+                      ? "Bullish: SMA 50 has been above SMA 200 for an extended period"
+                      : undefined;
+                const rowClass =
+                  gcState === "recent"
+                    ? "bg-amber-50 dark:bg-amber-900/20 hover:bg-amber-100 dark:hover:bg-amber-900/30"
+                    : gcState === "established"
+                      ? "bg-green-50 dark:bg-green-900/20 hover:bg-green-100 dark:hover:bg-green-900/30"
+                      : "hover:bg-gray-50 dark:hover:bg-gray-800/50";
                 return (
                   <tr
                     key={row.ticker}
-                    title={
-                      golden
-                        ? "Golden Cross: SMA 50 > SMA 200"
-                        : undefined
-                    }
-                    className={
-                      golden
-                        ? "bg-amber-50 dark:bg-amber-900/20 hover:bg-amber-100 dark:hover:bg-amber-900/30"
-                        : "hover:bg-gray-50 dark:hover:bg-gray-800/50"
-                    }
+                    title={rowTitle}
+                    className={rowClass}
                   >
                     {visibleCols.map((col) => {
                       const raw = row[col.key];
@@ -393,13 +399,22 @@ export function AdvancedAnalyticsTable({ report, initialData }: Props) {
                                 <ChartIcon />
                               </a>
                               <span className="font-mono">{text}</span>
-                              {golden && (
+                              {gcState === "recent" && (
                                 <span
-                                  title="Golden Cross"
-                                  aria-label="Golden Cross"
+                                  title={`Golden Cross ${row.golden_cross_days_ago}d ago`}
+                                  aria-label="Recent golden cross"
                                   className="text-amber-500 text-[10px] font-bold leading-none select-none"
                                 >
                                   ✦
+                                </span>
+                              )}
+                              {gcState === "established" && (
+                                <span
+                                  title="Extended bullish: SMA 50 > SMA 200"
+                                  aria-label="Established bullish"
+                                  className="text-green-600 dark:text-green-400 text-[10px] font-bold leading-none select-none"
+                                >
+                                  ▲
                                 </span>
                               )}
                             </span>

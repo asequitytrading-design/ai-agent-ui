@@ -38,6 +38,10 @@ export interface AdvancedRow {
   avg_14d_emv: number | null;
   sma_50: number | null;
   sma_200: number | null;
+  /** Trading days since SMA 50 last crossed above SMA 200.
+   *  null → no golden cross.  0–10 → recent (amber).
+   *  11+ / 999 → established bullish (green). */
+  golden_cross_days_ago: number | null;
   today_ltp: number | null;
   prev_day_ltp: number | null;
   prev_2_prev_day_ltp: number | null;
