@@ -319,19 +319,65 @@ def _load_delivery_25d(
 
 
 def _load_indicators_latest(tickers: list[str]) -> pd.DataFrame:
-    """Latest ``technical_indicators`` row per ticker."""
+    """Compute latest RSI-14, SMA-50, SMA-200 per ticker.
+
+    Single bulk OHLCV scan (215 rows per ticker) — the retired
+    ``stocks.technical_indicators`` Iceberg table is no longer
+    populated (see DEAD_TABLES in iceberg_maintenance.py).
+    215 rows covers SMA-200 plus a holiday/weekend buffer.
+    One DuckDB read for all tickers (§4.1 #1).
+    """
     if not tickers:
         return pd.DataFrame()
-    return _safe_query(
-        "stocks.technical_indicators",
-        "SELECT ticker, sma_50, sma_200, rsi_14 "
+
+    raw = _safe_query(
+        "stocks.ohlcv",
+        "SELECT ticker, date, open, high, low, close "
         "FROM ("
         "  SELECT *, ROW_NUMBER() OVER ("
         "    PARTITION BY ticker ORDER BY date DESC"
-        "  ) AS rn FROM technical_indicators "
-        f"  WHERE ticker IN ({_ph(tickers)})"
-        ") WHERE rn = 1",
+        "  ) AS rn FROM ohlcv "
+        f"  WHERE ticker IN ({_ph(tickers)}) "
+        "    AND date >= '1980-01-01'"
+        ") WHERE rn <= 215",
     )
+    if raw.empty:
+        return pd.DataFrame()
+
+    from backend.tools._analysis_indicators import (
+        _calculate_technical_indicators,
+    )
+
+    result_rows: list[dict] = []
+    for tkr, grp in raw.groupby("ticker"):
+        grp = grp.sort_values("date")
+        ohlcv = grp.rename(
+            columns={
+                "open": "Open",
+                "high": "High",
+                "low": "Low",
+                "close": "Close",
+            }
+        ).set_index("date")
+        try:
+            ind = _calculate_technical_indicators(ohlcv)
+            last = ind.iloc[-1]
+            result_rows.append(
+                {
+                    "ticker": str(tkr),
+                    "rsi_14": last.get("RSI_14"),
+                    "sma_50": last.get("SMA_50"),
+                    "sma_200": last.get("SMA_200"),
+                }
+            )
+        except Exception as exc:
+            _logger.debug(
+                "indicator compute skipped for %s: %s", tkr, exc
+            )
+
+    if not result_rows:
+        return pd.DataFrame()
+    return pd.DataFrame(result_rows)
 
 
 def _load_fundamentals(tickers: list[str]) -> pd.DataFrame:
