@@ -64,7 +64,6 @@ vi.mock("lightweight-charts", () => {
   };
 });
 
-// eslint-disable-next-line import/first
 import { StockChart } from "@/components/charts/StockChart";
 
 const ohlcv = [
