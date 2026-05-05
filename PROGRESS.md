@@ -2,6 +2,48 @@
 
 ---
 
+## 2026-05-05 (evening) — AA RSI fix + golden cross highlighting (PR #138 → dev)
+
+**Scope**: two follow-up items on the Advanced Analytics page that shipped blank after the Sprint 9 merge.
+
+### Root cause (RSI/SMA blank)
+
+`_load_indicators_latest()` queried `stocks.technical_indicators` — a table listed in `DEAD_TABLES` (scaffolded, never populated). `_safe_query` swallowed the missing-table error and returned an empty DataFrame, leaving `rsi`, `sma_50`, and `sma_200` null on every AA row.
+
+### Fix
+
+Replaced the dead-table query with a **single bulk OHLCV scan** (215 rows per ticker, one DuckDB read for all tickers per §4.1 #1) + per-ticker `_calculate_technical_indicators()` call in Python memory. 215 rows covers SMA-200 plus a holiday/weekend buffer. The existing 60s `TTL_STABLE` cache absorbs the per-request compute cost.
+
+Added `_golden_cross_days_ago()`: walks SMA-50/200 history backwards to find the most recent crossover row; returns trading-days-ago count (0–N), 999 for crosses outside the 215-row window, or `None` for no golden cross.
+
+### What changed
+
+| Layer | File | Summary |
+|---|---|---|
+| Backend | `backend/advanced_analytics_routes.py` | Replace `_load_indicators_latest` (dead table) with bulk OHLCV + `_calculate_technical_indicators`; add `_golden_cross_days_ago()` helper |
+| Backend | `backend/advanced_analytics_models.py` | `AdvancedRow` gains `golden_cross_days_ago: int \| None` |
+| Frontend | `frontend/lib/types/advancedAnalytics.ts` | `AdvancedRow` gains `golden_cross_days_ago: number \| null` |
+| Frontend | `frontend/components/advanced-analytics/AdvancedAnalyticsTable.tsx` | `goldenCrossState()` → `"recent" \| "established" \| null`; amber row + ✦ for ≤10d cross; green row + ▲ for >10d; chart icon on every ticker opens stock analysis in new tab |
+| Tests | `tests/backend/test_advanced_analytics_routes.py` | 3 new unit tests for `_load_indicators_latest`: 215-row happy path, empty OHLCV, empty ticker list |
+
+### Golden cross state machine
+
+| `golden_cross_days_ago` | State | UI |
+|---|---|---|
+| `null` | — | no highlight |
+| `0–10` | `"recent"` | amber row + ✦ badge + tooltip with day count |
+| `11+` / `999` | `"established"` | light-green row + ▲ badge |
+
+### Deploy notes
+
+`docker compose restart backend` + `redis-cli FLUSHALL` required — running process had old code baked in; Redis had cached all-null indicator responses.
+
+### PR
+
+**PR #138** → squash-merged to `dev` at `0b3b8b0`
+
+---
+
 ## 2026-05-05 — Stock chart: Support / Resistance price lines (toggle + 6 horizontal lines)
 
 **Scope**: surfaced the `_analyse_price_movement`-derived support/resistance levels (already produced by the backend, never rendered) as 6 horizontal price lines on the candle pane of the stock-analysis chart, behind a single Indicators-dropdown toggle (default OFF). No new endpoint, no schema change — just plumbed existing fields through the response model and into `lightweight-charts` `createPriceLine`.
