@@ -1190,6 +1190,9 @@ def create_dashboard_router() -> APIRouter:
         from tools._analysis_shared import (
             compute_indicators,
         )
+        from tools._analysis_movement import (
+            _analyse_price_movement,
+        )
 
         df = compute_indicators(t_upper)
 
@@ -1225,9 +1228,21 @@ def create_dashboard_router() -> APIRouter:
                 )
             )
 
+        movement = _analyse_price_movement(df)
+        support_levels = [
+            float(v)
+            for v in movement.get("support_levels", [])
+        ]
+        resistance_levels = [
+            float(v)
+            for v in movement.get("resistance_levels", [])
+        ]
+
         result = IndicatorsResponse(
             ticker=t_upper,
             data=points,
+            support_levels=support_levels,
+            resistance_levels=resistance_levels,
         )
         cache.set(
             cache_key,

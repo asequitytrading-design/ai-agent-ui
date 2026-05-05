@@ -2,6 +2,48 @@
 
 ---
 
+## 2026-05-05 — Stock chart: Support / Resistance price lines (toggle + 6 horizontal lines)
+
+**Scope**: surfaced the `_analyse_price_movement`-derived support/resistance levels (already produced by the backend, never rendered) as 6 horizontal price lines on the candle pane of the stock-analysis chart, behind a single Indicators-dropdown toggle (default OFF). No new endpoint, no schema change — just plumbed existing fields through the response model and into `lightweight-charts` `createPriceLine`.
+
+### What changed
+
+| Layer | File | Summary |
+|---|---|---|
+| Backend | `backend/dashboard_models.py` | `IndicatorsResponse` gains `support_levels: list[float]` + `resistance_levels: list[float]` (already keyed in the synthesis dict from `_analyse_price_movement`) |
+| Backend | `backend/dashboard_routes.py` | `/chart/indicators` handler invokes `_analyse_price_movement(df)` once per request and populates the 2 arrays in the response; cache-key unchanged (data is a function of OHLCV slice already keyed) |
+| Frontend | `frontend/lib/types.ts` | `IndicatorsResponse` mirrors the new arrays |
+| Frontend | `frontend/components/charts/StockChart.types.ts` | `IndicatorVisibility` gains `supportResistance: boolean` (default `false`) |
+| Frontend | `frontend/components/charts/StockChart.tsx` | Lines drawn via `series.createPriceLine(...)` (same API as the existing RSI 70/30 references); R1/R2/R3 + S1/S2/S3 tier labels by proximity to the latest close; cleanup on toggle off / unmount |
+| Frontend | `frontend/app/(authenticated)/analytics/analysis/page.tsx` | New "Support / Resistance" item in the Indicators dropdown; dispatches the visibility flag into the chart |
+| Tests (backend) | `tests/backend/test_dashboard_routes.py` | 4 new cases on `TestChartIndicators`: arrays present + non-empty on happy path, empty arrays on flat data, S/R fields on the response model, no-op when ticker has insufficient OHLCV |
+| Tests (frontend) | `frontend/tests/StockChart.priceLines.test.tsx` | 3 vitest cases: lines added when toggle ON, lines removed when OFF, ticker switch refreshes the line set |
+| Tests (E2E) | `e2e/tests/frontend/analytics-stock.spec.ts` | New `analytics-chromium` spec: open `/analytics/analysis?ticker=...`, toggle Support/Resistance, assert lines visible / hidden in the candle pane |
+
+### Verification snapshot
+
+- Backend pytest (S/R class): **4 / 4 new tests green**; 2 legacy `TestChartIndicators::test_happy_path` + `test_empty_data` still failing with the documented baseline drift (legacy mocks patch `_get_stock_repo.get_technical_indicators` but the route uses `compute_indicators` from `tools._analysis_shared`) — pre-existing, not introduced by this branch
+- Backend pytest (full `test_dashboard_routes.py`): same 5 pre-existing class failures as on `feature/aa-ticker-search` parent; +3 order-pollution flakes (`TestForecasts::test_empty`, `TestAnalysis::test_empty`, `TestLLMUsage::test_superuser_sees_all`) that also fail on parent when run individually — confirmed on the parent baseline
+- Frontend vitest: **69 / 69 green** across 12 files (incl. new `StockChart.priceLines.test.tsx`)
+- Frontend ESLint: clean on all PR-scoped files
+- Frontend `tsc --noEmit`: 4 pre-existing errors in `tests/types.test.ts` + `tests/types.portfolio.test.ts` (missing `currency`/`market`/`stale_tickers` on legacy fixtures) unchanged from parent
+- E2E (analytics-stock spec, `--workers=1 --project=analytics-chromium`): 13 / 15 green; the 2 known-flaky visual regressions (`stock-analysis-chart-light` + `-dark`) still drift ~7% per run from live OHLCV ticks; last `--update-snapshots` was Sprint 8 commit `282a501`
+
+### Patterns to remember
+
+- **`createPriceLine` is the right API** for price-axis horizontal lines (not a separate series with 2 points) — same approach already used for the RSI 70/30 reference levels in this file
+- **Tier labels assume the latest close splits S/R cleanly** — values above `latest_close` are R1/R2/R3 ascending, below are S1/S2/S3 descending. The backend doesn't classify; the frontend does it from the raw arrays so the toggle is purely client-side after the initial fetch
+- **Toggle default OFF** keeps the chart visually identical for users who never open the dropdown (low-risk progressive disclosure)
+- **Reformatted noise risk**: black 25.11 (host) reformats 158 unrelated files because the repo doesn't pin a black version. This PR deliberately ships only the 11 S/R-scoped files; full-repo reformat is a separate `chore: lint sweep` problem
+
+### Carry-over for next session
+
+- Pin `black==<repo-baseline>` + `isort` in `backend/requirements-dev.txt` so the `black backend/ auth/ stocks/ scripts/` chain in CLAUDE.md §8 is reproducible. Without a pin, every contributor's host black ruptures the diff
+- Follow-up: refresh the `analytics-stock` visual-regression baselines in a Sprint 9 housekeeping pass alongside any re-snapshot run (the 2 chart screenshots have been drifting ~7% across both feature branches since Sprint 8)
+- Ship to dev as a follow-up squash on top of `feature/aa-ticker-search` after the parent's final PR lands
+
+---
+
 ## 2026-05-04 (late PM) — ScreenQL Tables sub-mode: full Iceberg coverage + aggregations + superuser gate
 
 **Scope**: extended the Tables sub-mode (originally 7 tables, single-table SELECT only) into a superuser-only ad-hoc query surface over **every Iceberg table** in `stocks.*`, with column projection, aggregations, and GROUP BY. Reproduces the diagnostic `SELECT score_date, COUNT(*), COUNT(DISTINCT ticker) FROM sentiment_scores GROUP BY score_date` query directly from the UI — no SQL shell needed.

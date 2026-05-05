@@ -193,6 +193,10 @@ interface StockChartProps {
   height?: number;
   interval?: ChartInterval;
   visibleIndicators?: IndicatorVisibility;
+  /** Support price levels (sorted ASC by backend). */
+  supportLevels?: number[];
+  /** Resistance price levels (sorted DESC by backend). */
+  resistanceLevels?: number[];
   /** Called with OHLC + indicator data on crosshair. */
   onCrosshairMove?: (data: {
     date: string;
@@ -246,6 +250,8 @@ export function StockChart({
   height = 700,
   interval = "D",
   visibleIndicators = DEFAULT_INDICATORS,
+  supportLevels = [],
+  resistanceLevels = [],
   onCrosshairMove,
 }: StockChartProps) {
   // Store callback in ref so it never triggers
@@ -265,6 +271,7 @@ export function StockChart({
       volume: visibleIndicators.volume,
       rsi: visibleIndicators.rsi,
       macd: visibleIndicators.macd,
+      supportResistance: visibleIndicators.supportResistance,
     }),
     [
       visibleIndicators.sma50,
@@ -273,6 +280,7 @@ export function StockChart({
       visibleIndicators.volume,
       visibleIndicators.rsi,
       visibleIndicators.macd,
+      visibleIndicators.supportResistance,
     ],
   );
 
@@ -705,6 +713,53 @@ export function StockChart({
       );
     }
 
+    // ── Support / Resistance overlays ──────────────────
+    // Tier R1/S1 = nearest to latest close, R3/S3 = furthest.
+    // Backend returns supports ASC and resistances DESC; the
+    // chart's latest close anchors the partition.
+    if (vis.supportResistance) {
+      const lastClose =
+        aggOhlcv.length > 0
+          ? aggOhlcv[aggOhlcv.length - 1].close
+          : null;
+
+      const supports = (supportLevels ?? [])
+        .filter((v) =>
+          lastClose === null ? true : v <= lastClose,
+        )
+        .slice()
+        .sort((a, b) => b - a); // nearest-below first
+
+      const resistances = (resistanceLevels ?? [])
+        .filter((v) =>
+          lastClose === null ? true : v >= lastClose,
+        )
+        .slice()
+        .sort((a, b) => a - b); // nearest-above first
+
+      supports.forEach((price, idx) => {
+        candleSeries.createPriceLine({
+          price,
+          color: "#10b981",
+          lineWidth: 1,
+          lineStyle: 2, // LineStyle.Dashed
+          axisLabelVisible: true,
+          title: `S${idx + 1}`,
+        });
+      });
+
+      resistances.forEach((price, idx) => {
+        candleSeries.createPriceLine({
+          price,
+          color: "#ef4444",
+          lineWidth: 1,
+          lineStyle: 2, // LineStyle.Dashed
+          axisLabelVisible: true,
+          title: `R${idx + 1}`,
+        });
+      });
+    }
+
     // ── Pane sizing: price gets most space ───────
 
     // Price pane is pane index 0 (the default pane).
@@ -806,7 +861,16 @@ export function StockChart({
     } else {
       chart.timeScale().fitContent();
     }
-  }, [aggOhlcv, aggIndicators, actualDark, height, interval, vis]);
+  }, [
+    aggOhlcv,
+    aggIndicators,
+    actualDark,
+    height,
+    interval,
+    vis,
+    supportLevels,
+    resistanceLevels,
+  ]);
 
   // Build chart on mount / data change
   useEffect(() => {

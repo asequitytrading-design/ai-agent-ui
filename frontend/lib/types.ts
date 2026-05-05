@@ -229,6 +229,8 @@ export interface IndicatorPoint {
 export interface IndicatorsResponse {
   ticker: string;
   data: IndicatorPoint[];
+  support_levels?: number[];
+  resistance_levels?: number[];
 }
 
 export interface ForecastPoint {
