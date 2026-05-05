@@ -1,7 +1,7 @@
 # Project Index: AI Agent UI
 
 > AI-agent-optimised codebase map. For human onboarding, see `docs/`.
-> Last refreshed: **2026-04-29 evening** (Apr 29 hotfixes + Recommendation Performance feature — Jira `ASETPLTFRM-339`, 8 SP, Done). 14 new commits since 04-25 refresh: morning hotfixes `2faa7fb`/`567369e`/`6d57b38` (scheduler `cron_days=''` silently skipping registration; Firefox `NetworkError` on dev-server stale keep-alive sockets; `/login → /dashboard` bounce loop on stale-cookie sessions); afternoon feature shipped end-to-end on a `feature/recommendation-performance-history` branch (off `dev`) and merged into `feature/sprint8` (merge commit `c3a7585`) for verification before the eventual cleanup PR. Plus `df1aa2f` retired the 4 long-standing eslint-security warnings on `analytics/analysis/page.tsx` via a new `renderTooltip(el, segments)` helper, and `a5044f1` synced README + CHANGELOG + `docs/backend/recommendation-performance.md` + 5 Serena memories. **Current state: `feature/sprint8` is 67 commits ahead of `origin/dev` (entire Sprint 8 + 04-25 LCP follow-on + 04-29 work); cleanup PR `feature/sprint8 → dev` is the next gate.** Prior outcomes still in scope: ASETPLTFRM-338 orphan-parquet sweep (`cleanup_orphans_v2`, 17 unit tests, UI tile, **12.4 GB reclaimed** in first production sweep), LCP follow-on (mean −33.7% across 34 routes, 4202 → 2786 ms), CLAUDE.md restructure (1208 → ~580 lines, 9 sections, 57-row Pattern Index).
+> Last refreshed: **2026-05-04 PM**. Sprint 8 cleanup PR `#130` shipped 2026-05-03. Sprint 9 — Advanced Analytics — closed 2026-05-02 at 16/16 stories · 71 SP, ASETPLTFRM-357 carry-overs (items 1 + 5) merged to `dev` 2026-05-04 as PR `#135` / squash commit `4ef9b93`. Same-day follow-up bundle (12 commits) lives on `feature/aa-ticker-search` awaiting one final squash PR (user-held). Bundle: ticker search · Help tab · AA jobs in morning pipeline · iceberg_maintenance reordering · promoter_holdings schedule · Data Health AA cards · `as_of` anchor fix · two-layer cache (~1500× warm-path speedup) · India + Stocks-only defaults · ScreenQL extensions (+25 fields, `LIKE` op, Tables sub-mode) · hydration fix · session checkpoint. New shared memory: `aa-as-of-anchor-and-two-layer-cache`. Spinouts open: ASETPLTFRM-358 (BSE allowlist), ASETPLTFRM-359 (CAGR Q12 monitor). Production cutover for AA epic still pending (rollout SOP at `docs/backend/advanced-analytics-rollout.md`).
 
 ---
 
@@ -97,12 +97,17 @@ ingestion_cursor, ingestion_skipped, sentiment_dormant (per-ticker
 headline-fetch dormancy, capped expo cooldown 2/4/8/16/30d),
 pipelines, pipeline_steps.
 
-**Iceberg (12 active tables)**: ohlcv (1.5M rows), company_info,
+**Iceberg (16 active tables)**: ohlcv (1.5M rows), company_info,
 dividends, quarterly_results, analysis_summary, forecast_runs
 (27 cols), forecasts, piotroski_scores, sentiment_scores,
-llm_pricing, llm_usage, portfolio_transactions.
-**Dropped**: scheduler_runs (25GB→PG), scheduled_jobs (→PG),
-technical_indicators (unused, computed on-the-fly).
+llm_pricing, llm_usage, portfolio_transactions, **nse_delivery**
+(Sprint 9: NSE bhavcopy delivery, ~2.5k tickers/day),
+**fundamentals_snapshot** (daily 3y/5y CAGR + ROCE + YoY
+aggregates), **corporate_events** (NSE corporate-actions),
+**promoter_holdings** (BSE shareholding pattern, quarterly).
+Plus `query_log`, `data_gaps` (system tables) and
+`technical_indicators` (legacy/unused, on-the-fly).
+**Dropped**: scheduler_runs (25GB→PG), scheduled_jobs (→PG).
 
 **Maintenance**: `backend/maintenance/` — backup (rsync + catalog.db,
 2-rotation), compaction (overwrite → 1 file/partition), 11yr retention.
@@ -291,8 +296,14 @@ LLM Cascade: Groq pools (llama-3.3-70b, qwen3-32b) →
 | `backend/db/models/sentiment_dormant.py` | 1 | Per-ticker dormancy state — capped expo cooldown 2/4/8/16/30d, 5% probe |
 | `backend/jobs/executor.py::execute_iceberg_maintenance` | 1 | Daily pipeline step 6 — backup (fail-closed) then compact 4 hot tables |
 | `backend/market_routes.py` | 1 | Yahoo Sensex `^BSESN` stale-feed detection + Google Finance fallback |
-| `backend/insights/screen_parser.py` | 1 | ScreenQL: tokenizer, parser, SQL gen, 39-field catalog (incl. 3 PEG variants), `display_columns` param for user-pickable result columns |
-| `backend/insights_routes.py` | 1 | Screener endpoint: batched DuckDB reads (piotroski / forecast_runs / quarterly_results / company_info) populate 41-field `ScreenerRow`; `_compute_peg*` helpers for T/YF/Q variants |
+| `backend/insights/screen_parser.py` | 1 | ScreenQL: tokenizer, parser, SQL gen, **55-field catalog** (Sprint 9: +25 bhavcopy/AA mirror), `LIKE` op for substring text search, `display_columns` param. **Tables sub-mode**: `TABLE_CATALOG` (7 whitelisted tables) + `_TableParser` + `generate_table_sql` (single-table SELECT, hard `LIMIT ≤ 1000`) |
+| `backend/insights_routes.py` | 1 | Screener + ScreenQL endpoints. Sprint-9 additions: `/screen/tables` (catalog) + `/screen/table` (Tables-mode query). Two-layer Redis cache (300s TTL); ticker-scope filter for general users |
+| `backend/advanced_analytics_routes.py` | 1 | **Sprint 9 AA** — 7 NSE-bhavcopy report endpoints. `_effective_trading_date()` anchors to `MAX(date) FROM nse_delivery` (60s Redis cache); two-layer cache pattern: outer `(user, as_of)` rows + inner full-params response → ~1500× warm-path speedup. Filters: `?market`, `?ticker_type`, `?search`. Default UI: India + Stocks-only |
+| `backend/advanced_analytics_models.py` | 1 | Pydantic models: `AdvancedReportResponse`, `AdvancedRow` (~50 fields), `StaleTicker` |
+| `backend/pipeline/jobs/bhavcopy.py` | 1 | NSE bhavcopy ingest (single-day + 6-mo backfill CLI); idempotent scoped delete on actual data dates (handles NSE holiday-redirect quirk) |
+| `backend/pipeline/jobs/fundamentals_snapshot.py` | 1 | Daily aggregator over `quarterly_results` → 3y/5y CAGR + ROCE + YoY into `fundamentals_snapshot` table |
+| `backend/pipeline/sources/promoter_holdings.py` | 1 | BSE shareholding-pattern source (`BseShareholdingSource`); Cloudflare-blocked from dev IP — see ASETPLTFRM-358 |
+| `backend/pipeline/sources/corporate_events.py` | 1 | NSE corporate-actions + board-meetings (rolling 7-day window) |
 | `backend/maintenance/` | 3 | Backup (rsync), compaction, retention, dead table cleanup |
 | `backend/jobs/` | 8 | Executor registry, pipeline chaining, batch refresh (bulk OHLCV), recs |
 | `backend/pipeline/` | 21 | CLI: download, seed, bulk-download, analytics, forecast, screen |
@@ -319,28 +330,40 @@ LLM Cascade: Groq pools (llama-3.3-70b, qwen3-32b) →
 | `frontend/components/widgets/HeroSection.tsx` | 1 | Dashboard hero — greeting + portfolio value/PL render from props always; do NOT gate on `watchlist.loading` (`b1c816e`) |
 | `frontend/app/(authenticated)/admin/page.tsx::AdminPageSkeleton` | 1 | Static SSR fallback (h1 + min-h-[600px]) for `<Suspense>` over `useSearchParams` — mirrors AdminPageInner outer wrapper exactly to hold CLS ≤ 0.02 |
 | `frontend/app/(authenticated)/analytics/insights/page.tsx::InsightsPageSkeleton` | 1 | Same pattern at min-h-[400px] — SSR shell that ships LCP candidate text before client hydration |
+| `frontend/app/(authenticated)/advanced-analytics/page.tsx` | 3 | **Sprint 9** — RSC + `<Suspense>` + `AdvancedAnalyticsClient` 8-tab strip (7 reports + Help). Defaults to India + Stocks-only filters |
+| `frontend/components/advanced-analytics/AdvancedAnalyticsTable.tsx` | 1 | Shared table parameterised by report — debounced ticker search, market/ticker_type dropdowns, column selector, CSV download. All 7 data tabs reuse |
+| `frontend/components/advanced-analytics/HelpTab.tsx` + `columnHelp.ts` | 2 | In-app reference: 56 columns × 9 categories, search + accordion + glossary |
+| `frontend/components/common/StaleTickerChip.tsx` | 1 | Amber chip extracted from PLTrendWidget — used by all 7 AA reports + portfolio P/L |
+| `frontend/app/(authenticated)/analytics/insights/page.tsx::TableQueryMode` | 1 | ScreenQL Tables sub-mode: table dropdown + columns panel + WHERE textarea + sort + LIMIT cap input. Hits `/v1/insights/screen/table` |
+| `frontend/components/admin/DataHealthPanel.tsx` | 1 | 9-card 3×3 grid — Sprint-9 added BhavcopyCard, CorporateEventsCard, FundamentalsSnapshotCard, PromoterHoldingsCard |
 
 ---
 
 ## Scheduler & Jobs
 
-9 job types: `data_refresh`, `compute_analytics`, `run_sentiment`,
+**14 job types** (`@register_job` in `backend/jobs/executor.py`):
+`gap_fill`, `data_refresh`, `compute_analytics`, `run_sentiment`,
 `run_forecasts`, `run_piotroski`, `recommendations`,
-`recommendation_outcomes` (now 7/30/60/90d horizons + self-healing
-window-match, see Recommendation Engine §), `recommendation_cleanup`
-(daily 03:00 IST, 14-month retention purge, FK CASCADE; new 2026-04-29),
-`iceberg_maintenance`. All accept `force=False`. Market ticker runs
-independently (30s poll, not scheduled).
+`recommendation_outcomes` (7/30/60/90d horizons + self-healing
+window-match), `recommendation_cleanup` (daily 03:00 IST, 14-month
+retention purge, FK CASCADE), `iceberg_maintenance`,
+**`nse_bhavcopy_daily`** (T-0..T-7 walk-back),
+**`fundamentals_snapshot_daily`**, **`corporate_events_daily`**,
+**`promoter_holdings_quarterly`** (25th @ 04:00 IST monthly,
+BSE Cloudflare-blocked in dev — see ASETPLTFRM-358).
 
-Freshness gates: daily (OHLCV, analytics, sentiment), weekly
-(forecasts), monthly (CV accuracy auto-refresh via 30-day TTL).
+Freshness gates: daily (OHLCV, analytics, sentiment, bhavcopy,
+fundamentals, events), weekly (forecasts), quarterly (promoter
+holdings), monthly (CV accuracy auto-refresh via 30-day TTL).
 
-**Daily pipeline (6 steps, ~12 min)**: India `08:00 IST` + USA
-`08:15 IST`, Tue–Sat. Container TZ=`Asia/Kolkata` (was UTC; cron
-was firing 5.5h late). `scheduler_catchup_enabled=False` default
-(opt-in via env). Sequence: `data_refresh → compute_analytics →
-run_sentiment → run_piotroski → recommendation_outcomes →
-iceberg_maintenance` (step 6 = backup-then-compact, fail-closed).
+**Daily pipeline (9 steps, ~15 min)**: India `07:00 IST` + USA
+`09:30 IST` (USA still 6 steps — NSE-only data), Tue–Sat. Container
+TZ=`Asia/Kolkata`. `scheduler_catchup_enabled=False` default.
+India sequence (Sprint-9 reorder): `data_refresh → compute_analytics
+→ run_sentiment → run_piotroski → recommendation_outcomes →
+nse_bhavcopy_daily → corporate_events_daily →
+fundamentals_snapshot_daily → iceberg_maintenance` (last so it
+backs up + compacts the AA tables ingested in steps 6-8).
 
 Sentiment dormancy: `sentiment_dormant` PG table excludes ~60% of
 universe from per-ticker headline fetches (5% probe re-test).
@@ -373,14 +396,19 @@ pipeline pickup.
 
 ## File Counts
 
-Backend Python: **218 modules** | Frontend TS/TSX: **128** (added
-`RecommendationsPanel.tsx`, `RecommendationPerformanceTab.tsx`,
-`common/InfoTooltip.tsx`, `lib/renderTooltip.ts` on 2026-04-29 — net
-delta also reflects pruning) | Tests: pytest **538 cases** (incl. 11
-new in `test_recommendation_performance.py`), vitest **66 cases**
-(was 61, +5 in `RecommendationsPanel.test.tsx`), e2e **51 specs** |
-Docs: **65 pages** (added `recommendation-performance.md`) | Scripts: **33** |
-Alembic migrations: **13** (`f8e7d6c5b4a3_add_byo_foundation` latest)
+Backend Python: **179 modules** (Sprint 9 added
+`advanced_analytics_routes.py`, `advanced_analytics_models.py`,
+`pipeline/jobs/{bhavcopy,fundamentals_snapshot}.py`,
+`pipeline/sources/{corporate_events,promoter_holdings}.py`) |
+Frontend TS/TSX: **142** (added 7 AA tab components +
+`AdvancedAnalyticsTable`, `StaleTickerChip`, `HelpTab`,
+`columnHelp`, `useAdvancedAnalyticsData`, `TableQueryMode` inline) |
+Tests: pytest **97 files** (+ `test_screen_parser_bhavcopy.py`,
+`test_advanced_analytics_routes.py`, `test_emv_14.py`,
+`test_etf_classification.py`, `test_bhavcopy.py`), vitest **11
+files**, e2e **52 specs** | Docs: **65+ pages** (added
+`advanced-analytics.md`, `advanced-analytics-rollout.md`) |
+Scripts: **30+** | Alembic migrations: **13**
 
 E2E pass rate (analytics-chromium full sweep, post-`096edc5`):
 **111 / 147 tests pass**, 34 fail (pre-existing tech debt:

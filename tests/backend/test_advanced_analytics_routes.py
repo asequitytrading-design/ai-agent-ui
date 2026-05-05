@@ -290,6 +290,33 @@ def test_pagination_and_sort_query_params_accepted(
     assert len(body["rows"]) <= 2
 
 
+def test_search_filters_tickers_by_substring(
+    super_client: TestClient,
+):
+    """`?search=AAA` keeps only tickers containing AAA
+    (case-insensitive). Seed universe is AAA / BBB / CCC.NS."""
+    r = super_client.get(
+        "/v1/advanced-analytics/top-50-delivery-by-qty"
+        "?search=aaa"
+    )
+    assert r.status_code == 200
+    rows = r.json()["rows"]
+    assert all("AAA" in row["ticker"] for row in rows), rows
+
+
+def test_search_unknown_ticker_returns_empty(
+    super_client: TestClient,
+):
+    r = super_client.get(
+        "/v1/advanced-analytics/top-50-delivery-by-qty"
+        "?search=ZZZZ"
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["rows"] == []
+    assert body["total"] == 0
+
+
 def test_stale_tickers_populated_for_missing_inputs(
     monkeypatch: pytest.MonkeyPatch,
     super_client: TestClient,
@@ -341,3 +368,70 @@ def test_top_50_caps_at_50_rows_post_filter(
     )
     assert r.status_code == 200
     assert r.json()["total"] <= 50
+
+
+# ---------------------------------------------------------------
+# _load_indicators_latest — unit tests (AA RSI fix)
+# ---------------------------------------------------------------
+
+
+def _ohlcv_215d(tickers: list[str]) -> pd.DataFrame:
+    """215 daily OHLCV rows per ticker — enough for SMA-200."""
+    rows: list[dict] = []
+    base = date(2025, 9, 1)
+    for tkr in tickers:
+        for i in range(215):
+            d = base + timedelta(days=i)
+            close = 100.0 + i * 0.1
+            rows.append(
+                {
+                    "ticker": tkr,
+                    "date": d,
+                    "open": close - 0.5,
+                    "high": close + 1.0,
+                    "low": close - 1.0,
+                    "close": close,
+                    "volume": 1_000_000,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def test_load_indicators_latest_returns_rsi_sma_columns(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """With 215 rows, all three indicator columns are non-None."""
+    tickers = ["AAA.NS", "BBB.NS"]
+
+    monkeypatch.setattr(
+        aar,
+        "_safe_query",
+        lambda table, sql: _ohlcv_215d(tickers),
+    )
+
+    df = aar._load_indicators_latest(tickers)
+
+    assert set(df.columns) >= {"ticker", "rsi_14", "sma_50", "sma_200"}
+    assert sorted(df["ticker"].tolist()) == sorted(tickers)
+    for col in ("rsi_14", "sma_50", "sma_200"):
+        assert df[col].notna().all(), f"{col} should be non-NaN with 215 rows"
+
+
+def test_load_indicators_latest_empty_ohlcv(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Empty OHLCV returns empty DataFrame without error."""
+    monkeypatch.setattr(
+        aar,
+        "_safe_query",
+        lambda table, sql: pd.DataFrame(),
+    )
+
+    df = aar._load_indicators_latest(["AAA.NS"])
+    assert df.empty
+
+
+def test_load_indicators_latest_empty_tickers():
+    """Empty ticker list returns empty DataFrame immediately."""
+    df = aar._load_indicators_latest([])
+    assert df.empty

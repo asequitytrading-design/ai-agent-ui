@@ -19,13 +19,14 @@ import { useCallback, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import {
-  ADVANCED_REPORT_LABELS,
-  ADVANCED_REPORT_ORDER,
-  type AdvancedReportName,
+  ADVANCED_TAB_LABELS,
+  ADVANCED_TAB_ORDER,
   type AdvancedReportResponse,
+  type AdvancedTabId,
 } from "@/lib/types/advancedAnalytics";
 
 import { CurrentDayUpmoveTab } from "@/components/advanced-analytics/CurrentDayUpmoveTab";
+import { HelpTab } from "@/components/advanced-analytics/HelpTab";
 import { PreviousDayBreakoutTab } from "@/components/advanced-analytics/PreviousDayBreakoutTab";
 import { MomVolumeDeliveryTab } from "@/components/advanced-analytics/MomVolumeDeliveryTab";
 import { WowVolumeDeliveryTab } from "@/components/advanced-analytics/WowVolumeDeliveryTab";
@@ -38,9 +39,9 @@ interface AdvancedAnalyticsClientProps {
   initialData?: AdvancedReportResponse;
 }
 
-function isValidReport(value: string | null): value is AdvancedReportName {
+function isValidTab(value: string | null): value is AdvancedTabId {
   if (!value) return false;
-  return (ADVANCED_REPORT_ORDER as readonly string[]).includes(value);
+  return (ADVANCED_TAB_ORDER as readonly string[]).includes(value);
 }
 
 export default function AdvancedAnalyticsClient({
@@ -50,14 +51,14 @@ export default function AdvancedAnalyticsClient({
   const searchParams = useSearchParams();
 
   const requestedTab = searchParams.get("tab");
-  const initialTab: AdvancedReportName = isValidReport(requestedTab)
+  const initialTab: AdvancedTabId = isValidTab(requestedTab)
     ? requestedTab
-    : ADVANCED_REPORT_ORDER[0];
+    : ADVANCED_TAB_ORDER[0];
 
-  const [tab, setTab] = useState<AdvancedReportName>(initialTab);
+  const [tab, setTab] = useState<AdvancedTabId>(initialTab);
 
   const handleTabChange = useCallback(
-    (next: AdvancedReportName) => {
+    (next: AdvancedTabId) => {
       setTab(next);
       router.replace(`/advanced-analytics?tab=${next}`, {
         scroll: false,
@@ -76,7 +77,7 @@ export default function AdvancedAnalyticsClient({
           Advanced Analytics
         </h1>
         <p className="text-xs text-gray-500 dark:text-gray-400">
-          Pro &amp; superuser · 7 NSE-bhavcopy reports
+          Pro &amp; superuser · 7 NSE-bhavcopy reports + column reference
         </p>
       </header>
 
@@ -85,7 +86,7 @@ export default function AdvancedAnalyticsClient({
         data-testid="advanced-analytics-tabs"
         role="tablist"
       >
-        {ADVANCED_REPORT_ORDER.map((id) => {
+        {ADVANCED_TAB_ORDER.map((id) => {
           const active = tab === id;
           return (
             <button
@@ -101,7 +102,7 @@ export default function AdvancedAnalyticsClient({
                   : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
               }`}
             >
-              {ADVANCED_REPORT_LABELS[id]}
+              {ADVANCED_TAB_LABELS[id]}
             </button>
           );
         })}
@@ -120,6 +121,7 @@ export default function AdvancedAnalyticsClient({
         {tab === "two-day-scan" && <TwoDayScanTab />}
         {tab === "three-day-scan" && <ThreeDayScanTab />}
         {tab === "top-50-delivery-by-qty" && <Top50DeliveryByQtyTab />}
+        {tab === "help" && <HelpTab />}
       </div>
     </div>
   );

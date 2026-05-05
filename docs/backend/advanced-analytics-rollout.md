@@ -188,6 +188,40 @@ Subsequent OHLCV refreshes preserve `ticker_type='etf'`
 automatically (the pipeline now calls
 `_detect_ticker_type()` on every upsert).
 
+### 3.8 · Promoter holdings quarterly schedule
+
+Schedules the BSE promoter-holdings ingest to run monthly
+on the 25th at 04:00 IST. Each non-quarter month is a
+no-op (scoped delete + reinsert of the same quarter end).
+Currently a no-op even on quarter months — BSE Cloudflare-
+blocks the dev IP (see ASETPLTFRM-358); will start
+producing data automatically once an allowlisted egress
+is in place (no code change).
+
+```bash
+docker compose exec postgres psql -U app -d aiagent <<'SQL'
+INSERT INTO public.scheduled_jobs
+  (job_id, name, job_type, cron_days, cron_time,
+   cron_dates, scope, enabled, force)
+VALUES
+  (gen_random_uuid()::text,
+   'Promoter Holdings - India',
+   'promoter_holdings_quarterly',
+   'mon,tue,wed,thu,fri,sat,sun',
+   '04:00',
+   '25',
+   'india',
+   true,
+   false)
+ON CONFLICT (name) DO NOTHING;
+SQL
+
+docker compose restart backend  # scheduler reloads jobs
+```
+
+Verify via `/v1/admin/scheduler/jobs` — the job should
+report `next_run: <next 25th> 04:00 IST`.
+
 ## 4 · Smoke tests
 
 ### 4.1 · API smoke (hit each of 7 endpoints)

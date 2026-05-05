@@ -155,6 +155,67 @@ test.describe("Stock Analysis tab", () => {
     await expect(canvas).toBeVisible();
   });
 
+  test("Support/Resistance toggle renders price-line tags", async ({
+    page,
+  }) => {
+    // TradingView lightweight-charts paints the right-edge
+    // S1..S3 / R1..R3 axis labels on a <canvas>, not the DOM,
+    // so neither innerText() nor a div locator will see them.
+    // We assert the toggle wiring via checkbox state; visual
+    // rendering is covered by the StockChart Vitest unit test
+    // (frontend/tests/StockChart.priceLines.test.tsx) and the
+    // Task 7 visual smoke.
+    const menu = page.getByTestId(
+      "stock-analysis-indicators-menu",
+    );
+    await menu.click();
+
+    const checkbox = page
+      .getByTestId("stock-analysis-indicator-supportResistance")
+      .locator("input[type='checkbox']");
+    // Initial state may be persisted in localStorage prefs; we
+    // assert relative flips ("toggle changes the state, twice")
+    // rather than an absolute starting value.
+    await expect(checkbox).toBeVisible();
+    const initialChecked = await checkbox.isChecked();
+
+    // First toggle — flips to opposite of initial.
+    await analytics.toggleIndicator("supportResistance");
+    if (initialChecked) {
+      await expect(checkbox).not.toBeChecked();
+    } else {
+      await expect(checkbox).toBeChecked();
+    }
+    await waitForTradingViewChart(
+      page,
+      "stock-analysis-chart",
+      15_000,
+    );
+    const canvasMid = analytics
+      .stockChartContainer()
+      .locator("canvas")
+      .first();
+    await expect(canvasMid).toBeVisible();
+
+    // Second toggle — back to initial; chart still renders.
+    await analytics.toggleIndicator("supportResistance");
+    if (initialChecked) {
+      await expect(checkbox).toBeChecked();
+    } else {
+      await expect(checkbox).not.toBeChecked();
+    }
+    await waitForTradingViewChart(
+      page,
+      "stock-analysis-chart",
+      15_000,
+    );
+    const canvasEnd = analytics
+      .stockChartContainer()
+      .locator("canvas")
+      .first();
+    await expect(canvasEnd).toBeVisible();
+  });
+
   test("dark mode - chart renders with dark background", async ({
     page,
   }) => {

@@ -32,7 +32,9 @@ export default async function AdvancedAnalyticsPage() {
   let initialData: AdvancedReportResponse | undefined;
   try {
     const data = await serverApiOrNull<AdvancedReportResponse>(
-      "/advanced-analytics/current-day-upmove?page=1&page_size=25",
+      "/advanced-analytics/current-day-upmove"
+      + "?page=1&page_size=25"
+      + "&market=india&ticker_type=stock",
     );
     initialData = data ?? undefined;
   } catch {

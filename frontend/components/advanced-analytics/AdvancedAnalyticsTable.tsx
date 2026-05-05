@@ -21,7 +21,7 @@
  * the column selector).
  */
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ColumnSelector } from "@/components/insights/ColumnSelector";
 import {
@@ -57,6 +57,40 @@ import {
 const DEFAULT_PAGE_SIZE = 25;
 const LOCKED_KEYS: string[] = ["ticker"];
 
+/** Classify a row's golden-cross state.
+ *  "recent"      — cross happened ≤ 10 trading days ago (amber).
+ *  "established" — SMA 50 > SMA 200 but cross is older (light green).
+ *  null          — no golden cross. */
+function goldenCrossState(
+  row: AdvancedRow,
+): "recent" | "established" | null {
+  if (row.golden_cross_days_ago == null) return null;
+  return row.golden_cross_days_ago <= 10 ? "recent" : "established";
+}
+
+function stockAnalysisUrl(ticker: string): string {
+  return `/analytics/analysis?ticker=${encodeURIComponent(ticker)}&tab=analysis`;
+}
+
+function ChartIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-3.5 w-3.5 flex-shrink-0"
+      aria-hidden="true"
+    >
+      <polyline points="1,12 5,7 8,9 12,4 15,6" />
+      <polyline points="12,4 15,4 15,7" />
+    </svg>
+  );
+}
+
 const STALE_REASON_LABEL: Record<StaleReason, string> = {
   nan_close: "missing close",
   missing_delivery: "no delivery feed",
@@ -82,9 +116,15 @@ export function AdvancedAnalyticsTable({ report, initialData }: Props) {
   const [page, setPage] = useState(1);
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
-  const [market, setMarket] = useState<MarketFilter>("all");
+  // Default scope: NSE-bhavcopy reports are India-only
+  // (delivery feed is NSE) and most users care about
+  // tradable stocks, not ETFs. Users can flip either
+  // dropdown to broaden the view.
+  const [market, setMarket] = useState<MarketFilter>("india");
   const [tickerType, setTickerType] =
-    useState<TickerTypeFilter>("all");
+    useState<TickerTypeFilter>("stock");
+  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState("");
 
   // Filters change the result set — reset pagination at the
   // setter site so a stale ?page=4 can't render an empty
@@ -101,6 +141,19 @@ export function AdvancedAnalyticsTable({ report, initialData }: Props) {
     [],
   );
 
+  // Debounce ticker search 300 ms — avoids one fetch per
+  // keystroke while user is typing (e.g. "RELIANCE").
+  useEffect(() => {
+    const id = window.setTimeout(() => {
+      setSearch((prev) => {
+        const next = searchInput.trim().toUpperCase();
+        if (next !== prev) setPage(1);
+        return next;
+      });
+    }, 300);
+    return () => window.clearTimeout(id);
+  }, [searchInput]);
+
   const { value, loading, error } = useAdvancedAnalyticsReport(
     report,
     page,
@@ -109,6 +162,7 @@ export function AdvancedAnalyticsTable({ report, initialData }: Props) {
     sortDir,
     market,
     tickerType,
+    search,
     initialData,
   );
 
@@ -188,6 +242,16 @@ export function AdvancedAnalyticsTable({ report, initialData }: Props) {
           />
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          <input
+            type="search"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder="Search ticker…"
+            maxLength={20}
+            data-testid={`advanced-analytics-search-${report}`}
+            aria-label="Search by ticker"
+            className="rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-2 py-0.5 text-xs text-gray-700 dark:text-gray-200 placeholder:text-gray-400 dark:placeholder:text-gray-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 w-32 sm:w-40"
+          />
           <select
             value={market}
             onChange={(e) =>
@@ -286,37 +350,83 @@ export function AdvancedAnalyticsTable({ report, initialData }: Props) {
                 </td>
               </tr>
             ) : value && value.rows.length > 0 ? (
-              value.rows.map((row) => (
-                <tr
-                  key={row.ticker}
-                  className="hover:bg-gray-50 dark:hover:bg-gray-800/50"
-                >
-                  {visibleCols.map((col) => {
-                    const raw = row[col.key];
-                    const text = col.format
-                      ? col.format(raw)
-                      : raw == null
-                        ? "—"
-                        : String(raw);
-                    return (
-                      <td
-                        key={col.key}
-                        className={`whitespace-nowrap px-3 py-2 ${
-                          col.numeric
-                            ? "text-right tabular-nums text-gray-700 dark:text-gray-200"
-                            : "text-gray-700 dark:text-gray-200"
-                        }`}
-                      >
-                        {col.key === "ticker" ? (
-                          <span className="font-mono">{text}</span>
-                        ) : (
-                          text
-                        )}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))
+              value.rows.map((row) => {
+                const gcState = goldenCrossState(row);
+                const rowTitle =
+                  gcState === "recent"
+                    ? `Golden Cross (${row.golden_cross_days_ago}d ago): SMA 50 just crossed above SMA 200`
+                    : gcState === "established"
+                      ? "Bullish: SMA 50 has been above SMA 200 for an extended period"
+                      : undefined;
+                const rowClass =
+                  gcState === "recent"
+                    ? "bg-amber-50 dark:bg-amber-900/20 hover:bg-amber-100 dark:hover:bg-amber-900/30"
+                    : gcState === "established"
+                      ? "bg-green-50 dark:bg-green-900/20 hover:bg-green-100 dark:hover:bg-green-900/30"
+                      : "hover:bg-gray-50 dark:hover:bg-gray-800/50";
+                return (
+                  <tr
+                    key={row.ticker}
+                    title={rowTitle}
+                    className={rowClass}
+                  >
+                    {visibleCols.map((col) => {
+                      const raw = row[col.key];
+                      const text = col.format
+                        ? col.format(raw)
+                        : raw == null
+                          ? "—"
+                          : String(raw);
+                      return (
+                        <td
+                          key={col.key}
+                          className={`whitespace-nowrap px-3 py-2 ${
+                            col.numeric
+                              ? "text-right tabular-nums text-gray-700 dark:text-gray-200"
+                              : "text-gray-700 dark:text-gray-200"
+                          }`}
+                        >
+                          {col.key === "ticker" ? (
+                            <span className="inline-flex items-center gap-1.5">
+                              <a
+                                href={stockAnalysisUrl(row.ticker)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                title="Open stock analysis chart"
+                                data-testid={`aa-chart-link-${row.ticker}`}
+                                className="text-indigo-500 hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300 transition-colors"
+                              >
+                                <ChartIcon />
+                              </a>
+                              <span className="font-mono">{text}</span>
+                              {gcState === "recent" && (
+                                <span
+                                  title={`Golden Cross ${row.golden_cross_days_ago}d ago`}
+                                  aria-label="Recent golden cross"
+                                  className="text-amber-500 text-[10px] font-bold leading-none select-none"
+                                >
+                                  ✦
+                                </span>
+                              )}
+                              {gcState === "established" && (
+                                <span
+                                  title="Extended bullish: SMA 50 > SMA 200"
+                                  aria-label="Established bullish"
+                                  className="text-green-600 dark:text-green-400 text-[10px] font-bold leading-none select-none"
+                                >
+                                  ▲
+                                </span>
+                              )}
+                            </span>
+                          ) : (
+                            text
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })
             ) : (
               <tr>
                 <td

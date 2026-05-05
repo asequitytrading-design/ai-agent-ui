@@ -38,6 +38,10 @@ export interface AdvancedRow {
   avg_14d_emv: number | null;
   sma_50: number | null;
   sma_200: number | null;
+  /** Trading days since SMA 50 last crossed above SMA 200.
+   *  null → no golden cross.  0–10 → recent (amber).
+   *  11+ / 999 → established bullish (green). */
+  golden_cross_days_ago: number | null;
   today_ltp: number | null;
   prev_day_ltp: number | null;
   prev_2_prev_day_ltp: number | null;
@@ -112,6 +116,22 @@ export const ADVANCED_REPORT_ORDER: AdvancedReportName[] = [
   "two-day-scan",
   "three-day-scan",
   "top-50-delivery-by-qty",
+];
+
+/** Tab IDs include the data reports plus the frontend-only
+ *  Help tab. Keep AdvancedReportName separate — it mirrors
+ *  the backend endpoint set and drives RSC pre-fetch + URL
+ *  validation. */
+export type AdvancedTabId = AdvancedReportName | "help";
+
+export const ADVANCED_TAB_LABELS: Record<AdvancedTabId, string> = {
+  ...ADVANCED_REPORT_LABELS,
+  help: "Help",
+};
+
+export const ADVANCED_TAB_ORDER: AdvancedTabId[] = [
+  ...ADVANCED_REPORT_ORDER,
+  "help",
 ];
 
 export type MarketFilter = "all" | "india" | "us";

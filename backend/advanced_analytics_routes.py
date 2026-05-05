@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import logging
 import math
+from datetime import date
 from typing import Literal
 
 import pandas as pd
@@ -203,12 +204,82 @@ def _safe_query(table: str, sql: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def _load_ohlcv_25d(tickers: list[str]) -> pd.DataFrame:
-    """Last 25 trading days of OHLCV per ticker.
+_AS_OF_CACHE_KEY = "cache:aa:as_of"
+_AS_OF_TTL_S = 60
+
+
+def _effective_trading_date() -> date:
+    """Return the most-recent date with NSE bhavcopy data.
+
+    Anchors every AA report to the same "current day" so
+    ``today_x_vol`` (volume) and ``current_dpc`` (delivery)
+    consistently describe the same trading session — even
+    when the daily pipeline runs on a holiday / weekend
+    morning where today's bhavcopy isn't published yet,
+    or when OHLCV's bulk download is one day ahead of the
+    delivery feed.
+
+    Cached for 60 s in Redis — the underlying ``MAX(date)``
+    DuckDB scan against ``stocks.nse_delivery`` (~50 k rows)
+    runs in seconds, so caching makes the cache-key check
+    cheap on every request. The 60 s TTL is short enough
+    that a fresh bhavcopy ingest is reflected on the next
+    page load.
+
+    Falls back to ``date.today()`` when the delivery table
+    is empty (cold start, dev with BSE-blocked sources,
+    etc.) — behaves identically to the prior unanchored
+    code in that case.
+    """
+    cache = get_cache()
+    raw_cached = cache.get(_AS_OF_CACHE_KEY)
+    if raw_cached is not None:
+        try:
+            value = (
+                raw_cached.decode()
+                if isinstance(raw_cached, (bytes, bytearray))
+                else raw_cached
+            )
+            return date.fromisoformat(str(value))
+        except Exception:  # pragma: no cover — defensive
+            pass
+
+    df = _safe_query(
+        "stocks.nse_delivery",
+        "SELECT MAX(date) AS d FROM nse_delivery",
+    )
+    out: date
+    if df.empty:
+        out = date.today()
+    else:
+        raw = df["d"].iloc[0]
+        if raw is None or pd.isna(raw):
+            out = date.today()
+        elif hasattr(raw, "date"):
+            out = raw.date()
+        elif isinstance(raw, date):
+            out = raw
+        else:
+            out = date.today()
+
+    try:
+        cache.set(_AS_OF_CACHE_KEY, out.isoformat(), ttl=_AS_OF_TTL_S)
+    except Exception:  # pragma: no cover — defensive
+        pass
+    return out
+
+
+def _load_ohlcv_25d(
+    tickers: list[str], as_of: date,
+) -> pd.DataFrame:
+    """Last 25 trading days of OHLCV per ticker, ending
+    on or before *as_of*.
 
     25 days covers the longest window any AA report needs
     (20-day rolling avg + a 5-day buffer for non-trading
-    gaps).
+    gaps). The ``date <= as_of`` cap aligns OHLCV to the
+    same effective "current day" used by the delivery
+    feed (see :func:`_effective_trading_date`).
     """
     if not tickers:
         return pd.DataFrame()
@@ -221,12 +292,16 @@ def _load_ohlcv_25d(tickers: list[str]) -> pd.DataFrame:
         "  ) AS rn FROM ohlcv "
         f"  WHERE ticker IN ({_ph(tickers)}) "
         "    AND date >= '1980-01-01'"
+        f"    AND date <= '{as_of.isoformat()}'"
         ") WHERE rn <= 25",
     )
 
 
-def _load_delivery_25d(tickers: list[str]) -> pd.DataFrame:
-    """Last 25 trading days of NSE delivery per ticker."""
+def _load_delivery_25d(
+    tickers: list[str], as_of: date,
+) -> pd.DataFrame:
+    """Last 25 trading days of NSE delivery per ticker,
+    ending on or before *as_of*."""
     if not tickers:
         return pd.DataFrame()
     return _safe_query(
@@ -237,25 +312,105 @@ def _load_delivery_25d(tickers: list[str]) -> pd.DataFrame:
         "  SELECT *, ROW_NUMBER() OVER ("
         "    PARTITION BY ticker ORDER BY date DESC"
         "  ) AS rn FROM nse_delivery "
-        f"  WHERE ticker IN ({_ph(tickers)})"
+        f"  WHERE ticker IN ({_ph(tickers)}) "
+        f"    AND date <= '{as_of.isoformat()}'"
         ") WHERE rn <= 25",
     )
 
 
+def _golden_cross_days_ago(ind: pd.DataFrame) -> int | None:
+    """Trading days since SMA 50 last crossed above SMA 200.
+
+    Returns:
+        None — SMA 50 ≤ SMA 200 today (no golden cross).
+        0–N  — cross happened N trading rows back; 0 = today.
+        999  — SMA 50 has been above SMA 200 for the entire
+               215-row window (established bullish, no cross
+               visible in available history).
+    """
+    s50 = ind["SMA_50"] if "SMA_50" in ind.columns else None
+    s200 = ind["SMA_200"] if "SMA_200" in ind.columns else None
+    if s50 is None or s200 is None:
+        return None
+
+    last50 = s50.iloc[-1]
+    last200 = s200.iloc[-1]
+    if pd.isna(last50) or pd.isna(last200) or last50 <= last200:
+        return None
+
+    n = len(ind)
+    for i in range(n - 1, 0, -1):
+        v50, v200 = s50.iloc[i], s200.iloc[i]
+        p50, p200 = s50.iloc[i - 1], s200.iloc[i - 1]
+        if pd.isna(v50) or pd.isna(v200) or pd.isna(p50) or pd.isna(p200):
+            return 999
+        if v50 > v200 and p50 <= p200:
+            return (n - 1) - i
+
+    return 999
+
+
 def _load_indicators_latest(tickers: list[str]) -> pd.DataFrame:
-    """Latest ``technical_indicators`` row per ticker."""
+    """Compute latest RSI-14, SMA-50, SMA-200 per ticker.
+
+    Single bulk OHLCV scan (215 rows per ticker) — the retired
+    ``stocks.technical_indicators`` Iceberg table is no longer
+    populated (see DEAD_TABLES in iceberg_maintenance.py).
+    215 rows covers SMA-200 plus a holiday/weekend buffer.
+    One DuckDB read for all tickers (§4.1 #1).
+    """
     if not tickers:
         return pd.DataFrame()
-    return _safe_query(
-        "stocks.technical_indicators",
-        "SELECT ticker, sma_50, sma_200, rsi_14 "
+
+    raw = _safe_query(
+        "stocks.ohlcv",
+        "SELECT ticker, date, open, high, low, close "
         "FROM ("
         "  SELECT *, ROW_NUMBER() OVER ("
         "    PARTITION BY ticker ORDER BY date DESC"
-        "  ) AS rn FROM technical_indicators "
-        f"  WHERE ticker IN ({_ph(tickers)})"
-        ") WHERE rn = 1",
+        "  ) AS rn FROM ohlcv "
+        f"  WHERE ticker IN ({_ph(tickers)}) "
+        "    AND date >= '1980-01-01'"
+        ") WHERE rn <= 215",
     )
+    if raw.empty:
+        return pd.DataFrame()
+
+    from backend.tools._analysis_indicators import (
+        _calculate_technical_indicators,
+    )
+
+    result_rows: list[dict] = []
+    for tkr, grp in raw.groupby("ticker"):
+        grp = grp.sort_values("date")
+        ohlcv = grp.rename(
+            columns={
+                "open": "Open",
+                "high": "High",
+                "low": "Low",
+                "close": "Close",
+            }
+        ).set_index("date")
+        try:
+            ind = _calculate_technical_indicators(ohlcv)
+            last = ind.iloc[-1]
+            result_rows.append(
+                {
+                    "ticker": str(tkr),
+                    "rsi_14": last.get("RSI_14"),
+                    "sma_50": last.get("SMA_50"),
+                    "sma_200": last.get("SMA_200"),
+                    "golden_cross_days_ago": _golden_cross_days_ago(ind),
+                }
+            )
+        except Exception as exc:
+            _logger.debug(
+                "indicator compute skipped for %s: %s", tkr, exc
+            )
+
+    if not result_rows:
+        return pd.DataFrame()
+    return pd.DataFrame(result_rows)
 
 
 def _load_fundamentals(tickers: list[str]) -> pd.DataFrame:
@@ -534,6 +689,9 @@ def _build_row(
         avg_14d_emv=avg_14d_emv,
         sma_50=_f((indicators or {}).get("sma_50")),
         sma_200=_f((indicators or {}).get("sma_200")),
+        golden_cross_days_ago=_i(
+            (indicators or {}).get("golden_cross_days_ago")
+        ),
         week_52_high=week_52_high,
         week_52_low=week_52_low,
         away_from_52week_high=away,
@@ -665,17 +823,23 @@ def _df_to_dict(df: pd.DataFrame) -> dict[str, dict]:
     }
 
 
-def _build_all_rows(tickers: list[str]) -> list[AdvancedRow]:
+def _build_all_rows(
+    tickers: list[str], as_of: date,
+) -> list[AdvancedRow]:
     """Run all 8 batched DuckDB reads, then compose rows.
 
     One SQL round-trip per Iceberg table — never a per-ticker
     loop into Iceberg (§4.1 #1, #2).
+
+    *as_of* is the effective trading date — caps OHLCV +
+    delivery loads so both halves of every row describe the
+    same trading session.
     """
     if not tickers:
         return []
 
-    ohlcv_df = _load_ohlcv_25d(tickers)
-    delivery_df = _load_delivery_25d(tickers)
+    ohlcv_df = _load_ohlcv_25d(tickers, as_of)
+    delivery_df = _load_delivery_25d(tickers, as_of)
     ind_df = _load_indicators_latest(tickers)
     funds_df = _load_fundamentals(tickers)
     prom_df = _load_promoter(tickers)
@@ -715,6 +879,57 @@ def _build_all_rows(tickers: list[str]) -> list[AdvancedRow]:
 # ---------------------------------------------------------------
 
 
+async def _cached_full_rows(
+    user: UserContext, as_of: date,
+) -> list[AdvancedRow]:
+    """Return the full row list for *user* on *as_of*, cached.
+
+    The expensive part (8 batched DuckDB reads + Python row
+    composition over the user's scope) runs once per
+    ``(user_id, as_of)`` pair. Subsequent filter / sort /
+    page changes reuse the cached row list and apply all
+    transforms in-memory — no DuckDB round-trip.
+
+    Cache TTL = ``TTL_STABLE``; key embeds *as_of* so the
+    next bhavcopy day naturally invalidates the prior day's
+    cache entry.
+    """
+    import json
+
+    cache = get_cache()
+    ck = (
+        f"cache:aa:rows:{user.user_id}"
+        f":dt{as_of.isoformat()}"
+    )
+    blob = cache.get(ck)
+    if blob is not None:
+        try:
+            return [
+                AdvancedRow(**d)
+                for d in json.loads(blob)
+            ]
+        except Exception:  # pragma: no cover — defensive
+            _logger.warning(
+                "advanced_analytics row-cache parse failed",
+                exc_info=True,
+            )
+
+    tickers = await _scoped_tickers(user, "discovery")
+    rows = _build_all_rows(tickers, as_of)
+    try:
+        cache.set(
+            ck,
+            json.dumps([r.model_dump() for r in rows]),
+            ttl=TTL_STABLE,
+        )
+    except Exception:  # pragma: no cover — defensive
+        _logger.warning(
+            "advanced_analytics row-cache set failed",
+            exc_info=True,
+        )
+    return rows
+
+
 async def _compute_report(
     user: UserContext,
     report: ReportName,
@@ -724,22 +939,52 @@ async def _compute_report(
     sort_dir: str,
     market: MarketFilter = "all",
     ticker_type: TickerTypeFilter = "all",
+    search: str = "",
 ) -> Response:
-    """Shared cache / scope / compute pipeline for all 7 endpoints."""
+    """Shared cache / scope / compute pipeline for all 7 endpoints.
+
+    Two cache layers:
+      1. Inner — full response keyed on every parameter
+         (cheap dedup for repeated identical requests).
+      2. Outer — full row list keyed on ``(user, as_of)``
+         only, so filter / sort / page changes reuse the
+         expensive DuckDB compute and apply transforms
+         in-memory.
+    """
     cache = get_cache()
-    ck = (
+    needle = search.strip().upper()
+    # Anchor the report to the most-recent NSE bhavcopy day
+    # so every ticker's "today" describes the same trading
+    # session (handles weekends / public holidays / long
+    # weekends without per-report date logic).
+    as_of = _effective_trading_date()
+    inner_ck = (
         f"cache:advanced_analytics:{report}:{user.user_id}"
-        f":m{market}:t{ticker_type}"
+        f":m{market}:t{ticker_type}:q{needle}"
+        f":dt{as_of.isoformat()}"
         f":p{page}:s{sort_key or 'default'}:{sort_dir}"
         f":ps{page_size}"
     )
-    hit = cache.get(ck)
+    hit = cache.get(inner_ck)
     if hit is not None:
         return Response(content=hit, media_type="application/json")
 
-    tickers = await _scoped_tickers(user, "discovery")
-    tickers = _filter_tickers(tickers, market, ticker_type)
-    rows = _build_all_rows(tickers)
+    # Outer cache hit returns instantly; miss runs the
+    # 8 DuckDB queries + row composition once.
+    full_rows = await _cached_full_rows(user, as_of)
+
+    # Apply market / ticker_type filter via the same helper
+    # that backs the legacy path (registry-aware, .NS-aware).
+    keep = set(
+        _filter_tickers(
+            [r.ticker for r in full_rows],
+            market,
+            ticker_type,
+        )
+    )
+    rows = [r for r in full_rows if r.ticker in keep]
+    if needle:
+        rows = [r for r in rows if needle in r.ticker.upper()]
 
     filtered = [r for r in rows if _passes_filter(r, report)]
     page_rows, total = _apply_sort_paginate(
@@ -769,7 +1014,7 @@ async def _compute_report(
         stale_tickers=stale,
     )
     payload = body.model_dump_json()
-    cache.set(ck, payload, ttl=TTL_STABLE)
+    cache.set(inner_ck, payload, ttl=TTL_STABLE)
     return Response(content=payload, media_type="application/json")
 
 
@@ -794,6 +1039,7 @@ def create_advanced_analytics_router() -> APIRouter:
             sort_dir: str = Query("desc", pattern="^(asc|desc)$"),
             market: str = Query("all", pattern="^(all|india|us)$"),
             ticker_type: str = Query("all", pattern="^(all|stock|etf)$"),
+            search: str = Query("", max_length=20),
         ) -> Response:
             try:
                 return await _compute_report(
@@ -805,6 +1051,7 @@ def create_advanced_analytics_router() -> APIRouter:
                     sort_dir,
                     market,  # type: ignore[arg-type]
                     ticker_type,  # type: ignore[arg-type]
+                    search,
                 )
             except HTTPException:
                 raise

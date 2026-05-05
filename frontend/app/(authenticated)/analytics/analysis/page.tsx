@@ -135,6 +135,7 @@ const INDICATOR_OPTIONS: {
   { key: "volume", label: "Volume" },
   { key: "rsi", label: "RSI (14)" },
   { key: "macd", label: "MACD" },
+  { key: "supportResistance", label: "Support/Resistance" },
 ];
 
 const RANGE_OPTIONS = [
@@ -162,6 +163,12 @@ function AnalysisTab({
     useState<OHLCVResponse | null>(null);
   const [indicators, setIndicators] =
     useState<IndicatorsResponse | null>(null);
+  const [supportLevels, setSupportLevels] = useState<
+    number[]
+  >([]);
+  const [resistanceLevels, setResistanceLevels] = useState<
+    number[]
+  >([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [visibleIndicators, setVisibleIndicators] =
@@ -277,6 +284,8 @@ function AnalysisTab({
       if (cancelled) return;
       setLoading(true);
       setError(null);
+      setSupportLevels([]);
+      setResistanceLevels([]);
     });
 
     const q = encodeURIComponent(ticker);
@@ -300,6 +309,16 @@ function AnalysisTab({
         if (cancelled) return;
         setOhlcv(o);
         setIndicators(ind);
+        setSupportLevels(
+          Array.isArray(ind?.support_levels)
+            ? (ind.support_levels as number[])
+            : [],
+        );
+        setResistanceLevels(
+          Array.isArray(ind?.resistance_levels)
+            ? (ind.resistance_levels as number[])
+            : [],
+        );
       })
       .catch((e) => {
         if (!cancelled) setError(String(e));
@@ -531,6 +550,8 @@ function AnalysisTab({
         interval={chartInterval}
         visibleIndicators={visibleIndicators}
         onCrosshairMove={handleCrosshair}
+        supportLevels={supportLevels}
+        resistanceLevels={resistanceLevels}
       />
     </div>
   );

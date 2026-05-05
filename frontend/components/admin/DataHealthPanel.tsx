@@ -542,6 +542,229 @@ function AnalyticsCard({
   );
 }
 
+function BhavcopyCard({
+  d,
+  totalIndia,
+}: {
+  d: NonNullable<DataHealthResult["bhavcopy"]>;
+  totalIndia: number;
+}) {
+  const fresh = d.total_tickers - d.missing_latest_count;
+  const status: Status =
+    d.missing_latest_count > 50 || d.stale_count > 50
+      ? "yellow"
+      : "green";
+  return (
+    <div className="rounded-xl border border-gray-200 dark:border-gray-700 p-4 flex flex-col">
+      <div className="flex items-center gap-2 mb-2">
+        <Dot s={status} />
+        <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+          NSE Bhavcopy
+        </h4>
+      </div>
+      <div className="space-y-1 text-xs text-gray-600 dark:text-gray-400 flex-1">
+        <p className="font-medium text-gray-900 dark:text-gray-100">
+          {fresh}/{totalIndia} tickers up to T-1
+        </p>
+        {d.latest_date && (
+          <p className="text-[11px]">
+            latest delivery: {d.latest_date}
+          </p>
+        )}
+        {d.missing_latest_count > 0 && (
+          <p className="flex items-center gap-1.5">
+            <Pill
+              label={`${d.missing_latest_count} behind`}
+              color="amber"
+            />
+            tickers without yesterday&apos;s data
+          </p>
+        )}
+        {d.stale_count > 0 && (
+          <p className="flex items-center gap-1.5">
+            <Pill
+              label={`${d.stale_count} stale`}
+              color="amber"
+            />
+            older than 3 days
+          </p>
+        )}
+      </div>
+      {status === "green" && (
+        <Suggestion text="Bhavcopy delivery feed is current." />
+      )}
+    </div>
+  );
+}
+
+function CorporateEventsCard({
+  d,
+}: {
+  d: NonNullable<DataHealthResult["corporate_events"]>;
+}) {
+  const empty = d.total_events === 0;
+  const stale =
+    d.days_since_latest !== null &&
+    d.days_since_latest > 7;
+  const status: Status =
+    empty || stale ? "yellow" : "green";
+  return (
+    <div className="rounded-xl border border-gray-200 dark:border-gray-700 p-4 flex flex-col">
+      <div className="flex items-center gap-2 mb-2">
+        <Dot s={status} />
+        <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+          Corporate Events
+        </h4>
+      </div>
+      <div className="space-y-1 text-xs text-gray-600 dark:text-gray-400 flex-1">
+        <p className="font-medium text-gray-900 dark:text-gray-100">
+          {d.total_events.toLocaleString("en-IN")} events
+          {" · "}
+          {d.tickers_with_events} tickers
+        </p>
+        {d.latest_event_date && (
+          <p className="text-[11px]">
+            latest event: {d.latest_event_date}
+            {d.days_since_latest !== null && (
+              <span className="ml-1 text-gray-400">
+                ({d.days_since_latest}d ago)
+              </span>
+            )}
+          </p>
+        )}
+        {empty && (
+          <p className="flex items-center gap-1.5">
+            <Pill label="no data" color="amber" />
+            <span>job hasn&apos;t run yet</span>
+          </p>
+        )}
+        {!empty && stale && (
+          <p className="flex items-center gap-1.5">
+            <Pill label="stale" color="amber" />
+            no event in last 7 days
+          </p>
+        )}
+      </div>
+      {status === "green" && (
+        <Suggestion text="Event feed is current." />
+      )}
+    </div>
+  );
+}
+
+function FundamentalsSnapshotCard({
+  d,
+  totalFinancial,
+}: {
+  d: NonNullable<DataHealthResult["fundamentals_snapshot"]>;
+  totalFinancial: number;
+}) {
+  const status: Status =
+    d.missing_tickers.length > 50 || d.stale_count > 100
+      ? "yellow"
+      : "green";
+  return (
+    <div className="rounded-xl border border-gray-200 dark:border-gray-700 p-4 flex flex-col">
+      <div className="flex items-center gap-2 mb-2">
+        <Dot s={status} />
+        <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+          Fundamentals Snapshot
+        </h4>
+      </div>
+      <div className="space-y-1 text-xs text-gray-600 dark:text-gray-400 flex-1">
+        <p className="font-medium text-gray-900 dark:text-gray-100">
+          {d.total_tickers}/{totalFinancial} tickers
+        </p>
+        {d.latest_snapshot_date && (
+          <p className="text-[11px]">
+            latest snapshot: {d.latest_snapshot_date}
+          </p>
+        )}
+        {d.missing_tickers.length > 0 && (
+          <p className="flex items-center gap-1.5">
+            <Pill
+              label={`${d.missing_tickers.length} missing`}
+              color="amber"
+            />
+          </p>
+        )}
+        {d.stale_count > 0 && (
+          <p className="flex items-center gap-1.5">
+            <Pill
+              label={`${d.stale_count} stale`}
+              color="amber"
+            />
+            not refreshed today
+          </p>
+        )}
+      </div>
+      {status === "green" && (
+        <Suggestion text="3y/5y CAGR depth fills as quarterly history grows." />
+      )}
+    </div>
+  );
+}
+
+function PromoterHoldingsCard({
+  d,
+  totalFinancial,
+}: {
+  d: NonNullable<DataHealthResult["promoter_holdings"]>;
+  totalFinancial: number;
+}) {
+  const stale =
+    !d.latest_quarter_end ||
+    d.latest_quarter_end !== d.expected_quarter_end;
+  const lowCoverage = d.coverage_pct < 50;
+  const status: Status =
+    stale || lowCoverage ? "yellow" : "green";
+  return (
+    <div className="rounded-xl border border-gray-200 dark:border-gray-700 p-4 flex flex-col">
+      <div className="flex items-center gap-2 mb-2">
+        <Dot s={status} />
+        <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+          Promoter Holdings
+        </h4>
+      </div>
+      <div className="space-y-1 text-xs text-gray-600 dark:text-gray-400 flex-1">
+        <p className="font-medium text-gray-900 dark:text-gray-100">
+          {d.total_tickers}/{totalFinancial} tickers
+          <span className="ml-2 text-gray-400">
+            ({d.coverage_pct.toFixed(1)}%)
+          </span>
+        </p>
+        <p className="text-[11px]">
+          expected quarter: {d.expected_quarter_end}
+        </p>
+        {d.latest_quarter_end ? (
+          <p className="text-[11px]">
+            latest in store: {d.latest_quarter_end}
+          </p>
+        ) : (
+          <p className="text-[11px]">
+            <Pill label="no data" color="amber" />
+            <span className="ml-1">
+              waiting on BSE allowlist (-358)
+            </span>
+          </p>
+        )}
+        {d.latest_quarter_end && stale && (
+          <p className="flex items-center gap-1.5">
+            <Pill
+              label="behind"
+              color="amber"
+            />
+            quarter not yet refreshed
+          </p>
+        )}
+      </div>
+      {status === "green" && (
+        <Suggestion text="Promoter holdings refreshed for the latest quarter." />
+      )}
+    </div>
+  );
+}
+
 // ── Main Panel ─────────────────────────────────────
 
 export function DataHealthPanel() {
@@ -634,13 +857,13 @@ export function DataHealthPanel() {
       </div>
 
       {loading && !data ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
-          {Array.from({ length: 5 }).map((_, i) => (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 gap-3">
+          {Array.from({ length: 9 }).map((_, i) => (
             <Skeleton key={i} />
           ))}
         </div>
       ) : data ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 gap-3">
           <OhlcvCard
             d={data.ohlcv}
             total={total - (data.illiquid_count ?? 0)}
@@ -683,6 +906,29 @@ export function DataHealthPanel() {
             fixing={fixTarget}
             fixProgress={fixProgress}
           />
+          {data.bhavcopy && (
+            <BhavcopyCard
+              d={data.bhavcopy}
+              totalIndia={totalAnalyzable}
+            />
+          )}
+          {data.fundamentals_snapshot && (
+            <FundamentalsSnapshotCard
+              d={data.fundamentals_snapshot}
+              totalFinancial={totalFinancial}
+            />
+          )}
+          {data.corporate_events && (
+            <CorporateEventsCard
+              d={data.corporate_events}
+            />
+          )}
+          {data.promoter_holdings && (
+            <PromoterHoldingsCard
+              d={data.promoter_holdings}
+              totalFinancial={totalFinancial}
+            />
+          )}
         </div>
       ) : null}
 

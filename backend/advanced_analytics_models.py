@@ -59,6 +59,10 @@ class AdvancedRow(BaseModel):
     avg_14d_emv: float | None = None
     sma_50: float | None = None
     sma_200: float | None = None
+    # Trading days since SMA 50 last crossed above SMA 200.
+    # None → no golden cross (SMA 50 ≤ SMA 200 today).
+    # 0–10 → recent cross (amber).  11+ / 999 → established (green).
+    golden_cross_days_ago: int | None = None
 
     # --- Price (last 3 days + windowed averages) ---
     today_ltp: float | None = None

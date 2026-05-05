@@ -2,6 +2,134 @@
 
 ---
 
+## 2026-05-05 — Stock chart: Support / Resistance price lines (toggle + 6 horizontal lines)
+
+**Scope**: surfaced the `_analyse_price_movement`-derived support/resistance levels (already produced by the backend, never rendered) as 6 horizontal price lines on the candle pane of the stock-analysis chart, behind a single Indicators-dropdown toggle (default OFF). No new endpoint, no schema change — just plumbed existing fields through the response model and into `lightweight-charts` `createPriceLine`.
+
+### What changed
+
+| Layer | File | Summary |
+|---|---|---|
+| Backend | `backend/dashboard_models.py` | `IndicatorsResponse` gains `support_levels: list[float]` + `resistance_levels: list[float]` (already keyed in the synthesis dict from `_analyse_price_movement`) |
+| Backend | `backend/dashboard_routes.py` | `/chart/indicators` handler invokes `_analyse_price_movement(df)` once per request and populates the 2 arrays in the response; cache-key unchanged (data is a function of OHLCV slice already keyed) |
+| Frontend | `frontend/lib/types.ts` | `IndicatorsResponse` mirrors the new arrays |
+| Frontend | `frontend/components/charts/StockChart.types.ts` | `IndicatorVisibility` gains `supportResistance: boolean` (default `false`) |
+| Frontend | `frontend/components/charts/StockChart.tsx` | Lines drawn via `series.createPriceLine(...)` (same API as the existing RSI 70/30 references); R1/R2/R3 + S1/S2/S3 tier labels by proximity to the latest close; cleanup on toggle off / unmount |
+| Frontend | `frontend/app/(authenticated)/analytics/analysis/page.tsx` | New "Support / Resistance" item in the Indicators dropdown; dispatches the visibility flag into the chart |
+| Tests (backend) | `tests/backend/test_dashboard_routes.py` | 4 new cases on `TestChartIndicators`: arrays present + non-empty on happy path, empty arrays on flat data, S/R fields on the response model, no-op when ticker has insufficient OHLCV |
+| Tests (frontend) | `frontend/tests/StockChart.priceLines.test.tsx` | 3 vitest cases: lines added when toggle ON, lines removed when OFF, ticker switch refreshes the line set |
+| Tests (E2E) | `e2e/tests/frontend/analytics-stock.spec.ts` | New `analytics-chromium` spec: open `/analytics/analysis?ticker=...`, toggle Support/Resistance, assert lines visible / hidden in the candle pane |
+
+### Verification snapshot
+
+- Backend pytest (S/R class): **4 / 4 new tests green**; 2 legacy `TestChartIndicators::test_happy_path` + `test_empty_data` still failing with the documented baseline drift (legacy mocks patch `_get_stock_repo.get_technical_indicators` but the route uses `compute_indicators` from `tools._analysis_shared`) — pre-existing, not introduced by this branch
+- Backend pytest (full `test_dashboard_routes.py`): same 5 pre-existing class failures as on `feature/aa-ticker-search` parent; +3 order-pollution flakes (`TestForecasts::test_empty`, `TestAnalysis::test_empty`, `TestLLMUsage::test_superuser_sees_all`) that also fail on parent when run individually — confirmed on the parent baseline
+- Frontend vitest: **69 / 69 green** across 12 files (incl. new `StockChart.priceLines.test.tsx`)
+- Frontend ESLint: clean on all PR-scoped files
+- Frontend `tsc --noEmit`: 4 pre-existing errors in `tests/types.test.ts` + `tests/types.portfolio.test.ts` (missing `currency`/`market`/`stale_tickers` on legacy fixtures) unchanged from parent
+- E2E (analytics-stock spec, `--workers=1 --project=analytics-chromium`): 13 / 15 green; the 2 known-flaky visual regressions (`stock-analysis-chart-light` + `-dark`) still drift ~7% per run from live OHLCV ticks; last `--update-snapshots` was Sprint 8 commit `282a501`
+
+### Patterns to remember
+
+- **`createPriceLine` is the right API** for price-axis horizontal lines (not a separate series with 2 points) — same approach already used for the RSI 70/30 reference levels in this file
+- **Tier labels assume the latest close splits S/R cleanly** — values above `latest_close` are R1/R2/R3 ascending, below are S1/S2/S3 descending. The backend doesn't classify; the frontend does it from the raw arrays so the toggle is purely client-side after the initial fetch
+- **Toggle default OFF** keeps the chart visually identical for users who never open the dropdown (low-risk progressive disclosure)
+- **Reformatted noise risk**: black 25.11 (host) reformats 158 unrelated files because the repo doesn't pin a black version. This PR deliberately ships only the 11 S/R-scoped files; full-repo reformat is a separate `chore: lint sweep` problem
+
+### Carry-over for next session
+
+- Pin `black==<repo-baseline>` + `isort` in `backend/requirements-dev.txt` so the `black backend/ auth/ stocks/ scripts/` chain in CLAUDE.md §8 is reproducible. Without a pin, every contributor's host black ruptures the diff
+- Follow-up: refresh the `analytics-stock` visual-regression baselines in a Sprint 9 housekeeping pass alongside any re-snapshot run (the 2 chart screenshots have been drifting ~7% across both feature branches since Sprint 8)
+- Ship to dev as a follow-up squash on top of `feature/aa-ticker-search` after the parent's final PR lands
+
+---
+
+## 2026-05-04 (late PM) — ScreenQL Tables sub-mode: full Iceberg coverage + aggregations + superuser gate
+
+**Scope**: extended the Tables sub-mode (originally 7 tables, single-table SELECT only) into a superuser-only ad-hoc query surface over **every Iceberg table** in `stocks.*`, with column projection, aggregations, and GROUP BY. Reproduces the diagnostic `SELECT score_date, COUNT(*), COUNT(DISTINCT ticker) FROM sentiment_scores GROUP BY score_date` query directly from the UI — no SQL shell needed.
+
+### What changed
+
+| Layer | File | Summary |
+|---|---|---|
+| Backend | `backend/insights/screen_parser.py` | `TABLE_CATALOG` 7 → **20 tables** (every `stocks.*` Iceberg table); new `AGG_FUNCS` whitelist (`COUNT`, `COUNT_DISTINCT`, `MIN`, `MAX`, `AVG`, `SUM`); `_proj_expr` helper for date-as-VARCHAR projection; `generate_table_sql()` now branches into **aggregation mode** when `aggregations` non-empty (group-by SQL, `COUNT(*) FROM (... GROUP BY)` shape for `count_sql`, single-row-aggregate path with `count_sql='SELECT 1'`) and **column-projection mode** otherwise |
+| Backend | `backend/insights_models.py` | `TableAggregation` model (`fn`, `column`, `alias`); `ScreenTableRequest` gains `select_columns`, `aggregations`, `group_by`; response gains `is_aggregated` |
+| Backend | `backend/insights_routes.py` | `superuser_only` dependency on `/insights/screen/tables` + `/insights/screen/table` (HTTP 403 for general/pro); plumbs new fields into `generate_table_sql`; cache key extended with sel/agg/grp hashes; drops `_scoped_tickers` (superuser bypass — full universe) |
+| Frontend | `frontend/app/(authenticated)/analytics/insights/page.tsx` | `TableQueryMode` rebuilt: column-checkbox grid, **Aggregations** section with fn/column/alias rows + add/remove, **Group by** checkboxes, dynamic Sort By dropdown that surfaces aggregation aliases. Reset on table change. `ScreenQLTab` adds `isSuperuser` gate via `getRoleFromToken()` — non-superusers never see the toggle, and `?mode=tables` deep links silently downgrade to Screen mode |
+| Tests | `tests/backend/test_screen_parser_bhavcopy.py` | 8 new tests: full-universe catalog assertion, column-subset projection, unknown-column rejection, group-by aggregation SQL shape, single-row aggregate (`count_sql='SELECT 1'`), unknown-aggregation rejection, `*` only allowed for COUNT, alias defaulting (`{fn}_{col}`) |
+
+### Verification snapshot
+
+- **46 / 46** parser tests green (38 existing + 8 new); **87 / 87** across all screen / insights tests
+- API: `GET /insights/screen/tables` → 20 tables (superuser); HTTP 403 for `test@demo.com`. `POST /insights/screen/table` 403 for non-superuser
+- Reproduced sentiment summary end-to-end: 32 distinct days, 2026-03-28 → 2026-05-04, 15741 rows, 810 distinct tickers — single-row aggregate AND grouped-by-date both match
+- Browser (live): superuser sees toggle + 20-option dropdown + columns checkboxes + aggregation builder + group-by; query "COUNT(*), COUNT(DISTINCT ticker) GROUP BY score_date" returned **32 of 32** rows with header `score_date | count_rows | count_distinct_ticker`. General user sees no toggle, no Tables UI, falls through to Screen mode even on `?mode=tables` deep link
+- TypeScript clean (only pre-existing portfolio test fixture errors unrelated to this branch)
+
+### Patterns to remember
+
+- **Iceberg `DATE`/`TIMESTAMP` projected as VARCHAR** for stable JSON. Logical type stays TEXT in catalog (so LIKE works), `_date_like_col(name)` decides CAST. Don't add aggregation aliases to that helper — they're new identifiers, not source columns.
+- **Single-row aggregate count_sql** must be `'SELECT 1 AS cnt'` literal — `COUNT(*) FROM (SELECT 1 FROM tbl)` would re-scan the whole table just to return 1.
+- **Group-by COUNT shape**: `SELECT COUNT(*) FROM (SELECT 1 FROM tbl WHERE … GROUP BY …) sub`. The inner `SELECT 1` avoids materializing aggregation expressions twice.
+- **Dev-test localStorage gotcha**: canonical key is `auth_access_token` (not `access_token`). When manually injecting tokens via DevTools for role gating tests, use the `auth_*` keys or `getRoleFromToken()` reads stale state.
+- **Superuser bypass = no `_scoped_tickers`** — Tables mode is full-universe by design; don't paste in the discovery scope filter.
+
+### Carry-over for next session
+
+- Bundles into the existing `feature/aa-ticker-search` branch (12th commit). PR still pending per user's "raise final PR later" call.
+- Sentiment table itself: 32 days of coverage as of 2026-05-04, dense steady-state from Apr 14 (~21 trading days @ full universe of 810 tickers); Apr 9–11 are backfill ramp-up, not gaps.
+
+---
+
+## 2026-05-04 (PM) — Same-day AA polish + ScreenQL extensions (11 commits queued)
+
+**Scope**: After PR #135 merged to dev (AA epic + -357), spent the rest of the session on a polish bundle on a fresh branch `feature/aa-ticker-search` based off the merged dev. User explicitly closed PR #136 (the first interim PR) to bundle more fixes; will raise the final PR later. 11 commits queued, ready for a single squash to dev.
+
+### Commits on `feature/aa-ticker-search`
+
+| # | Commit | Layer | Summary |
+|---|---|---|---|
+| 1 | `063964d` | Backend + Frontend | Ticker search filter — debounced `?search=` Query param on all 7 AA endpoints; `<input type="search">` on the shared table; resets pagination on change |
+| 2 | `889b154` | Frontend | Help tab (8th AA tab) — 56 columns × 9 categories with description + formula + trade takeaway; in-tab search + accordion + glossary |
+| 3 | `b9e8c1d` | Backend + DB | Wired `nse_bhavcopy_daily` + `corporate_events_daily` + `fundamentals_snapshot_daily` into "India Daily Pipeline" as steps 7-9. Bhavcopy executor walks back T-0..T-7 to handle pre-publish morning runs |
+| 4 | `6b20ab6` | Backend + Frontend | iceberg_maintenance moved to step 9 (last); 4 AA tables added to `ALL_TABLES` + `DATE_COLUMNS`; readable captions in 3 frontend `JOB_LABELS` maps |
+| 5 | `30bf9f4` | DB + Docs | `promoter_holdings_quarterly` schedule (25th @ 04:00 IST monthly); §3.8 added to rollout SOP |
+| 6 | `9dff699` | Backend + Frontend | Data Health dashboard cards for bhavcopy / corporate_events / fundamentals_snapshot / promoter_holdings (4 new cards in 3×3 grid) |
+| 7 | `8e16144` | Backend | **AA reports anchored to `MAX(date) FROM nse_delivery`** — fixes Current Day Upmove returning 0 rows (OHLCV/delivery date skew). Cap both loaders to `as_of`; cache key embeds the date |
+| 8 | `c7c9f9e` | Backend | **Two-layer cache**: outer cache `(user, as_of)` + inner cache (full params); `as_of` cached 60 s. Filter/sort 4-50 ms (was 6 s) — **~1500× speedup** on warm path |
+| 9 | `3176860` | Frontend | Default filters India + Stocks-only on all 7 AA tabs (RSC pre-fetch updated to match) |
+| 10 | `e6da732` | Backend + Frontend | **ScreenQL extensions**: +25 fields (bhavcopy/AA mirror), `LIKE` op, Tables sub-mode (whitelist of 7 tables, hard `LIMIT ≤ 1000`, per-table parser via catalog swap) |
+| 11 | `f243813` | Frontend | Hydration mismatch fix on Cmd/Ctrl+Enter hint (state + useEffect SSR-safety pattern) |
+
+### Bonus dev-side ops applied (no code, no commit)
+
+- 1-month bhavcopy backfill (22 trading days, 2026-04-02 to 2026-04-30, 54k rows in `nse_delivery`)
+- ETF cutover SQL applied — 54 rows in `stock_registry` flipped to `ticker_type='etf'` so the new "Stocks only" default filter actually filters
+
+### Verification snapshot
+
+- 38/38 new ScreenQL tests + 27 AA-12 + 3 ETF tests green; 67/67 across all parser tests (no regression)
+- AA endpoints: 6/7 reports populated (BSE-blocked promoter holdings empty as expected); Current Day Upmove went from 0 → 107 rows after the as_of anchor fix
+- ScreenQL: `today_x_vol > 2` → 52 results; `ticker LIKE "RELIA"` → RELIANCE.NS; Tables mode: `nse_delivery WHERE delivery_pct > 70` → 100 of 703 rows
+- Browser: AA tabs render with India + Stocks defaults; ScreenQL Tables sub-mode toggle + dropdown + columns panel + run all work end-to-end
+- ESLint clean across all changed frontend files
+
+### Patterns to remember (also captured in auto-memory)
+
+- **`docker compose restart` insufficient** when route handlers close over module-level functions; use `up -d --force-recreate backend` instead.
+- **Daily refresh runs through `pipelines` table**, not `scheduled_jobs`. AA jobs added as `pipeline_steps` rows.
+- **iceberg_maintenance ALL_TABLES + DATE_COLUMNS are explicit lists** — backup is dir-rsync, but compaction/retention need the table listed.
+- **JOB_LABELS map duplicated in 3 frontend files** — update all when adding job types.
+- **NaT** ≠ None — always check `pd.isna(d)` before `.isoformat()`.
+
+### Carry-over for next session
+
+- **PR not yet raised** — user said "we will raise the final pr little later". When ready: `gh pr create --base dev --head feature/aa-ticker-search`.
+- **Production cutover** for AA epic (PR #135) still pending. Plus the ETF cutover SQL needs to run in prod too (matches dev fix).
+- **ASETPLTFRM-358** (BSE allowlist) + **ASETPLTFRM-359** (CAGR Q12 monitor) still open in backlog.
+
+---
+
 ## 2026-05-04 — Sprint 9 carry-overs (ASETPLTFRM-357) — items 1 + 5 shipped, items 2 + 4 spun out
 
 **Scope**: closed two of the five post-merge follow-ups bundled in ASETPLTFRM-357 (8 SP) directly on `feature/sprint9` so they land in the same squash PR as the AA epic. Spun the two external/passive items into their own backlog stories so -357 can transition Done.

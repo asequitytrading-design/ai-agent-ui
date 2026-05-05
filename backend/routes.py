@@ -2385,20 +2385,282 @@ def create_app(
                 )
             return a
 
+        def _bhavcopy_health():
+            """NSE bhavcopy delivery freshness per ticker.
+
+            Source: stocks.nse_delivery (Sprint 9 AA-2).
+            'Fresh' = latest delivery date >= yesterday
+            (today's NSE bhavcopy publishes ~17:30 IST).
+            'Stale' = latest delivery date < 3 days ago.
+            """
+            b: dict = {
+                "total_tickers": 0,
+                "missing_tickers": [],
+                "missing_latest_count": 0,
+                "stale_count": 0,
+                "stale_tickers": [],
+                "latest_date": None,
+            }
+            try:
+                df = query_iceberg_df(
+                    "stocks.nse_delivery",
+                    "SELECT ticker, "
+                    "MAX(date) AS latest "
+                    "FROM nse_delivery "
+                    "GROUP BY ticker",
+                )
+                if not df.empty:
+                    tks = set(df["ticker"].tolist())
+                    b["total_tickers"] = len(tks)
+                    # Bhavcopy is NSE-only — compare only
+                    # to the India-side analyzable set.
+                    india_analyzable = {
+                        t for t in analyzable_tickers
+                        if t.endswith(".NS")
+                        or t.endswith(".BO")
+                    }
+                    b["missing_tickers"] = sorted(
+                        india_analyzable - tks
+                    )
+                    overall_latest = None
+                    for _, row in df.iterrows():
+                        tk = row["ticker"]
+                        if tk in illiquid_tickers:
+                            continue
+                        d = row["latest"]
+                        if hasattr(d, "date"):
+                            d = d.date()
+                        if (
+                            overall_latest is None
+                            or d > overall_latest
+                        ):
+                            overall_latest = d
+                        if d < yesterday:
+                            b[
+                                "missing_latest_count"
+                            ] += 1
+                        if d < stale_3d:
+                            b["stale_count"] += 1
+                            b[
+                                "stale_tickers"
+                            ].append(tk)
+                    b["stale_tickers"] = sorted(
+                        b["stale_tickers"]
+                    )
+                    if overall_latest is not None:
+                        b["latest_date"] = (
+                            overall_latest.isoformat()
+                        )
+            except Exception:
+                _logger.debug(
+                    "Bhavcopy health failed",
+                    exc_info=True,
+                )
+            return b
+
+        def _corporate_events_health():
+            """Latest corporate event ingest freshness.
+
+            Source: stocks.corporate_events. 'Fresh' =
+            an event ingested in the last 7 days (the
+            scheduled job pulls a 7-day rolling window
+            so any active business day should land an
+            event somewhere in scope).
+            """
+            c: dict = {
+                "total_events": 0,
+                "tickers_with_events": 0,
+                "latest_event_date": None,
+                "days_since_latest": None,
+            }
+            try:
+                df = query_iceberg_df(
+                    "stocks.corporate_events",
+                    "SELECT COUNT(*) AS cnt, "
+                    "COUNT(DISTINCT ticker) AS tks, "
+                    "MAX(event_date) AS latest "
+                    "FROM corporate_events",
+                )
+                if not df.empty:
+                    row = df.iloc[0]
+                    c["total_events"] = int(
+                        row["cnt"] or 0
+                    )
+                    c["tickers_with_events"] = int(
+                        row["tks"] or 0
+                    )
+                    d = row["latest"]
+                    # Reject NaT / NaN — empty tables
+                    # surface as pandas NaT which is not
+                    # None but coerces wrong.
+                    import pandas as _pd
+
+                    if d is not None and not (
+                        isinstance(d, float)
+                        or _pd.isna(d)
+                    ):
+                        if hasattr(d, "date"):
+                            d = d.date()
+                        c["latest_event_date"] = (
+                            d.isoformat()
+                        )
+                        c["days_since_latest"] = (
+                            today - d
+                        ).days
+            except Exception:
+                _logger.debug(
+                    "Corporate events health failed",
+                    exc_info=True,
+                )
+            return c
+
+        def _fundamentals_snapshot_health():
+            """Daily fundamentals snapshot freshness.
+
+            Source: stocks.fundamentals_snapshot.
+            'Fresh' = latest snapshot_date == today (the
+            aggregator runs daily). Compared against
+            financial_tickers (stocks only — ETFs / index
+            don't have quarterly fundamentals).
+            """
+            f: dict = {
+                "total_tickers": 0,
+                "missing_tickers": [],
+                "latest_snapshot_date": None,
+                "stale_count": 0,
+            }
+            try:
+                df = query_iceberg_df(
+                    "stocks.fundamentals_snapshot",
+                    "SELECT ticker, "
+                    "MAX(snapshot_date) AS latest "
+                    "FROM fundamentals_snapshot "
+                    "GROUP BY ticker",
+                )
+                if not df.empty:
+                    tks = set(df["ticker"].tolist())
+                    f["total_tickers"] = len(tks)
+                    f["missing_tickers"] = sorted(
+                        financial_tickers - tks
+                    )
+                    overall_latest = None
+                    for _, row in df.iterrows():
+                        d = row["latest"]
+                        if hasattr(d, "date"):
+                            d = d.date()
+                        if (
+                            overall_latest is None
+                            or d > overall_latest
+                        ):
+                            overall_latest = d
+                        if d < yesterday:
+                            f["stale_count"] += 1
+                    if overall_latest is not None:
+                        f["latest_snapshot_date"] = (
+                            overall_latest.isoformat()
+                        )
+            except Exception:
+                _logger.debug(
+                    "Fundamentals snapshot health failed",
+                    exc_info=True,
+                )
+            return f
+
+        def _promoter_holdings_health():
+            """Quarterly BSE promoter-holdings coverage.
+
+            Source: stocks.promoter_holdings. 'Fresh' =
+            latest quarter_end == latest expected quarter
+            (Mar/Jun/Sep/Dec). Coverage % vs the financial
+            ticker set. Currently capped low because BSE
+            shareholding is Cloudflare-blocked from dev
+            (tracked as ASETPLTFRM-358).
+            """
+            from backend.pipeline.sources.promoter_holdings import (  # noqa: E501
+                latest_quarter_end,
+            )
+
+            p: dict = {
+                "total_tickers": 0,
+                "missing_tickers": [],
+                "latest_quarter_end": None,
+                "expected_quarter_end": (
+                    latest_quarter_end().isoformat()
+                ),
+                "coverage_pct": 0.0,
+            }
+            try:
+                df = query_iceberg_df(
+                    "stocks.promoter_holdings",
+                    "SELECT ticker, "
+                    "MAX(quarter_end) AS latest "
+                    "FROM promoter_holdings "
+                    "GROUP BY ticker",
+                )
+                if not df.empty:
+                    tks = set(df["ticker"].tolist())
+                    p["total_tickers"] = len(tks)
+                    p["missing_tickers"] = sorted(
+                        financial_tickers - tks
+                    )
+                    overall_latest = None
+                    for _, row in df.iterrows():
+                        d = row["latest"]
+                        if hasattr(d, "date"):
+                            d = d.date()
+                        if (
+                            overall_latest is None
+                            or d > overall_latest
+                        ):
+                            overall_latest = d
+                    if overall_latest is not None:
+                        p["latest_quarter_end"] = (
+                            overall_latest.isoformat()
+                        )
+                if len(financial_tickers) > 0:
+                    p["coverage_pct"] = round(
+                        100.0
+                        * p["total_tickers"]
+                        / len(financial_tickers),
+                        1,
+                    )
+            except Exception:
+                _logger.debug(
+                    "Promoter holdings health failed",
+                    exc_info=True,
+                )
+            return p
+
         with ThreadPoolExecutor(
-            max_workers=5,
+            max_workers=9,
         ) as pool:
             f_ohlcv = pool.submit(_ohlcv_health)
             f_fc = pool.submit(_forecast_health)
             f_sent = pool.submit(_sentiment_health)
             f_pio = pool.submit(_piotroski_health)
             f_ana = pool.submit(_analytics_health)
+            f_bhav = pool.submit(_bhavcopy_health)
+            f_evt = pool.submit(
+                _corporate_events_health,
+            )
+            f_fund = pool.submit(
+                _fundamentals_snapshot_health,
+            )
+            f_prom = pool.submit(
+                _promoter_holdings_health,
+            )
 
         result["ohlcv"] = f_ohlcv.result()
         result["forecasts"] = f_fc.result()
         result["sentiment"] = f_sent.result()
         result["piotroski"] = f_pio.result()
         result["analytics"] = f_ana.result()
+        result["bhavcopy"] = f_bhav.result()
+        result["corporate_events"] = f_evt.result()
+        result["fundamentals_snapshot"] = (
+            f_fund.result()
+        )
+        result["promoter_holdings"] = f_prom.result()
 
         # Cache for 60s
         if _cache:

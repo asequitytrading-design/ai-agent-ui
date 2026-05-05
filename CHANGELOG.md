@@ -5,6 +5,69 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.15.0] — 2026-05-04: Sprint 9 — Advanced Analytics + ScreenQL extensions
+
+Two phases:
+
+1. **Sprint 9 epic merged** (PR #135 → `dev`, squash commit `4ef9b93`) — entire Advanced Analytics feature plus ASETPLTFRM-357 carry-over items 1 + 5 in a single squash. Epic ASETPLTFRM-340 transitioned **Done** at 16/16 stories · 71 SP.
+2. **Same-day polish bundle** — 13 commits queued on `feature/aa-ticker-search` (off `dev`) awaiting one final squash PR (user-held). This entry documents the bundle alongside the merged work since it's the feature surface as of 2026-05-04.
+
+Two spinout tickets opened in backlog: **ASETPLTFRM-358** (BSE shareholding allowlist / proxy / paid API) + **ASETPLTFRM-359** (3y/5y CAGR Q12 monitor).
+
+### Added
+
+- **`/advanced-analytics` page** (Sprint 9 epic) — pro/superuser route with 7 NSE-bhavcopy reports + an in-app Help reference. Tabs: Current Day Upmove, Previous Day Breakout, MoM Volume / Delivery, WoW Volume / Delivery, Two-Day Scan, Three-Day Scan, Top 50 by Delivery Qty, **Help**. Single shared `<AdvancedAnalyticsTable />` parameterised by report + column catalog. URL sync (`?tab=`), column selector, CSV download, amber stale-ticker chip per §5.5. Default filters: **India + Stocks-only** (from polish bundle).
+- **4 new Iceberg tables** (`stocks.{nse_delivery, fundamentals_snapshot, corporate_events, promoter_holdings}`) — schemas in `stocks/create_tables.py`, idempotent CREATE.
+- **NSE bhavcopy ingest** via `jugaad-data` (`backend/pipeline/jobs/bhavcopy.py`) — single-day + 6-month backfill CLI. Idempotent scoped delete on actual data dates (handles NSE holiday-redirect quirk where requesting a holiday returns the prior trading day).
+- **BSE shareholding-pattern source** (`backend/pipeline/sources/promoter_holdings.py`) — `BseShareholdingSource` async client for quarterly promoter holding + pledged % + QoQ change. Currently Cloudflare-blocked from dev IP — see ASETPLTFRM-358.
+- **NSE corporate-events source** (`backend/pipeline/sources/corporate_events.py`) — board meetings + corporate actions, 7-day rolling window.
+- **Daily fundamentals snapshot aggregator** (`backend/pipeline/jobs/fundamentals_snapshot.py`) — 3y/5y CAGR + ROCE + YoY computed from `quarterly_results`, materialized into `fundamentals_snapshot` (~700-2k rows daily).
+- **`/v1/advanced-analytics/{report}` endpoints** (7 reports × 1 router-factory in `backend/advanced_analytics_routes.py`) — `pro_or_superuser` guard, query params `?page`, `?page_size`, `?sort_key`, `?sort_dir`, `?market`, `?ticker_type`, `?search`. Per-user Redis cache (TTL_STABLE).
+- **4 new scheduled job types** in `backend/jobs/executor.py`: `nse_bhavcopy_daily`, `fundamentals_snapshot_daily`, `corporate_events_daily`, `promoter_holdings_quarterly` (25th @ 04:00 IST monthly). Bhavcopy executor walks back T-0..T-7 to find the first non-empty day (handles morning runs where today's bhavcopy isn't yet published).
+- **9-step India Daily Pipeline** (was 6) — appended `nse_bhavcopy_daily → corporate_events_daily → fundamentals_snapshot_daily` between `recommendation_outcomes` and `iceberg_maintenance`. iceberg_maintenance moved to step 9 (last) so it backs up + compacts the AA tables.
+- **In-app Help tab** (8th AA tab) — `frontend/components/advanced-analytics/{HelpTab,columnHelp}` documents all 56 columns × 9 categories (description + formula + trade takeaway), search + accordion + glossary. Fully frontend-only.
+- **Ticker search filter** on AA tabs — debounced `?search=<substr>` Query param + `<input type="search">` next to the existing market / ticker_type dropdowns. 300 ms debounce, resets pagination, max 20 chars.
+- **pytest baked into backend image** (ASETPLTFRM-357 #1) — `pytest==8.3.4` in `backend/requirements-dev.txt`; `Dockerfile.backend` builder now installs `requirements-dev.txt`; new `backend-test` job in `.github/workflows/ci.yml` (gates `qa`/`release`/`main`). `pyproject.toml` adds `asyncio_mode=auto` + `asyncio_default_fixture_loop_scope=function`.
+- **ScreenQL extensions** (polish bundle): +25 fields mirroring the AA catalog (bhavcopy volume/delivery, fundamentals_snapshot, promoter, events) — total **55 fields**. New `LIKE` operator for case-insensitive substring on text fields (e.g. `ticker LIKE "RELIA"`); `%` and `_` escaped on user input. New **Tables sub-mode** (`POST /v1/insights/screen/table` + `GET /v1/insights/screen/tables`) — pick from a whitelist of 7 Iceberg tables (`nse_delivery`, `fundamentals_snapshot`, `corporate_events`, `promoter_holdings`, `ohlcv`, `dividends`, `quarterly_results`), write WHERE in the same DSL grammar against that table's columns, hard `LIMIT ≤ 1000`. New `<TableQueryMode />` component + mode toggle (Screen | Tables) in ScreenQLTab. URL persistence: `?mode=tables`.
+- **Data Health dashboard cards** for the 4 new AA tables (`/admin?tab=maintenance`) — Bhavcopy (per-ticker freshness vs T-1, stale > 3d), Corporate Events (latest event date), Fundamentals Snapshot (per-ticker latest, financial-tickers scope), Promoter Holdings (coverage % vs financial tickers, expected vs actual quarter). Grid bumped to 3×3 to fit 9 cards.
+- **`promoter_holdings_quarterly` schedule row** — monthly on the 25th @ 04:00 IST, scope=india. Documented in rollout SOP §3.8.
+- **Backend pytest suite for AA-12** — 27 cases across `test_advanced_analytics_routes.py`, `test_emv_14.py`, `pipeline/test_bhavcopy.py`. Plus 38 new ScreenQL Sprint-9 tests in `test_screen_parser_bhavcopy.py` (field registration, LIKE op, table mode, security escaping). All 67 parser tests green (no regression).
+- **E2E Playwright spec** for the AA page — POM at `e2e/pages/frontend/advanced-analytics.page.ts`, spec at `e2e/tests/frontend/aa-page.spec.ts` (5 cases, 12s @ 1 worker).
+- **Production rollout SOP** at `docs/backend/advanced-analytics-rollout.md` (8 numbered cutover steps + smoke + 24h watch + rollback).
+- **Architecture memory** at `.serena/memories/shared/architecture/aa-as-of-anchor-and-two-layer-cache.md` — captures the two new patterns discovered this sprint for reuse on future cross-table dashboards.
+
+### Changed
+
+- **AA reports anchor to `MAX(date) FROM nse_delivery`** (`as_of`). The AA endpoints' `_effective_trading_date()` queries the latest bhavcopy date once per request (Redis-cached 60s) and caps both OHLCV and delivery loads to that date. Resolves the OHLCV/delivery skew that caused Current Day Upmove to return 0 rows even when matching tickers existed (different "today" between volume and delivery halves of each row).
+- **Two-layer Redis cache** on AA endpoints — outer cache keyed on `(user_id, as_of)` holds the full row list; inner cache keyed on full request params holds the response body. Filter / sort / page changes hit the in-memory transform path instead of recomputing the 8 batched DuckDB reads. Measured: warm same-params **6 s → 4 ms** (~1500×), sort change **6 s → 18 ms**, market filter **6 s → 12 ms**.
+- **OHLCV pipeline now classifies ETFs correctly** (ASETPLTFRM-357 #5). `backend/pipeline/jobs/ohlcv.py:205-217` and `scripts/bulk_download_ohlcv.py:171` now call `_detect_ticker_type(store_as)` and pass `ticker_type` into `upsert_registry()` — was silently defaulting to `'stock'` for every refresh, including known NSE ETFs (NIFTYBEES, GOLDBEES, BANKBEES, TATAGOLD…). Combined with the SOP §3.7 cutover SQL (`UPDATE stock_registry SET ticker_type='etf' WHERE …`), the new `?ticker_type=etf` filter on AA + the "Stocks only" default actually filter as intended.
+- **`iceberg_maintenance` now compacts + retention-purges the 4 AA tables** — `ALL_TABLES` + `DATE_COLUMNS` extended in `backend/maintenance/iceberg_maintenance.py` (`nse_delivery → date`, `fundamentals_snapshot → snapshot_date`, `corporate_events → event_date`, `promoter_holdings → quarter_end`). Backup itself is dir-rsync so already covered.
+- **Frontend `JOB_LABELS` map updated** in 3 files (`PipelineDAG.tsx`, `SchedulerTab.tsx`, `PipelineForm.tsx`) so the new AA jobs render as readable captions ("NSE Bhavcopy Delivery", "Corporate Events", "Fundamentals Snapshot", "Promoter Holdings") in the admin scheduler DAG instead of raw `job_type` identifiers.
+- **CSV folder added to `.gitignore`** — the seed CSVs that drove Sprint 9 design stay local-only.
+
+### Fixed
+
+- **Hydration mismatch** on the ScreenQL `Cmd/Ctrl+Enter` keystroke hint (commit `f243813`). `navigator.platform` was read inline at render time; SSR rendered "Ctrl+Enter", client on macOS rendered "⌘+Enter". Fix: `kbdHint` state defaulted to "Ctrl+Enter" (matches SSR) and swapped to "⌘+Enter" inside `useEffect`. Same SSR-safety pattern as localStorage / crypto.randomUUID per CLAUDE.md §5.3.
+- **NaT serialization** on the corporate_events Data Health card — pandas NaT serialized as the string `"NaT"` in JSON when the table was empty. Fix: explicit `pd.isna(d)` check before `.isoformat()`.
+
+### Out of scope (deferred / spinouts)
+
+- **ASETPLTFRM-358** — BSE shareholding endpoint Cloudflare-blocked from dev IP. Production needs an allowlisted egress IP, a proxy, or the paid BSE Data API. Until resolved `stocks.promoter_holdings` stays empty in prod and the AA Promoter Holdings card surfaces "waiting on BSE allowlist (-358)".
+- **ASETPLTFRM-359** — 3y/5y CAGR coverage sparse until `quarterly_results` has ≥ 12 quarters per ticker (3y) / ≥ 20 quarters (5y). Passive monitor — recheck ~2026-11-04.
+- **Aggregation operators (SUM / AVG / GROUP BY)** in ScreenQL Tables sub-mode — separate ticket.
+- **Cross-table JOINs** in ScreenQL Tables sub-mode — pick one table.
+- **Free-form SQL editor** — explicitly rejected during scope clarification.
+
+### Verification
+
+- 38/38 new ScreenQL bhavcopy tests + 27 AA-12 tests + 3 ETF tests + 67/67 across all parser tests green (no regression on PEG / market suites).
+- Live API smoke (admin@demo.com): all 7 AA reports populate (Current Day Upmove 107 rows, Top 50 50 rows, etc.); ScreenQL `today_x_vol > 2` → 52 results; `ticker LIKE "RELIA"` → RELIANCE.NS; Tables-mode `nse_delivery WHERE delivery_pct > 70` → 100 of 703 rows.
+- Browser smoke: `/advanced-analytics` 8-tab strip renders, Help tab shows 56 columns + glossary, ScreenQL Tables sub-mode toggle works, autocomplete surfaces all 5 new `today_*` fields.
+- Lighthouse on `/advanced-analytics`: Score 100, LCP 0 ms, CLS 0.000.
+- ESLint clean across all changed frontend files.
+
+---
+
 ## [0.14.0] — 2026-04-29: Recommendation Performance analytics + Apr 29 hotfixes
 
 Two phases on `feature/sprint8`:

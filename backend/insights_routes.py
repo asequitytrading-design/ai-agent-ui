@@ -28,7 +28,10 @@ import pandas as pd
 from fastapi import APIRouter, Depends, Query, Response
 
 import auth.endpoints.helpers as _helpers
-from auth.dependencies import get_current_user
+from auth.dependencies import (
+    get_current_user,
+    superuser_only,
+)
 from auth.models import UserContext
 from cache import get_cache, TTL_STABLE
 from market_utils import (
@@ -42,6 +45,9 @@ from insights_models import (
     ScreenFieldsResponse,
     ScreenQLRequest,
     ScreenQLResponse,
+    ScreenTableRequest,
+    ScreenTableResponse,
+    ScreenTablesResponse,
     PiotroskiResponse,
     PiotroskiRow,
     QuarterlyResponse,
@@ -1973,6 +1979,10 @@ def create_insights_router() -> APIRouter:
                 "fr": "stocks.forecast_runs",
                 "ss": "stocks.sentiment_scores",
                 "qr": "stocks.quarterly_results",
+                "nd": "stocks.nse_delivery",
+                "fs": "stocks.fundamentals_snapshot",
+                "ph": "stocks.promoter_holdings",
+                "ce": "stocks.corporate_events",
             }
             tables = [
                 alias_to_iceberg[a]
@@ -2093,6 +2103,180 @@ def create_insights_router() -> APIRouter:
                 TTL_STABLE,
             )
 
+        return result
+
+    @router.get(
+        "/screen/tables",
+        response_model=ScreenTablesResponse,
+        dependencies=[Depends(superuser_only)],
+    )
+    async def get_screen_tables():
+        """Return whitelisted tables for Tables sub-mode.
+
+        Superuser-only — Tables mode exposes every Iceberg
+        table in ``stocks.*`` for ad-hoc inspection. Pro /
+        general users do not see this dropdown.
+        """
+        from backend.insights.screen_parser import (
+            get_table_catalog_json,
+        )
+
+        return ScreenTablesResponse(
+            tables=get_table_catalog_json(),
+        )
+
+    @router.post(
+        "/screen/table",
+        response_model=ScreenTableResponse,
+        dependencies=[Depends(superuser_only)],
+    )
+    async def run_screen_table(
+        req: ScreenTableRequest,
+        user: UserContext = Depends(
+            get_current_user,
+        ),
+    ):
+        """Execute a Tables-sub-mode query (superuser).
+
+        Single-table SELECT against a whitelisted Iceberg
+        table (TABLE_CATALOG). Supports column selection,
+        aggregations (COUNT/COUNT_DISTINCT/MIN/MAX/AVG/SUM)
+        and GROUP BY. WHERE / sort / limit / aggregations /
+        group_by are all parameterized; LIMIT is hard-capped
+        at 1000. Superuser-only — bypasses _scoped_tickers.
+        """
+        from hashlib import sha256
+
+        from backend.insights.screen_parser import (
+            ScreenQLError,
+            generate_table_sql,
+            parse_table_query,
+        )
+
+        agg_key = ";".join(
+            f"{a.fn}:{a.column}:{a.alias or ''}"
+            for a in req.aggregations
+        )
+        sel_key = ",".join(req.select_columns or [])
+        grp_key = ",".join(req.group_by)
+
+        cache = get_cache()
+        ck = (
+            "cache:insights:screentbl:"
+            + sha256(
+                f"{req.table}:{req.where}:"
+                f"{req.sort_by}:{req.sort_dir}:"
+                f"{req.limit}:{req.offset}:"
+                f"{sel_key}:{agg_key}:{grp_key}:"
+                f"{user.user_id}".encode()
+            ).hexdigest()[:16]
+        )
+        if cache:
+            hit = cache.get(ck)
+            if hit:
+                return (
+                    ScreenTableResponse
+                    .model_validate_json(hit)
+                )
+
+        try:
+            ast = parse_table_query(
+                req.where, req.table,
+            )
+        except ScreenQLError as exc:
+            from fastapi import HTTPException
+            raise HTTPException(
+                status_code=422,
+                detail=str(exc),
+            )
+
+        # Superuser bypasses ticker scoping — Tables mode
+        # is for full-universe ad-hoc inspection.
+        try:
+            gen = generate_table_sql(
+                req.table,
+                ast,
+                sort_by=req.sort_by,
+                sort_dir=req.sort_dir,
+                limit=req.limit,
+                offset=req.offset,
+                ticker_filter=None,
+                select_columns=req.select_columns,
+                aggregations=[
+                    (a.fn, a.column, a.alias)
+                    for a in req.aggregations
+                ],
+                group_by=req.group_by,
+            )
+        except ScreenQLError as exc:
+            from fastapi import HTTPException
+            raise HTTPException(
+                status_code=422,
+                detail=str(exc),
+            )
+
+        rows: list[dict] = []
+        total = 0
+        try:
+            from backend.db.duckdb_engine import (
+                query_iceberg_multi,
+            )
+
+            iceberg_table = f"stocks.{req.table}"
+            raw_rows = query_iceberg_multi(
+                [iceberg_table],
+                gen.sql,
+                params=gen.params,
+            )
+            count_rows = query_iceberg_multi(
+                [iceberg_table],
+                gen.count_sql,
+                params=gen.params[
+                    : -2  # exclude LIMIT/OFFSET
+                ],
+            )
+            total = (
+                int(count_rows[0]["cnt"])
+                if count_rows
+                else 0
+            )
+            for r in raw_rows:
+                d: dict = {}
+                for k, v in r.items():
+                    if v is None:
+                        d[k] = None
+                    elif isinstance(v, float):
+                        d[k] = (
+                            None
+                            if pd.isna(v)
+                            else round(v, 4)
+                        )
+                    else:
+                        d[k] = v
+                rows.append(d)
+        except Exception:
+            _logger.exception(
+                "ScreenQL table query failed: "
+                "table=%s where=%s",
+                req.table,
+                req.where[:200],
+            )
+
+        result = ScreenTableResponse(
+            rows=rows,
+            total=total,
+            limit=req.limit,
+            offset=req.offset,
+            columns=gen.columns_used,
+            table=req.table,
+            is_aggregated=bool(req.aggregations),
+        )
+        if cache:
+            cache.set(
+                ck,
+                result.model_dump_json(),
+                TTL_STABLE,
+            )
         return result
 
     return router

@@ -385,3 +385,84 @@ class ScreenFieldsResponse(BaseModel):
     fields: list[ScreenFieldDef] = Field(
         default_factory=list,
     )
+
+
+# ScreenQL — Tables sub-mode. ----------------------------------
+
+
+class TableColumnDef(BaseModel):
+    """One column in the table-mode catalog."""
+
+    name: str
+    type: str  # "number" | "text"
+
+
+class TableDef(BaseModel):
+    """One whitelisted table for Tables sub-mode."""
+
+    name: str
+    iceberg: str
+    columns: list[TableColumnDef] = Field(
+        default_factory=list,
+    )
+
+
+class ScreenTablesResponse(BaseModel):
+    """List of tables available for Tables sub-mode."""
+
+    tables: list[TableDef] = Field(
+        default_factory=list,
+    )
+
+
+class TableAggregation(BaseModel):
+    """One aggregation expression for Tables-mode."""
+
+    fn: str = Field(..., min_length=1, max_length=24)
+    column: str = Field(..., min_length=1, max_length=64)
+    alias: str | None = Field(None, max_length=64)
+
+
+class ScreenTableRequest(BaseModel):
+    """Tables-mode query request."""
+
+    table: str = Field(..., min_length=1, max_length=64)
+    where: str = Field("", max_length=2000)
+    sort_by: str | None = None
+    sort_dir: str = Field("desc")
+    limit: int = Field(100, ge=1, le=1000)
+    offset: int = Field(0, ge=0)
+    select_columns: list[str] | None = Field(
+        None,
+        description=(
+            "Optional projection. None = all columns. "
+            "Ignored when aggregations are present."
+        ),
+    )
+    aggregations: list[TableAggregation] = Field(
+        default_factory=list,
+        description=(
+            "Aggregation expressions. When non-empty, "
+            "switches the query to GROUP BY mode."
+        ),
+    )
+    group_by: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Columns to group by. Required when "
+            "aggregations expand >1 group; empty = "
+            "single-row aggregate."
+        ),
+    )
+
+
+class ScreenTableResponse(BaseModel):
+    """Tables-mode query response."""
+
+    rows: list[dict] = Field(default_factory=list)
+    total: int = 0
+    limit: int = 100
+    offset: int = 0
+    columns: list[str] = Field(default_factory=list)
+    table: str = ""
+    is_aggregated: bool = False
