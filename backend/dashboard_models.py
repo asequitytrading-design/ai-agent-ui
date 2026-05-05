@@ -112,7 +112,8 @@ class ChatMessage(BaseModel):
 class ChatSessionCreate(BaseModel):
     session_id: str = Field(..., min_length=1)
     messages: list[ChatMessage] = Field(
-        ..., min_length=1,
+        ...,
+        min_length=1,
     )
 
 
@@ -156,6 +157,7 @@ class RegistryResponse(BaseModel):
 # Compare
 # ---------------------------------------------------------------
 
+
 class CompareSeriesItem(BaseModel):
     ticker: str
     dates: list[str]
@@ -192,6 +194,7 @@ class CompareResponse(BaseModel):
 # Chart endpoints (Analysis page)
 # ---------------------------------------------------------------
 
+
 class OHLCVPoint(BaseModel):
     date: str
     open: float
@@ -224,6 +227,12 @@ class IndicatorPoint(BaseModel):
 class IndicatorsResponse(BaseModel):
     ticker: str
     data: list[IndicatorPoint] = Field(
+        default_factory=list,
+    )
+    support_levels: list[float] = Field(
+        default_factory=list,
+    )
+    resistance_levels: list[float] = Field(
         default_factory=list,
     )
 
@@ -268,6 +277,7 @@ class DashboardHomeResponse(BaseModel):
 # ---------------------------------------------------------------
 # Portfolio Performance & Forecast
 # ---------------------------------------------------------------
+
 
 class PortfolioDailyPoint(BaseModel):
     date: str
