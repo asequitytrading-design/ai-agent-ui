@@ -11,6 +11,7 @@ export interface IndicatorVisibility {
   volume: boolean;
   rsi: boolean;
   macd: boolean;
+  supportResistance: boolean;
 }
 
 export const DEFAULT_INDICATORS: IndicatorVisibility = {
@@ -20,4 +21,5 @@ export const DEFAULT_INDICATORS: IndicatorVisibility = {
   volume: false,
   rsi: true,
   macd: true,
+  supportResistance: false,
 };
