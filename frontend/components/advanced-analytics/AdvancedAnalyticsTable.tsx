@@ -57,6 +57,38 @@ import {
 const DEFAULT_PAGE_SIZE = 25;
 const LOCKED_KEYS: string[] = ["ticker"];
 
+/** SMA 50 has crossed above SMA 200 — bullish golden-cross zone. */
+function isGoldenCross(row: AdvancedRow): boolean {
+  return (
+    row.sma_50 != null &&
+    row.sma_200 != null &&
+    row.sma_50 > row.sma_200
+  );
+}
+
+function stockAnalysisUrl(ticker: string): string {
+  return `/analytics/analysis?ticker=${encodeURIComponent(ticker)}&tab=analysis`;
+}
+
+function ChartIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-3.5 w-3.5 flex-shrink-0"
+      aria-hidden="true"
+    >
+      <polyline points="1,12 5,7 8,9 12,4 15,6" />
+      <polyline points="12,4 15,4 15,7" />
+    </svg>
+  );
+}
+
 const STALE_REASON_LABEL: Record<StaleReason, string> = {
   nan_close: "missing close",
   missing_delivery: "no delivery feed",
@@ -316,37 +348,70 @@ export function AdvancedAnalyticsTable({ report, initialData }: Props) {
                 </td>
               </tr>
             ) : value && value.rows.length > 0 ? (
-              value.rows.map((row) => (
-                <tr
-                  key={row.ticker}
-                  className="hover:bg-gray-50 dark:hover:bg-gray-800/50"
-                >
-                  {visibleCols.map((col) => {
-                    const raw = row[col.key];
-                    const text = col.format
-                      ? col.format(raw)
-                      : raw == null
-                        ? "—"
-                        : String(raw);
-                    return (
-                      <td
-                        key={col.key}
-                        className={`whitespace-nowrap px-3 py-2 ${
-                          col.numeric
-                            ? "text-right tabular-nums text-gray-700 dark:text-gray-200"
-                            : "text-gray-700 dark:text-gray-200"
-                        }`}
-                      >
-                        {col.key === "ticker" ? (
-                          <span className="font-mono">{text}</span>
-                        ) : (
-                          text
-                        )}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))
+              value.rows.map((row) => {
+                const golden = isGoldenCross(row);
+                return (
+                  <tr
+                    key={row.ticker}
+                    title={
+                      golden
+                        ? "Golden Cross: SMA 50 > SMA 200"
+                        : undefined
+                    }
+                    className={
+                      golden
+                        ? "bg-amber-50 dark:bg-amber-900/20 hover:bg-amber-100 dark:hover:bg-amber-900/30"
+                        : "hover:bg-gray-50 dark:hover:bg-gray-800/50"
+                    }
+                  >
+                    {visibleCols.map((col) => {
+                      const raw = row[col.key];
+                      const text = col.format
+                        ? col.format(raw)
+                        : raw == null
+                          ? "—"
+                          : String(raw);
+                      return (
+                        <td
+                          key={col.key}
+                          className={`whitespace-nowrap px-3 py-2 ${
+                            col.numeric
+                              ? "text-right tabular-nums text-gray-700 dark:text-gray-200"
+                              : "text-gray-700 dark:text-gray-200"
+                          }`}
+                        >
+                          {col.key === "ticker" ? (
+                            <span className="inline-flex items-center gap-1.5">
+                              <a
+                                href={stockAnalysisUrl(row.ticker)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                title="Open stock analysis chart"
+                                data-testid={`aa-chart-link-${row.ticker}`}
+                                className="text-indigo-500 hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300 transition-colors"
+                              >
+                                <ChartIcon />
+                              </a>
+                              <span className="font-mono">{text}</span>
+                              {golden && (
+                                <span
+                                  title="Golden Cross"
+                                  aria-label="Golden Cross"
+                                  className="text-amber-500 text-[10px] font-bold leading-none select-none"
+                                >
+                                  ✦
+                                </span>
+                              )}
+                            </span>
+                          ) : (
+                            text
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })
             ) : (
               <tr>
                 <td
